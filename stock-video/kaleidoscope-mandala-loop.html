@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kaleidoscope Neon Mandala Loop</title>
+<!--
+  KALEIDOSCOPE TRIPPY PATTERN LOOP — symmetrical glowing neon shapes shifting in a mandala pattern
+  ------------------------------------------------------------------------------------------------
+  • Canvas 3840 x 2160 (4K UHD), 15.000 s, perfectly seamless loop (frame at t=15s == frame at t=0s)
+  • Autoplays as soon as the file is opened. Nothing to click.
+  • Real-time WebGL2 renderer: HDR scene pass -> 6-level dual-filter bloom -> filmic tone-map,
+    chromatic aberration, vignette, dithering.
+  • Every motion is a function of the loop phase only (integer harmonics of the 15 s cycle),
+    so the loop is mathematically closed — no cross-fades, no jumps.
+
+  Render helpers (optional, for your capture tool):
+    window.LOOP_DURATION = 15          window.LOOP_FPS = 60
+    window.renderFrame(seconds)        draws that exact moment (deterministic, any t; wraps at 15 s)
+    window.__ready === true            set once the first frame is on screen
+    URL flags:  ?t=3.5  freeze on a time   |  ?paused  render frame 0 only   |  ?scale=0.5  lower internal res
+-->
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; cursor: none; }
+  #stage { position: fixed; inset: 0; width: 100vw; height: 100vh; object-fit: contain; display: block; background: #000; }
+</style>
+</head>
+<body>
+<canvas id="stage" width="3840" height="2160"></canvas>
+
+<script id="vs" type="x-shader/x-vertex">#version 300 es
+void main() {
+  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}
+</script>
+
+<!-- ============================================================================================= -->
+<!--  SCENE PASS: the mandala itself (HDR, linear light)                                            -->
+<!-- ============================================================================================= -->
+<script id="fs-scene" type="x-shader/x-fragment">#version 300 es
+precision highp float;
+precision highp int;
+
+uniform vec2  uRes;
+uniform float uPh;        // loop phase, 0..1
+uniform float uHdr;       // 1 for float targets, <1 when falling back to 8-bit targets
+out vec4 outColor;
+
+#define PI  3.14159265359
+#define TAU 6.28318530718
+
+float T;      // TAU * phase
+float PIX;    // world units per output pixel
+float R;      // radius of current pixel (mandala space)
+float E;      // travelling energy waves
+
+// ---------------------------------------------------------------- helpers
+mat2 rot(float a) { float c = cos(a), s = sin(a); return mat2(c, -s, s, c); }
+
+float hash21(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+vec2 hash22(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.xx + p3.yz) * p3.zy);
+}
+
+// closed neon palette (sRGB stops -> linear light): pink -> ultraviolet -> blue -> cyan -> and back
+const vec3 PAL[6] = vec3[6](
+  vec3(1.00, 0.06, 0.56),   // hot pink
+  vec3(0.60, 0.14, 1.00),   // ultraviolet
+  vec3(0.12, 0.36, 1.00),   // electric blue
+  vec3(0.00, 0.90, 1.00),   // cyan
+  vec3(0.16, 0.40, 1.00),   // electric blue
+  vec3(0.70, 0.12, 1.00)    // ultraviolet
+);
+vec3 pal(float t) {
+  t = fract(t) * 6.0;
+  int i = int(floor(t));
+  float f = fract(t);
+  f = f * f * (3.0 - 2.0 * f);
+  vec3 c = mix(PAL[i], PAL[(i + 1) % 6], f);
+  return pow(c, vec3(2.2));
+}
+const vec3 GOLD = vec3(1.0, 0.36, 0.004);   // amber accent (linear)
+vec3 ringCol(float off) { return pal(uPh + off + R * 0.30); }
+
+// mirror-fold into a wedge -> dihedral symmetry with n petals (2n mirrors)
+vec2 fold(vec2 p, float n) {
+  float seg = PI / n;
+  float a = atan(p.y, p.x);
+  a = abs(mod(a + seg, 2.0 * seg) - seg);
+  return length(p) * vec2(cos(a), sin(a));
+}
+// reflect across the wedge's upper mirror (to let shapes overlap their neighbours)
+vec2 reflUp(vec2 q, float n) { return rot(2.0 * PI / n) * vec2(q.x, -q.y); }
+// rotation that advances by k whole symmetry steps of an n-fold ring per loop (seamless)
+float rotN(float n, float k) { return T * k / n; }
+
+// ---------------------------------------------------------------- SDFs
+float sdSeg(vec2 p, vec2 a, vec2 b) {
+  vec2 pa = p - a, ba = b - a;
+  float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+  return length(pa - ba * h);
+}
+// lens / vesica pointing along +x. b = half length, w = half width
+float sdLens(vec2 p, float b, float w) {
+  w = max(w, 0.004);
+  float r = (b * b + w * w) / (2.0 * w);
+  float d = r - w;
+  p = abs(p.yx);
+  return ((p.y - b) * d > p.x * b) ? length(p - vec2(0.0, b)) : length(p - vec2(-d, 0.0)) - r;
+}
+float ndot(vec2 a, vec2 b) { return a.x * b.x - a.y * b.y; }
+float sdRhombus(vec2 p, vec2 b) {
+  p = abs(p);
+  float h = clamp(ndot(b - 2.0 * p, b) / dot(b, b), -1.0, 1.0);
+  float d = length(p - 0.5 * b * vec2(1.0 - h, 1.0 + h));
+  return d * sign(p.x * b.y + p.y * b.x - b.x * b.y);
+}
+
+// ---------------------------------------------------------------- neon shading
+vec3 neon(float d, vec3 c, float w, float glow) {
+  float ad = abs(d);
+  float core  = 1.0 - smoothstep(w - PIX * 0.8, w + PIX * 0.8, ad);
+  float halo  = exp(-ad / glow);
+  float halo2 = exp(-ad / (glow * 4.0));
+  return c * (0.12 * halo + 0.030 * halo2) + mix(c, vec3(1.0), 0.34) * core * 1.7;
+}
+vec3 inner(float d, vec3 c, float k) {
+  float a = 1.0 - smoothstep(-PIX * 1.5, 0.0, d);
+  return c * a * (0.008 + k * exp(min(d, 0.0) / 0.020) * 0.06);
+}
+vec3 bead(float d, vec3 c, float r) {
+  float core = 1.0 - smoothstep(r - PIX, r + PIX, d);
+  return mix(c, vec3(1.0), 0.5) * core * 2.0 + c * exp(-max(d - r, 0.0) / (r * 1.5)) * 0.30;
+}
+
+// ---------------------------------------------------------------- background
+vec3 background(vec2 p) {
+  vec2 q = fold(rot(-rotN(12.0, 6.0)) * p, 12.0) * 2.1;
+  for (int i = 0; i < 4; i++) {
+    float fi = float(i);
+    q += 0.55 * sin(q.yx * (1.55 + 0.2 * fi) + vec2(T * (1.0 + mod(fi, 2.0)), -T * (2.0 - mod(fi, 2.0))) + fi * 1.7);
+  }
+  float f    = sin(q.x * 1.25 + q.y * 0.75) * sin(q.y * 1.05 - q.x * 0.55);
+  float band = 0.5 + 0.5 * sin(length(q) * 2.6 - T * 2.0);
+  vec3 col = pal(0.35 + 0.18 * f + 0.12 * band + uPh) * (0.0012 + 0.020 * band * band * (0.6 + 0.4 * f));
+  col += vec3(0.006, 0.002, 0.022) * exp(-R * 1.1);           // deep violet aura
+  return col;
+}
+
+// ---------------------------------------------------------------- the mandala
+vec3 mandala(vec2 p) {
+  vec3 acc = vec3(0.0);
+
+  // -------- R0 : white-hot core -----------------------------------------------------------
+  {
+    float pulse = 1.0 + 0.18 * sin(T * 3.0);
+    vec3 c = pal(uPh + 0.05);
+    acc += mix(c, vec3(1.0), 0.6) * exp(-R * 28.0 / pulse) * 2.4;
+    acc += c * exp(-R * 7.0) * 0.16;
+    // rotating 12-pointed star around the core
+    vec2 q = fold(rot(-rotN(12.0, 12.0)) * p, 12.0);
+    float seg = PI / 12.0;
+    float Ri = mix(0.028, 0.048, 0.5 + 0.5 * sin(T * 4.0));
+    float d = sdSeg(q, vec2(0.085, 0.0), Ri * vec2(cos(seg), sin(seg)));
+    acc += neon(d, pal(uPh + 0.5), 0.0016, 0.006);
+  }
+
+  // -------- R1 : inner lotus (n = 12) ------------------------------------------------------
+  {
+    vec3 c = ringCol(0.00), c2 = ringCol(0.42);
+    vec2 q = fold(rot(rotN(12.0, 12.0)) * p, 12.0);
+    float bl = 0.112 + 0.022 * sin(T * 2.0);
+    float w  = 0.034 + 0.010 * sin(T * 3.0 + 1.0);
+    float d  = sdLens(q - vec2(0.135, 0.0), bl, w);
+    acc += neon(d, c, 0.0026, 0.010) + inner(d, c, 0.6);
+
+    vec2 q2 = fold(rot(rotN(12.0, 12.0) + PI / 12.0) * p, 12.0);
+    float d2 = sdLens(q2 - vec2(0.155, 0.0), bl * 0.78, w * 0.62);
+    acc += neon(d2, c2, 0.0020, 0.008) * 0.85;
+  }
+
+  // -------- R2 : morphing 24-point star (n = 24) ------------------------------------------
+  {
+    vec3 c = ringCol(0.20), c2 = ringCol(0.55);
+    vec2 q = fold(rot(-rotN(24.0, 12.0)) * p, 24.0);
+    float seg = PI / 24.0;
+    float Ro = 0.335 + 0.012 * sin(T * 4.0);
+    float Ri = mix(0.232, 0.298, 0.5 + 0.5 * sin(T * 2.0 + 0.6));
+    vec2 A = vec2(Ro, 0.0), B = Ri * vec2(cos(seg), sin(seg));
+    acc += neon(sdSeg(q, A, B), c, 0.0022, 0.009);
+    acc += bead(length(q - A), GOLD, 0.0085 + 0.003 * sin(T * 4.0 + 1.0));
+    // inner 24-gon
+    acc += neon(dot(q, vec2(cos(seg), sin(seg))) - 0.205, c2, 0.0014, 0.006) * 0.7;
+  }
+
+  // -------- R3 : giant lotus, petals morph lens <-> diamond (n = 12) ----------------------
+  {
+    vec3 c = ringCol(0.60), c2 = ringCol(0.10);
+    vec2 q = fold(rot(-rotN(12.0, 6.0)) * p, 12.0);
+    float m  = 0.5 + 0.5 * sin(T);
+    m = m * m * (3.0 - 2.0 * m) * 0.9;
+    float bl = 0.165 + 0.028 * sin(T * 2.0 + 2.0);
+    float w  = 0.088 + 0.018 * sin(T * 3.0);
+    vec2 qc = q - vec2(0.505, 0.0);
+    float d  = mix(sdLens(qc, bl, w), sdRhombus(qc, vec2(bl * 1.05, w * 1.18)), m);
+    acc += neon(d, c, 0.0032, 0.013) + inner(d, c, 0.55);
+    float d2 = mix(sdLens(qc, bl * 0.62, w * 0.55), sdRhombus(qc, vec2(bl * 0.66, w * 0.66)), m);
+    acc += neon(d2, c2, 0.0022, 0.009) * 0.9;
+    acc += neon(sdSeg(qc, vec2(-bl * 0.9, 0.0), vec2(bl * 0.9, 0.0)), c2, 0.0012, 0.005) * 0.6;
+    acc += bead(length(qc - vec2(bl + 0.032, 0.0)), ringCol(0.85), 0.011);
+
+    // shadow lotus between the petals
+    vec2 qb = fold(rot(-rotN(12.0, 6.0) + PI / 12.0) * p, 12.0);
+    float db = sdLens(qb - vec2(0.60, 0.0), 0.10 + 0.02 * cos(T * 2.0), 0.038);
+    acc += neon(db, ringCol(0.30), 0.002, 0.008) * 0.8;
+  }
+
+  // -------- R4 : beaded scallop ring (n = 36) ---------------------------------------------
+  {
+    vec3 c = ringCol(0.35), c2 = ringCol(0.75);
+    vec2 q = fold(rot(rotN(36.0, 18.0)) * p, 36.0);
+    float rr = 0.735;
+    float sc = length(q - vec2(rr, 0.0)) - (0.066 + 0.005 * sin(T * 2.0));
+    acc += neon(sc, c, 0.0018, 0.007) * 0.9;
+    float s = sin(T * 4.0);
+    acc += bead(length(q - vec2(rr + 0.055, 0.0)), GOLD, 0.0075 * (1.0 + 0.55 * s));
+    vec2 q2 = fold(rot(rotN(36.0, 18.0) + PI / 36.0) * p, 36.0);
+    acc += bead(length(q2 - vec2(rr + 0.055, 0.0)), c, 0.0075 * (1.0 - 0.55 * s));
+  }
+
+  // -------- R5 : flower-of-life rosette (n = 12) ------------------------------------------
+  {
+    vec3 c = ringCol(0.15), c2 = ringCol(0.50);
+    vec2 q = fold(rot(rotN(12.0, -6.0)) * p, 12.0);
+    float cr = 0.885 + 0.030 * sin(T * 2.0);
+    float rad = 0.235 + 0.028 * sin(T * 3.0 + 1.0);
+    float d = min(length(q - vec2(cr, 0.0)), length(reflUp(q, 12.0) - vec2(cr, 0.0))) - rad;
+    acc += neon(d, c, 0.0028, 0.011) + inner(d, c, 0.35);
+    float d2 = min(length(q - vec2(cr, 0.0)), length(reflUp(q, 12.0) - vec2(cr, 0.0))) - rad * 0.52;
+    acc += neon(d2, c2, 0.0018, 0.008) * 0.8;
+
+    vec2 qa = fold(rot(rotN(24.0, 12.0)) * p, 24.0);
+    float seg = PI / 24.0;
+    float Ri = mix(0.92, 1.03, 0.5 + 0.5 * sin(T * 2.0 + 2.0));
+    acc += neon(sdSeg(qa, vec2(1.16, 0.0), Ri * vec2(cos(seg), sin(seg))), ringCol(0.9), 0.0020, 0.008) * 0.8;
+    acc += bead(length(qa - vec2(1.16, 0.0)), GOLD, 0.009);
+  }
+
+  // -------- R6 : outer petals (n = 24) ------------------------------------------------------
+  {
+    vec3 c = ringCol(0.45), c2 = ringCol(0.05);
+    vec2 q = fold(rot(-rotN(24.0, 12.0)) * p, 24.0);
+    float d = sdLens(q - vec2(1.30, 0.0), 0.18 + 0.03 * sin(T * 2.0 + 1.0), 0.058 + 0.012 * sin(T * 3.0));
+    acc += neon(d, c, 0.0028, 0.011) + inner(d, c, 0.3);
+    vec2 q2 = fold(rot(-rotN(24.0, 12.0) + PI / 24.0) * p, 24.0);
+    acc += neon(sdLens(q2 - vec2(1.34, 0.0), 0.09, 0.025), c2, 0.0020, 0.008) * 0.8;
+  }
+
+  // -------- R7 : giant frame lotus (n = 12) ---------------------------------------------------
+  {
+    vec3 c = ringCol(0.70);
+    vec2 q = fold(rot(rotN(12.0, 6.0)) * p, 12.0);
+    float bl = 0.34 + 0.05 * sin(T * 2.0 + 3.0);
+    float d = sdLens(q - vec2(1.72, 0.0), bl, 0.135 + 0.02 * sin(T * 3.0 + 2.0));
+    acc += neon(d, c, 0.0032, 0.014) + inner(d, c, 0.3);
+    acc += neon(sdLens(q - vec2(1.72, 0.0), bl * 0.6, 0.075), ringCol(0.2), 0.0022, 0.010) * 0.8;
+  }
+
+  // -------- zoom tunnel : self-similar bead rings streaming outward (closed on the 15 s loop) ----
+  {
+    const float S = 1.5;                  // growth per ring
+    const float M = 4.0;                  // rings advanced per loop (integer => seamless)
+    float u  = log(max(R, 1e-4)) / log(S) - uPh * M;
+    float k  = floor(u + 0.5);
+    float rr = pow(S, k + uPh * M);
+    float dir = mod(k, 2.0) * 2.0 - 1.0;
+    vec3 c = pal(k / M + 0.15);
+    vec2 q = fold(rot(dir * rotN(48.0, 24.0) + mod(k, M) * 0.31) * p, 48.0);
+    float env = smoothstep(0.10, 0.45, R) * (1.0 - smoothstep(1.6, 2.5, R));
+    acc += neon(R - rr, c, 0.0007 + 0.0007 * rr, 0.004 + 0.006 * rr) * 0.55 * env;
+    acc += bead(length(q - vec2(rr, 0.0)), c, 0.0030 + 0.0085 * rr) * 0.70 * env;
+  }
+
+  // -------- guide circles + radial rays + beaded orbits --------------------------------------
+  {
+    acc += neon(R - 0.238, ringCol(0.30), 0.0011, 0.005) * 0.55;
+    acc += neon(R - 0.395, ringCol(0.00), 0.0011, 0.005) * 0.55;
+    acc += neon(R - 0.665, ringCol(0.60), 0.0011, 0.005) * 0.55;
+    acc += neon(R - 0.805, ringCol(0.20), 0.0011, 0.005) * 0.55;
+    acc += neon(R - 1.105, ringCol(0.50), 0.0013, 0.006) * 0.55;
+    acc += neon(R - 1.520, ringCol(0.85), 0.0013, 0.006) * 0.55;
+
+    vec2 q = fold(rot(rotN(72.0, 36.0)) * p, 72.0);
+    acc += bead(length(q - vec2(0.955, 0.0)), ringCol(0.40), 0.0045);
+    vec2 qb = fold(rot(-rotN(96.0, 48.0)) * p, 96.0);
+    acc += bead(length(qb - vec2(1.435, 0.0)), ringCol(0.75), 0.0042) * 0.8;
+
+    // outward rays with travelling light pulses
+    vec2 qr = fold(rot(rotN(24.0, 6.0)) * p, 24.0);
+    float pulse = 0.5 + 0.5 * sin(R * 26.0 - T * 4.0);
+    float ray = abs(qr.y);
+    float fade = smoothstep(1.13, 1.20, R) * (1.0 - smoothstep(1.7, 2.3, R));
+    acc += neon(ray, ringCol(0.55), 0.0010, 0.005) * pulse * pulse * fade * 0.9;
+  }
+
+  // -------- drifting sparkle dust ------------------------------------------------------------
+  {
+    vec2 q = fold(rot(rotN(12.0, 6.0)) * p, 12.0) * 9.0;
+    vec2 id = floor(q);
+    vec2 f = fract(q) - 0.5;
+    vec2 h = hash22(id);
+    float keep = step(0.72, hash21(id + 17.0));
+    vec2 pos = (h - 0.5) * 0.45 + 0.14 * vec2(sin(T + h.x * TAU), cos(2.0 * T + h.y * TAU));
+    float d = length(f - pos) / 9.0;
+    float tw = pow(max(0.5 + 0.5 * sin(T * (1.0 + floor(h.x * 3.0)) + h.y * TAU), 0.0), 3.0);
+    vec3 c = pal(uPh + h.x + R * 0.3);
+    acc += mix(c, vec3(1.0), 0.5) * keep * tw * (0.00035 / (d * d + 0.00004)) * 0.02 * smoothstep(0.1, 0.4, R);
+  }
+
+  return acc * E;
+}
+
+void main() {
+  T   = TAU * uPh;
+  PIX = 2.0 / uRes.y;
+  vec2 uv = (gl_FragCoord.xy - 0.5 * uRes) / (0.5 * uRes.y);
+
+  float breathe = 1.0 + 0.022 * sin(T);
+  vec2 p = uv / breathe;
+  R = length(p);
+
+  // travelling energy waves (3 outward / 2 inward per loop)
+  float rp1 = fract(uPh * 3.0) * 2.5;
+  float rp2 = (1.0 - fract(uPh * 2.0)) * 2.5;
+  float e1 = (R - rp1) / 0.11, e2 = (R - rp2) / 0.15;
+  E = 1.0 + 1.5 * exp(-e1 * e1) + 0.8 * exp(-e2 * e2);
+
+  vec3 col = background(p) + mandala(p);
+  outColor = vec4(col * uHdr, 1.0);
+}
+</script>
+
+<!-- ============================================================================================= -->
+<!--  BLOOM: dual-filter down / up                                                                  -->
+<!-- ============================================================================================= -->
+<script id="fs-down" type="x-shader/x-fragment">#version 300 es
+precision highp float;
+uniform sampler2D uTex;
+uniform vec2 uTexel;    // 1 / source size
+uniform vec2 uDst;      // destination size
+out vec4 outColor;
+vec3 s(vec2 uv, vec2 o) { return texture(uTex, uv + o * uTexel).rgb; }
+void main() {
+  vec2 uv = gl_FragCoord.xy / uDst;
+  vec3 a = s(uv, vec2(-2, 2)),  b = s(uv, vec2(0, 2)),  c = s(uv, vec2(2, 2));
+  vec3 d = s(uv, vec2(-2, 0)),  e = s(uv, vec2(0, 0)),  f = s(uv, vec2(2, 0));
+  vec3 g = s(uv, vec2(-2, -2)), h = s(uv, vec2(0, -2)), i = s(uv, vec2(2, -2));
+  vec3 j = s(uv, vec2(-1, 1)),  k = s(uv, vec2(1, 1)),  l = s(uv, vec2(-1, -1)), m = s(uv, vec2(1, -1));
+  vec3 col = e * 0.125 + (a + c + g + i) * 0.03125 + (b + d + f + h) * 0.0625 + (j + k + l + m) * 0.125;
+  outColor = vec4(col, 1.0);
+}
+</script>
+
+<script id="fs-up" type="x-shader/x-fragment">#version 300 es
+precision highp float;
+uniform sampler2D uTex;
+uniform vec2 uTexel;    // 1 / source size
+uniform vec2 uDst;
+uniform float uW;
+out vec4 outColor;
+vec3 s(vec2 uv, vec2 o) { return texture(uTex, uv + o * uTexel).rgb; }
+void main() {
+  vec2 uv = gl_FragCoord.xy / uDst;
+  vec3 col = s(uv, vec2(-1, 1)) + 2.0 * s(uv, vec2(0, 1)) + s(uv, vec2(1, 1))
+           + 2.0 * s(uv, vec2(-1, 0)) + 4.0 * s(uv, vec2(0, 0)) + 2.0 * s(uv, vec2(1, 0))
+           + s(uv, vec2(-1, -1)) + 2.0 * s(uv, vec2(0, -1)) + s(uv, vec2(1, -1));
+  outColor = vec4(col * (uW / 16.0), 1.0);
+}
+</script>
+
+<!-- ============================================================================================= -->
+<!--  COMPOSITE: bloom + chromatic aberration + filmic tone-map + vignette + dither                 -->
+<!-- ============================================================================================= -->
+<script id="fs-comp" type="x-shader/x-fragment">#version 300 es
+precision highp float;
+uniform sampler2D uScene;
+uniform sampler2D uBloom;
+uniform vec2  uRes;
+uniform float uPh;
+uniform float uHdr;
+out vec4 outColor;
+
+vec3 aces(vec3 x) {
+  const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
+  return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+float hash(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+void main() {
+  vec2 uv = gl_FragCoord.xy / uRes;
+  vec2 c  = uv - 0.5;
+  float r2 = dot(c * vec2(uRes.x / uRes.y, 1.0), c * vec2(uRes.x / uRes.y, 1.0));
+
+  // radial chromatic aberration
+  vec2 off = c * (0.0022 + 0.0060 * r2);
+  vec3 sc;
+  sc.r = texture(uScene, uv + off).r;
+  sc.g = texture(uScene, uv).g;
+  sc.b = texture(uScene, uv - off).b;
+  vec3 bl;
+  bl.r = texture(uBloom, uv + off * 2.0).r;
+  bl.g = texture(uBloom, uv).g;
+  bl.b = texture(uBloom, uv - off * 2.0).b;
+
+  vec3 col = (sc + bl * 0.060) / uHdr;
+
+  // filmic curve with a touch of saturation restored
+  vec3 mapped = aces(col);
+  float l = dot(mapped, vec3(0.2126, 0.7152, 0.0722));
+  mapped = mix(vec3(l), mapped, 1.18);
+
+  // vignette
+  mapped *= 1.0 - smoothstep(0.35, 1.15, r2 * 1.25) * 0.42;
+
+  mapped = pow(max(mapped, 0.0), vec3(1.0 / 2.2));
+
+  // triangular dither (kills banding in the dark gradients, loop-safe: keyed on frame index in the 15 s cycle)
+  float fr = floor(uPh * 900.0 + 0.5);
+  float n1 = hash(gl_FragCoord.xy + fr * 1.618);
+  float n2 = hash(gl_FragCoord.xy * 1.37 + fr * 2.718 + 41.0);
+  float dither = (n1 + n2 - 1.0) / 255.0;
+  outColor = vec4(mapped + dither, 1.0);
+}
+</script>
+
+<script>
+(() => {
+  'use strict';
+
+  const W = 3840, H = 2160;
+  const DURATION = 15;          // seconds, one full seamless cycle
+  const FPS = 60;
+
+  window.LOOP_DURATION = DURATION;
+  window.LOOP_FPS = FPS;
+  window.__ready = false;
+
+  const params = new URLSearchParams(location.search);
+  const scale = Math.min(1, Math.max(0.1, parseFloat(params.get('scale')) || 1));
+  const canvas = document.getElementById('stage');
+  canvas.width = Math.round(W * scale);
+  canvas.height = Math.round(H * scale);
+  const CW = canvas.width, CH = canvas.height;
+
+  const gl = canvas.getContext('webgl2', {
+    alpha: false, antialias: false, depth: false, stencil: false,
+    preserveDrawingBuffer: true, powerPreference: 'high-performance'
+  });
+  if (!gl) {
+    document.body.style.cssText = 'color:#fff;font:24px sans-serif;padding:40px';
+    document.body.textContent = 'This animation needs a browser with WebGL2 (Chrome, Edge, Firefox, Safari 15+).';
+    return;
+  }
+
+  // ---------- render targets (HDR half-float when available)
+  const hasFloat = !!(gl.getExtension('EXT_color_buffer_float') || gl.getExtension('EXT_color_buffer_half_float'));
+  const HDR = hasFloat ? 1.0 : 0.25;
+
+  function makeTarget(w, h) {
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    if (hasFloat) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.HALF_FLOAT, null);
+    else          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8,   w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    const fbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    return { tex, fbo, w, h };
+  }
+
+  // ---------- programs
+  function compile(type, src) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      const log = gl.getShaderInfoLog(s);
+      console.error(log);
+      throw new Error(log);
+    }
+    return s;
+  }
+  const vsSrc = document.getElementById('vs').textContent;
+  function program(fsId, names) {
+    const p = gl.createProgram();
+    gl.attachShader(p, compile(gl.VERTEX_SHADER, vsSrc));
+    gl.attachShader(p, compile(gl.FRAGMENT_SHADER, document.getElementById(fsId).textContent));
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+    const u = {};
+    names.forEach(n => u[n] = gl.getUniformLocation(p, n));
+    return { p, u };
+  }
+
+  let progScene, progDown, progUp, progComp;
+  try {
+    progScene = program('fs-scene', ['uRes', 'uPh', 'uHdr']);
+    progDown  = program('fs-down',  ['uTex', 'uTexel', 'uDst']);
+    progUp    = program('fs-up',    ['uTex', 'uTexel', 'uDst', 'uW']);
+    progComp  = program('fs-comp',  ['uScene', 'uBloom', 'uRes', 'uPh', 'uHdr']);
+  } catch (e) {
+    document.body.style.cssText = 'color:#f66;font:16px monospace;padding:24px;white-space:pre-wrap';
+    document.body.textContent = 'Shader error:\n' + e.message;
+    return;
+  }
+
+  const vao = gl.createVertexArray();
+  gl.bindVertexArray(vao);
+
+  // ---------- targets
+  const scene = makeTarget(CW, CH);
+  const LEVELS = 6;
+  const levels = [];
+  for (let i = 0; i < LEVELS; i++) {
+    levels.push(makeTarget(Math.max(1, CW >> (i + 1)), Math.max(1, CH >> (i + 1))));
+  }
+  const UP_WEIGHTS = [1.0, 1.0, 1.0, 1.0, 1.0];
+
+  function tri() { gl.drawArrays(gl.TRIANGLES, 0, 3); }
+  function bindTex(unit, tex) { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, tex); }
+
+  // ---------- one deterministic frame
+  function renderFrame(t) {
+    const ph = (((t % DURATION) + DURATION) % DURATION) / DURATION;
+
+    // 1. HDR scene
+    gl.bindFramebuffer(gl.FRAMEBUFFER, scene.fbo);
+    gl.viewport(0, 0, scene.w, scene.h);
+    gl.disable(gl.BLEND);
+    gl.useProgram(progScene.p);
+    gl.uniform2f(progScene.u.uRes, scene.w, scene.h);
+    gl.uniform1f(progScene.u.uPh, ph);
+    gl.uniform1f(progScene.u.uHdr, HDR);
+    tri();
+
+    // 2. bloom pyramid: down
+    gl.useProgram(progDown.p);
+    gl.uniform1i(progDown.u.uTex, 0);
+    let src = scene;
+    for (let i = 0; i < LEVELS; i++) {
+      const dst = levels[i];
+      gl.bindFramebuffer(gl.FRAMEBUFFER, dst.fbo);
+      gl.viewport(0, 0, dst.w, dst.h);
+      bindTex(0, src.tex);
+      gl.uniform2f(progDown.u.uTexel, 1 / src.w, 1 / src.h);
+      gl.uniform2f(progDown.u.uDst, dst.w, dst.h);
+      tri();
+      src = dst;
+    }
+
+    // 3. bloom pyramid: up (additive)
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE);
+    gl.useProgram(progUp.p);
+    gl.uniform1i(progUp.u.uTex, 0);
+    for (let i = LEVELS - 1; i > 0; i--) {
+      const s = levels[i], d = levels[i - 1];
+      gl.bindFramebuffer(gl.FRAMEBUFFER, d.fbo);
+      gl.viewport(0, 0, d.w, d.h);
+      bindTex(0, s.tex);
+      gl.uniform2f(progUp.u.uTexel, 1 / s.w, 1 / s.h);
+      gl.uniform2f(progUp.u.uDst, d.w, d.h);
+      gl.uniform1f(progUp.u.uW, UP_WEIGHTS[i - 1]);
+      tri();
+    }
+    gl.disable(gl.BLEND);
+
+    // 4. composite to canvas
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, CW, CH);
+    gl.useProgram(progComp.p);
+    bindTex(0, scene.tex);
+    bindTex(1, levels[0].tex);
+    gl.uniform1i(progComp.u.uScene, 0);
+    gl.uniform1i(progComp.u.uBloom, 1);
+    gl.uniform2f(progComp.u.uRes, CW, CH);
+    gl.uniform1f(progComp.u.uPh, ph);
+    gl.uniform1f(progComp.u.uHdr, HDR);
+    tri();
+  }
+  window.renderFrame = renderFrame;
+  window.seek = renderFrame;
+
+  // ---------- playback: autoplay, endless loop
+  const fixedT = params.has('t') ? parseFloat(params.get('t')) : null;
+  const paused = params.has('paused');
+
+  if (fixedT !== null || paused) {
+    renderFrame(fixedT || 0);
+    window.__ready = true;
+    return;
+  }
+
+  let t0 = null;
+  function loop(now) {
+    if (t0 === null) t0 = now;
+    renderFrame((now - t0) / 1000);
+    window.__ready = true;
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
