@@ -1,0 +1,867 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Alien Planet Landscape - Endless Flight</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; cursor: none; }
+  canvas { position: absolute; left: 0; top: 0; width: 3840px; height: 2160px; transform-origin: 0 0; display: block; background: #000; }
+  #err { position: fixed; left: 24px; top: 24px; color: #9fe; font: 14px/1.4 monospace; white-space: pre-wrap; display: none; z-index: 5; }
+</style>
+</head>
+<body>
+<canvas id="c" width="3840" height="2160"></canvas>
+<div id="err"></div>
+
+<!--
+  ALIEN PLANET LANDSCAPE - ENDLESS FLIGHT  |  3840x2160  |  15.000 s  |  seamless loop
+  Real-time raymarched WebGL2 scene (glowing crystal fields, bioluminescent veins, floating rocks,
+  luminous river, ringed gas giant, twin celestial bodies, aurora, spores) + HDR bloom + grade.
+
+  Loop maths: the whole world is periodic along the flight axis (period 240 units) and the camera
+  travels exactly one period in 15 s. Every animated term uses an integer number of cycles per 15 s,
+  so frame 0 == frame 450 (at 30 fps) / frame 900 (at 60 fps).
+
+  Rendering helpers (optional):
+    ?t=SECONDS  freeze on a single frame          ?res=0.5  preview at a lower internal resolution
+    window.renderAt(seconds)  draws that exact time (use it for frame-perfect offline capture)
+    window.LOOP_DURATION = 15
+-->
+
+<script id="vs" type="x-shader/x-vertex">#version 300 es
+out vec2 vUv;
+void main(){
+  vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+  vUv = p;
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}
+</script>
+
+<script id="fs-scene" type="x-shader/x-fragment">#version 300 es
+precision highp float;
+precision highp int;
+uniform vec2  uRes;
+uniform float uT;
+uniform float uEnc;
+out vec4 fragColor;
+
+#define TAU 6.28318530718
+const float L      = 240.0;              // world period along flight axis
+const float DUR    = 15.0;
+const float WATER  = 0.55;
+const vec3  SUN    = vec3(0.2143, 0.0731, 0.9740);
+const vec3  SUNCOL = vec3(1.0, 0.50, 0.24);
+float gA;                                 // TAU * t / DUR  (loops exactly once)
+
+// ------------------------------------------------------------------ hashing & noise
+uvec2 pcg2d(uvec2 v){
+  v = v * 1664525u + 1013904223u;
+  v.x += v.y * 1664525u; v.y += v.x * 1664525u;
+  v ^= v >> 16u;
+  v.x += v.y * 1664525u; v.y += v.x * 1664525u;
+  v ^= v >> 16u;
+  return v;
+}
+vec4 rnd4(uint u){
+  return vec4(float(u & 255u), float((u >> 8u) & 255u), float((u >> 16u) & 255u), float(u >> 24u)) * (1.0/255.0);
+}
+// gradient noise, periodic in .y with an integer number of lattice cells "per"
+float gnoise(vec2 p, float per){
+  vec2 i = floor(p); vec2 f = p - i;
+  float x0 = i.x, x1 = i.x + 1.0;
+  float z0 = mod(i.y, per), z1 = mod(i.y + 1.0, per);
+  vec2 u = f*f*f*(f*(f*6.0-15.0)+10.0);
+  const float K = 2.0/4294967295.0;
+  vec2 g00 = vec2(pcg2d(uvec2(ivec2(x0,z0)))) * K - 1.0;
+  vec2 g10 = vec2(pcg2d(uvec2(ivec2(x1,z0)))) * K - 1.0;
+  vec2 g01 = vec2(pcg2d(uvec2(ivec2(x0,z1)))) * K - 1.0;
+  vec2 g11 = vec2(pcg2d(uvec2(ivec2(x1,z1)))) * K - 1.0;
+  float n00 = dot(g00, f);
+  float n10 = dot(g10, f - vec2(1.,0.));
+  float n01 = dot(g01, f - vec2(0.,1.));
+  float n11 = dot(g11, f - vec2(1.,1.));
+  return mix(mix(n00,n10,u.x), mix(n01,n11,u.x), u.y) * 1.5;
+}
+float fbm(vec2 p, float oct){
+  float s = 0.0, a = 0.5, fq = 1.0/30.0, per = 8.0;
+  for(int k=0;k<7;k++){
+    float w = clamp(oct - float(k), 0.0, 1.0);
+    if(w <= 0.0) break;
+    s += a*w*gnoise(p*fq + vec2(float(k)*7.13, float(k)*3.71), per);
+    a *= 0.5; fq *= 2.0; per *= 2.0;
+  }
+  return s;
+}
+float pathX(float z){ return 12.0*sin(TAU*z/L) + 3.5*sin(TAU*3.0*z/L + 1.3); }
+float sq(float x){ return x*x; }
+float hexn(vec2 p){ p = abs(p); return max(p.x*0.8660254 + p.y*0.5, p.y); }
+
+vec3 cryPal(float r){
+  if(r < 0.40) return vec3(0.04, 0.85, 1.00);   // electric cyan
+  if(r < 0.70) return vec3(1.00, 0.14, 0.66);   // hot magenta
+  if(r < 0.87) return vec3(0.55, 0.28, 1.00);   // ultraviolet
+  return vec3(0.22, 1.00, 0.55);                // acid green
+}
+
+// ------------------------------------------------------------------ terrain
+float terrainBase(vec2 p, float oct, out float valley, out float dpath){
+  float wn = gnoise(p/60.0, 4.0);
+  vec2 q = p + vec2(7.0*wn, 5.0*wn);
+  dpath = abs(p.x - pathX(p.y));
+  float f = fbm(q, oct);
+  float m = clamp(0.5 + 0.9*f, 0.0, 1.0);
+  float ridge = 0.0;
+  if(oct > 3.5){
+    ridge = 1.0 - abs(gnoise(q/40.0 + vec2(9.1,2.3), 6.0));
+    ridge *= ridge;
+  }
+  float mount = 8.0 + 52.0*m*m + 22.0*ridge*m;
+  float st = mount/9.0;
+  float terr = (floor(st) + smoothstep(0.3, 0.7, fract(st)))*9.0;   // alien mesa terraces
+  mount = mix(mount, terr, 0.55);
+  valley = smoothstep(20.0, 150.0, dpath + 20.0*f);
+  float fl = 0.9 + 3.2*f;
+  return mix(fl, fl + mount, valley);
+}
+float baseH(vec2 p, float oct){ float v, d; return terrainBase(p, oct, v, d); }
+
+struct Cry { float h; vec3 light; vec3 col; float tip; };
+Cry crystals(vec2 p, float dpath, bool full){
+  Cry c; c.h = 0.0; c.light = vec3(0.0); c.col = vec3(0.0); c.tip = 0.0;
+  ivec2 b = ivec2(floor(p/10.0 - 0.5));
+  float clear = smoothstep(10.0, 34.0, dpath);      // keep the flight corridor free
+  for(int j=0;j<2;j++){
+    for(int i=0;i<2;i++){
+      ivec2 cc = b + ivec2(i,j);
+      uvec2 hh = pcg2d(uvec2(ivec2(cc.x, int(mod(float(cc.y), 24.0)))));
+      vec4 r1 = rnd4(hh.x), r2 = rnd4(hh.y);
+      vec2 ctr = (vec2(cc) + 0.5)*10.0 + (r1.yz - 0.5)*4.0;
+      float dens = smoothstep(-0.02, 0.28, gnoise(ctr/60.0 + vec2(4.7, 1.9), 4.0));
+      if(r1.x > 0.62*dens) continue;
+      float R = 1.8 + 3.0*r1.w;
+      float H = (4.0 + 16.0*r2.y*r2.y) * clear;
+      float ang = r2.x*1.0472;
+      float ca = cos(ang), sa = sin(ang);
+      vec3 pal = cryPal(fract(dens*3.1 + r2.x*0.5)*0.999);
+      for(int s=0;s<2;s++){
+        vec2 o = (s==0) ? ctr : ctr + (vec2(r2.z, r2.w) - 0.5)*5.0;
+        float Rs = (s==0) ? R : R*0.6;
+        float Hs = (s==0) ? H : H*0.55;
+        vec2 d = p - o;
+        d = vec2(ca*d.x - sa*d.y, sa*d.x + ca*d.y);
+        float hn = hexn(d);
+        float pr = clamp(1.0 - hn/Rs, 0.0, 1.0);
+        float sp = Hs * min(pr*2.4, 0.7 + pr*0.3);        // faceted hex crystal: prism + pyramid tip
+        if(sp > c.h){ c.h = sp; c.col = pal; c.tip = (Hs > 0.01) ? sp/Hs : 0.0; }
+        if(full) c.light += pal * exp(-hn*hn/(Rs*Rs*2.6)) * (0.25 + Hs/14.0) * 0.9;
+      }
+    }
+  }
+  return c;
+}
+
+float lodOct(float t){ return clamp(7.4 - log2(1.0 + t/22.0), 2.6, 7.0); }
+
+float terrainH(vec2 p, float oct, float y){
+  float v, d;
+  float b = terrainBase(p, oct, v, d);
+  if(y - b > 22.0 || oct < 3.2) return b;
+  return b + crystals(p, d, false).h;
+}
+
+vec3 terrainNormal(vec3 p, float t){
+  float e = max(0.045, 0.0009*t);
+  float oct = min(7.0, lodOct(t) + 1.0);
+  float hx1 = terrainH(p.xz + vec2(e,0.), oct, p.y);
+  float hx0 = terrainH(p.xz - vec2(e,0.), oct, p.y);
+  float hz1 = terrainH(p.xz + vec2(0.,e), oct, p.y);
+  float hz0 = terrainH(p.xz - vec2(0.,e), oct, p.y);
+  return normalize(vec3(hx0-hx1, 2.0*e, hz0-hz1));
+}
+
+float traceTerrain(vec3 ro, vec3 rd, float tmax, int steps){
+  float t = 0.4, tp = 0.4;
+  for(int i=0;i<steps;i++){
+    vec3 p = ro + rd*t;
+    if(p.y > 110.0 && rd.y > 0.0) return -1.0;
+    float h = terrainH(p.xz, lodOct(t), p.y);
+    float dh = p.y - h;
+    if(dh < 0.0){
+      float a = tp, b = t;
+      for(int k=0;k<6;k++){
+        float m = 0.5*(a+b);
+        vec3 q = ro + rd*m;
+        if(q.y < terrainH(q.xz, lodOct(m), q.y)) b = m; else a = m;
+      }
+      return 0.5*(a+b);
+    }
+    tp = t;
+    t += max(0.4*dh, 0.05 + 0.0012*t);
+    if(t > tmax) break;
+  }
+  return -1.0;
+}
+
+float softShadow(vec3 ro, vec3 rd){
+  float res = 1.0, t = 0.4;
+  for(int i=0;i<26;i++){
+    vec3 p = ro + rd*t;
+    float dh = p.y - terrainH(p.xz, 4.5, p.y);
+    res = min(res, 7.0*dh/t);
+    if(res < 0.001 || p.y > 95.0) break;
+    t += clamp(dh*0.8, 0.3, 30.0);
+  }
+  res = clamp(res, 0.0, 1.0);
+  return res*res*(3.0 - 2.0*res);
+}
+
+// ------------------------------------------------------------------ floating rocks
+float sdConeH(vec3 p, vec2 c, float h){
+  vec2 q = h*vec2(c.x/c.y, -1.0);
+  vec2 w = vec2(hexn(p.xz), p.y);
+  vec2 a = w - q*clamp(dot(w,q)/dot(q,q), 0.0, 1.0);
+  vec2 b = w - q*vec2(clamp(w.x/q.x, 0.0, 1.0), 1.0);
+  float k = sign(q.y);
+  float d = min(dot(a,a), dot(b,b));
+  float s = max(k*(w.x*q.y - w.y*q.x), k*(w.y - q.y));
+  return sqrt(d)*sign(s);
+}
+
+float mapRock(vec3 p, vec3 rd, bool ex, out float mat, out vec3 ccol, out float raw){
+  float qx = p.x - 0.65*pathX(p.z);
+  float ix = floor(qx/40.0);
+  float lx = qx - (ix + 0.5)*40.0;
+  float iz = floor(p.z/30.0);
+  float lz = p.z - (iz + 0.5)*30.0;
+  uvec2 hh = pcg2d(uvec2(ivec2(int(ix), int(mod(iz, 8.0)))));
+  vec4 r1 = rnd4(hh.x), r2 = rnd4(hh.y);
+  mat = 0.0; raw = 1e3;
+  ccol = cryPal(clamp(r1.x/0.20, 0.0, 0.999));
+  float te = 1e3;
+  if(ex){
+    float tx = rd.x > 1e-4 ? (20.0 - lx)/rd.x : (rd.x < -1e-4 ? (-20.0 - lx)/rd.x : 1e3);
+    float tz = rd.z > 1e-4 ? (15.0 - lz)/rd.z : (rd.z < -1e-4 ? (-15.0 - lz)/rd.z : 1e3);
+    te = 0.7*min(tx, tz) + 0.15;
+  }
+  if(r1.x > 0.20) return te;
+  float R = 2.6 + 3.6*r1.w;
+  vec3 c = vec3((r1.y - 0.5)*12.0, 30.0 + 30.0*r2.x + 1.8*sin(gA + r2.y*TAU), (r1.z - 0.5)*9.0);
+  vec3 q = vec3(lx, p.y, lz) - c;
+  float ang = 0.4*sin(gA + r2.z*TAU);
+  float ca = cos(ang), sa = sin(ang);
+  q.xz = vec2(ca*q.x - sa*q.z, sa*q.x + ca*q.z);
+  float d = length(q*vec3(1.0, 1.6, 1.0)) - R;
+  d += 0.16*R*sin(3.8*q.x/R + r2.w*6.0)*sin(4.6*q.y/R + 1.0)*sin(3.4*q.z/R);
+  d += 0.05*R*sin(11.0*q.x/R + q.z)*sin(12.0*q.y/R)*sin(10.0*q.z/R + q.x);
+  float dc = 1e3;
+  for(int k=0;k<3;k++){
+    float fk = float(k);
+    float a = fk*2.094 + r2.w*6.28;
+    float Hc = R*(1.0 + 0.9*fract(r1.w*3.0 + fk*0.37));
+    vec3 o = vec3(cos(a)*0.42*R, -0.30*R, sin(a)*0.42*R);
+    vec3 pp = q - o - vec3(0.0, -Hc, 0.0);
+    pp.y = -pp.y;
+    dc = min(dc, sdConeH(pp, vec2(0.29, 0.957), Hc)*0.8);
+  }
+  float Ht = 1.1*R;
+  vec3 pt = q - vec3(0.2*R, 0.4*R + Ht, 0.1*R);
+  dc = min(dc, sdConeH(pt, vec2(0.30, 0.954), Ht)*0.8);
+  mat = dc < d ? 1.0 : 0.0;
+  float r = min(d, dc)*0.8;
+  raw = r;
+  return ex ? min(r, te) : r;
+}
+
+float rockD(vec3 p){ float m, rw; vec3 c; return mapRock(p, vec3(0.0), false, m, c, rw); }
+
+float traceRocks(vec3 ro, vec3 rd, float tmax, int steps){
+  float y0 = 8.0, y1 = 92.0;
+  float ta = 0.0, tb = tmax;
+  if(abs(rd.y) > 1e-4){
+    float t0 = (y0 - ro.y)/rd.y, t1 = (y1 - ro.y)/rd.y;
+    ta = max(min(t0, t1), 0.0); tb = min(max(t0, t1), tmax);
+  } else if(ro.y < y0 || ro.y > y1) return -1.0;
+  if(ta >= tb) return -1.0;
+  float t = ta; float m, rw; vec3 cc;
+  for(int i=0;i<steps;i++){
+    float d = mapRock(ro + rd*t, rd, true, m, cc, rw);
+    if(rw < 0.0006*t + 0.003) return t;
+    t += d;
+    if(t > tb) break;
+  }
+  return -1.0;
+}
+
+// ------------------------------------------------------------------ sky
+vec3 horizonCol(vec3 rd){
+  vec2 h = normalize(rd.xz + 1e-5);
+  float sd = max(dot(h, normalize(SUN.xz)), 0.0);
+  vec3 c = mix(vec3(0.13,0.065,0.27), vec3(0.72,0.25,0.34), pow(sd, 3.0));
+  c += vec3(0.02,0.20,0.26)*(1.0 - sd)*0.6;
+  c += SUNCOL*pow(max(dot(rd, SUN), 0.0), 12.0)*0.16;
+  return c;
+}
+
+vec3 sky(vec3 rd){
+  float y = max(rd.y, 0.0);
+  vec2 sp = vec2(atan(rd.x, rd.z), asin(clamp(rd.y, -1.0, 1.0)));
+  vec3 hc = horizonCol(rd);
+  vec3 col = mix(hc, vec3(0.085,0.045,0.24), smoothstep(0.0, 0.26, y));
+  col = mix(col, vec3(0.006,0.012,0.060), smoothstep(0.10, 0.70, y));
+  col += vec3(0.0,0.22,0.30)*exp(-sq((y - 0.05)*14.0))*0.35;
+
+  // galaxy band + drifting nebula (loops through a circle in noise space)
+  vec3 BN = normalize(vec3(0.55, -0.60, 0.05));
+  float gb = exp(-sq((dot(rd, BN) - 0.22)*3.4));
+  vec2 cyc = vec2(cos(gA), sin(gA));
+  float nb  = gnoise(sp*vec2(3.0, 4.0) + 0.6*cyc, 1024.0);
+  float nb2 = gnoise(sp*vec2(7.0, 8.0) + 1.1*vec2(cyc.y, -cyc.x) + 5.0, 1024.0);
+  float neb = smoothstep(-0.15, 0.55, nb + 0.5*nb2) * (0.25 + gb);
+  vec3 nc = mix(vec3(0.55,0.10,0.60), vec3(0.04,0.40,0.55), 0.5 + 0.5*nb2);
+  float nfade = smoothstep(0.03, 0.30, rd.y);
+  col += nc*neb*0.42*nfade;
+
+  // stars
+  for(int l=0;l<2;l++){
+    float sc = (l==0) ? 95.0 : 210.0;
+    vec2 g = sp*sc;
+    ivec2 id = ivec2(floor(g));
+    uvec2 hh = pcg2d(uvec2(id + ivec2(l*971, 13)));
+    vec4 r = rnd4(hh.x); vec4 r2 = rnd4(hh.y);
+    vec2 pos = fract(g) - 0.5 - (r.xy - 0.5)*0.7;
+    float d = length(pos);
+    float tw = 0.65 + 0.35*sin(gA*float(1 + int(r2.z*3.0)) + r2.w*TAU);
+    float s = smoothstep(0.075, 0.0, d) * pow(r.z, 6.0) * tw * ((l==0) ? 2.6 : 1.4);
+    vec3 sc3 = mix(vec3(0.7,0.85,1.0), vec3(1.0,0.75,0.6), r.w);
+    col += sc3*s*smoothstep(0.06, 0.5, rd.y)*(1.0 - 0.6*neb);
+  }
+
+  // aurora curtains
+  {
+    float az = sp.x;
+    float wv = gnoise(vec2(az*3.0 + 0.9*cyc.x, 2.5 + 0.9*cyc.y), 1024.0);
+    float base = 0.20 + 0.07*wv;
+    float cur = smoothstep(0.04, 0.12, y) * exp(-sq((y - base)*8.0)) * smoothstep(-0.05, 0.45, gnoise(vec2(az*1.4 + 3.0, 0.7*cyc.x), 1024.0));
+    float rays = 0.8 + 0.2*sin(az*60.0 + 5.0*wv + 2.0*gA);
+    float mixc = smoothstep(0.10, 0.34, y);
+    vec3 ac = mix(vec3(0.10,1.00,0.65), vec3(0.75,0.20,1.00), mixc);
+    col += ac*cur*rays*0.26*(0.7 + 0.3*sin(gA + az*2.0));
+  }
+
+  // ringed gas giant
+  {
+    const vec3 PCN = vec3(-0.2382, 0.1736, 0.9555);
+    const float PD = 10.0, PR = 1.25;
+    vec3 c = PCN*PD;
+    float b = dot(rd, c);
+    float disc = b*b - (dot(c,c) - PR*PR);
+    float tS = -1.0;
+    if(disc > 0.0 && b > 0.0) tS = b - sqrt(disc);
+    const vec3 RN = normalize(vec3(0.16, 0.56, 0.20));
+    float dr = dot(rd, RN);
+    float tr = dot(c, RN)/dr;
+    float rr = length(rd*tr - c)/PR;
+    // halo
+    float ang = acos(clamp(dot(rd, PCN), -1.0, 1.0));
+    col += vec3(0.35,0.20,0.55)*exp(-max(ang - 0.12, 0.0)*18.0)*0.10*(1.0 - step(0.0, tS));
+    if(tS > 0.0){
+      vec3 n = normalize(rd*tS - c);
+      float lat = dot(n, RN);
+      float bands = sin(lat*24.0 + 2.2*gnoise(vec2(lat*7.0, n.x*4.0), 1024.0));
+      float bands2 = sin(lat*57.0 + 3.0*gnoise(vec2(lat*15.0, n.z*3.0 + 4.0), 1024.0));
+      vec3 pc = mix(vec3(0.78,0.50,0.34), vec3(0.40,0.20,0.48), 0.5 + 0.32*bands);
+      pc = mix(pc, vec3(0.16,0.45,0.55), smoothstep(0.6, 0.98, bands2)*0.3);
+      float lit = smoothstep(-0.2, 0.9, dot(n, normalize(vec3(0.7,0.35,-0.5))));
+      vec3 pcol = pc*(0.05 + 1.15*lit);
+      // ring shadow stripe on the planet
+      pcol *= 1.0 - 0.55*smoothstep(0.05, 0.0, abs(lat - 0.05))*lit;
+      pcol += vec3(0.30,0.55,1.0)*pow(clamp(1.0 - dot(n, -rd), 0.0, 1.0), 3.0)*0.9*(0.25 + lit);
+      col = pcol;
+    }
+    if(tr > 0.0 && rr > 1.30 && rr < 2.40 && (tS < 0.0 || tr < tS)){
+      float band = 0.55 + 0.45*sin(rr*75.0)*sin(rr*25.0 + 1.0);
+      float gap = 1.0 - 0.9*smoothstep(0.03, 0.0, abs(rr - 1.86));
+      float a = smoothstep(1.30, 1.36, rr)*(1.0 - smoothstep(2.30, 2.40, rr))*band*gap*0.85;
+      vec3 rc = mix(vec3(0.95,0.78,0.60), vec3(0.65,0.50,0.80), smoothstep(1.3, 2.4, rr));
+      col = mix(col, rc*0.95, a);
+    }
+  }
+
+  // small moon
+  {
+    const vec3 MC = vec3(0.4636, 0.3746, 0.8030);
+    const float MR = 0.032;
+    float cd = dot(rd, MC);
+    if(cd > cos(MR)){
+      vec3 n2 = (rd - MC)/MR;
+      vec3 nn = n2 + MC*sqrt(max(1.0 - dot(n2, n2), 0.0));
+      float lit = smoothstep(-0.1, 0.9, dot(normalize(nn), normalize(vec3(-0.7,0.3,-0.5))));
+      float cr = gnoise(nn.xy*9.0 + nn.z*3.0, 1024.0);
+      vec3 mc = mix(vec3(0.35,0.55,0.62), vec3(0.75,0.90,0.95), 0.5 + 0.5*cr);
+      col = mc*(0.08 + 1.0*lit);
+    }
+    col += vec3(0.30,0.65,0.85)*exp(-(acos(clamp(cd, -1.0, 1.0)) - MR)*90.0)*0.06*step(0.0, cd);
+  }
+
+  // dwarf sun
+  float sd = dot(rd, SUN);
+  col += SUNCOL*(pow(max(sd, 0.0), 500.0)*3.0 + pow(max(sd, 0.0), 45.0)*0.5 + pow(max(sd, 0.0), 8.0)*0.07);
+  col = mix(col, vec3(1.0,0.80,0.58)*11.0, smoothstep(0.99985, 0.99992, sd));
+  return col;
+}
+
+vec3 applyFog(vec3 col, float t, float y, vec3 rd){
+  float hf = exp(-max(y, 0.0)*0.035);
+  float amt = 1.0 - exp(-t*0.0008*(0.35 + 1.2*hf));
+  vec3 fc = horizonCol(rd) + vec3(0.02,0.25,0.30)*hf*0.22;
+  return mix(col, fc, amt);
+}
+
+// ------------------------------------------------------------------ materials
+vec3 veinEmit(vec2 p, float t, float y){
+  float g1 = gnoise(p/16.0 + vec2(3.3, 0.0), 15.0);
+  float g2 = gnoise(p/8.0  + vec2(11.7, 4.1), 30.0);
+  float v = max(1.0 - smoothstep(0.0, 0.028, abs(g1)), (1.0 - smoothstep(0.0, 0.020, abs(g2)))*0.7);
+  v *= exp(-t*0.0011)*smoothstep(-0.15, 0.25, gnoise(p/48.0 + vec2(2.2, 7.7), 5.0));
+  float mc = smoothstep(-0.25, 0.25, gnoise(p/40.0, 6.0));
+  vec3 c = mix(vec3(0.05,0.85,1.0), vec3(1.0,0.18,0.62), mc);
+  float pulse = 0.6 + 0.4*sin(3.0*TAU*p.y/L - 2.0*gA + 4.0*g1);   // energy flowing along the veins
+  return c*v*pulse*2.6*(1.0 - smoothstep(20.0, 55.0, y));
+}
+
+vec3 shadeTerrain(vec3 ro, vec3 rd, float t, bool refl){
+  vec3 p = ro + rd*t;
+  float vv, dd;
+  float h0 = terrainBase(p.xz, 6.0, vv, dd);
+  vec3 n = terrainNormal(p, t);
+  Cry cr = crystals(p.xz, dd, true);
+  float cm = smoothstep(0.10, 0.55, cr.h);
+
+  float ae = 3.0;
+  float avg = 0.25*(baseH(p.xz + vec2(ae,0.), 4.5) + baseH(p.xz - vec2(ae,0.), 4.5)
+                  + baseH(p.xz + vec2(0.,ae), 4.5) + baseH(p.xz - vec2(0.,ae), 4.5));
+  float ao = clamp(1.0 - (avg - h0)*0.22, 0.3, 1.15);
+
+  float sn = gnoise(vec2(p.x*0.035, p.y*0.3), 1024.0);
+  float band = 0.5 + 0.5*sin(p.y*0.8 + sn*5.0 + 3.0*gnoise(p.xz/30.0, 8.0));
+  vec3 alb = mix(vec3(0.09,0.06,0.15), vec3(0.30,0.13,0.17), band);
+  alb = mix(alb, vec3(0.045,0.11,0.16), (1.0 - vv)*0.8);
+  alb = mix(alb, vec3(0.45,0.38,0.62), smoothstep(48.0, 80.0, p.y)*0.7);
+  alb *= 0.75 + 0.5*gnoise(p.xz*0.8, 192.0);
+  alb *= 1.0 - 0.4*smoothstep(0.3, 0.8, 1.0 - n.y);
+
+  float sh = refl ? 1.0 : softShadow(p + n*0.2, SUN);
+  float dif = max(dot(n, SUN), 0.0);
+  vec3 hem = mix(vec3(0.05,0.035,0.08), vec3(0.20,0.14,0.36), n.y*0.5 + 0.5);
+  vec3 pl = vec3(0.34,0.26,0.50)*max(dot(n, vec3(-0.48,0.62,0.30)), 0.0)*0.6;
+  vec3 col = alb*(SUNCOL*3.4*dif*sh + (hem*0.95 + pl*0.6)*ao);
+  col += alb*cr.light*2.6*(0.4 + 0.6*ao);
+  float rim = pow(clamp(1.0 - dot(n, -rd), 0.0, 1.0), 4.0);
+  col += SUNCOL*rim*max(dot(n, SUN), 0.0)*0.9*sh;
+
+  vec3 em = veinEmit(p.xz, t, p.y);
+  float spk = smoothstep(0.55, 0.85, gnoise(p.xz*1.7, 408.0))*exp(-t*0.004);
+  em += vec3(0.10,0.90,0.80)*spk*0.9;
+  col += em*(1.0 - cm);
+
+  if(cm > 0.001){
+    float fres = pow(clamp(1.0 - dot(n, -rd), 0.0, 1.0), 3.0);
+    vec3 cc = cr.col;
+    float facet = max(dot(n, normalize(vec3(-0.3,0.7,-0.6))), 0.0);
+    float pul = 0.85 + 0.15*sin(3.0*TAU*p.z/L - 3.0*gA + dot(cc, vec3(3.0,5.0,7.0)));
+    vec3 cem = cc*(0.06 + 2.2*cr.tip*cr.tip*cr.tip + 0.55*facet*cr.tip + 0.25)*pul + cc*fres*0.7;
+    vec3 rf = reflect(rd, n);
+    cem += SUNCOL*pow(max(dot(rf, SUN), 0.0), 30.0)*2.5;
+    cem += cc*pow(max(dot(rf, normalize(vec3(-0.3,0.6,0.4))), 0.0), 40.0)*0.8;
+    col = mix(col, cem, cm);
+  }
+  return col;
+}
+
+vec3 shadeRock(vec3 ro, vec3 rd, float t){
+  vec3 p = ro + rd*t;
+  float mat, rw; vec3 cc;
+  mapRock(p, vec3(0.0), false, mat, cc, rw);
+  const vec2 k = vec2(1.0, -1.0);
+  float e = 0.03;
+  vec3 n = normalize(k.xyy*rockD(p + k.xyy*e) + k.yyx*rockD(p + k.yyx*e)
+                   + k.yxy*rockD(p + k.yxy*e) + k.xxx*rockD(p + k.xxx*e));
+  float dif = max(dot(n, SUN), 0.0);
+  float band = 0.5 + 0.5*sin(p.y*2.4 + 2.0*gnoise(vec2(p.x*0.4 + p.y*0.2, p.z*0.4), 96.0));
+  vec3 alb = mix(vec3(0.085,0.06,0.13), vec3(0.17,0.10,0.15), band);
+  vec3 hem = mix(vec3(0.05,0.035,0.08), vec3(0.20,0.14,0.36), n.y*0.5 + 0.5);
+  vec3 col = alb*(SUNCOL*2.8*dif + hem*1.0 + vec3(0.30,0.24,0.45)*max(dot(n, vec3(-0.48,0.62,0.30)), 0.0)*0.4);
+  col += alb*cc*(0.55*max(-n.y, 0.0) + 0.18)*3.0;                   // crystal light bouncing on the underside
+  float rim = pow(clamp(1.0 - dot(n, -rd), 0.0, 1.0), 4.0);
+  col += SUNCOL*rim*dif*0.8;
+  if(mat > 0.5){
+    float fres = pow(clamp(1.0 - dot(n, -rd), 0.0, 1.0), 3.0);
+    float facet = max(dot(n, normalize(vec3(-0.3,0.7,-0.6))), 0.0);
+    float pul = 0.85 + 0.15*sin(gA*3.0 + p.x*0.3);
+    vec3 cem = cc*(0.35 + 1.5*facet)*pul + cc*fres*0.9;
+    vec3 rf = reflect(rd, n);
+    cem += SUNCOL*pow(max(dot(rf, SUN), 0.0), 30.0)*2.5;
+    col = cem;
+  }
+  return col;
+}
+
+vec3 reflScene(vec3 ro, vec3 rd){
+  float tT = traceTerrain(ro, rd, 900.0, 58);
+  float tm = tT > 0.0 ? tT : 320.0;
+  float tR = traceRocks(ro, rd, min(tm, 320.0), 40);
+  vec3 col; float tt;
+  if(tR > 0.0){ col = shadeRock(ro, rd, tR); tt = tR; }
+  else if(tT > 0.0){ col = shadeTerrain(ro, rd, tT, true); tt = tT; }
+  else return sky(rd);
+  vec3 p = ro + rd*tt;
+  return applyFog(col, tt, p.y, rd);
+}
+
+float waveH(vec2 p){
+  vec2 c1 = vec2(cos(gA), sin(gA));
+  vec2 c2 = vec2(cos(gA + 2.1), sin(gA + 2.1));
+  return gnoise(p*0.5 + 0.8*c1, 120.0)
+       + 0.5*gnoise(p*1.0 + 1.3*c2 + 3.0, 240.0)
+       + 0.25*gnoise(p*2.0 + 1.0*c1.yx + 7.0, 480.0);
+}
+
+vec3 shadeWater(vec3 ro, vec3 rd, float tw){
+  vec3 p = ro + rd*tw;
+  float amp = 0.20/(1.0 + 0.012*tw);
+  float e = 0.1;
+  float h0 = waveH(p.xz);
+  float hx = waveH(p.xz + vec2(e, 0.0));
+  float hz = waveH(p.xz + vec2(0.0, e));
+  vec3 n = normalize(vec3(-(hx - h0)/e*amp, 1.0, -(hz - h0)/e*amp));
+  float ndv = max(dot(n, -rd), 0.0);
+  float fr = 0.07 + 0.93*pow(1.0 - ndv, 5.0);
+  vec3 rr = reflect(rd, n);
+  rr.y = abs(rr.y) + 0.005;
+  rr = normalize(rr);
+  vec3 refl = tw < 1400.0 ? reflScene(p + vec3(0.0, 0.03, 0.0), rr) : horizonCol(rr);
+  float dep = max(WATER - baseH(p.xz, 3.5), 0.0);
+  vec3 body = mix(vec3(0.004,0.02,0.04), vec3(0.02,0.16,0.18), exp(-dep*0.9));
+  body += veinEmit(p.xz, tw, 0.0)*exp(-dep*1.4)*0.9;
+  return mix(body, refl, clamp(fr*1.05, 0.0, 1.0));
+}
+
+// ------------------------------------------------------------------ floating spores
+vec3 particles(vec3 ro, vec3 rd, float tt){
+  vec3 acc = vec3(0.0);
+  if(rd.z < 0.02) return acc;
+  const float S = 8.0;
+  float k0 = floor(ro.z/S);
+  for(int j=1;j<=11;j++){
+    float k = k0 + float(j);
+    float Z = k*S;
+    float tp = (Z - ro.z)/rd.z;
+    if(tp < 1.5 || tp > tt) continue;
+    vec3 P = ro + rd*tp;
+    ivec2 ic = ivec2(floor(P.xy/6.0));
+    uvec2 hh = pcg2d(uvec2(ivec2(ic.x*31 + int(mod(k, 30.0))*977, ic.y*17 + 5)));
+    vec4 r = rnd4(hh.x), r2 = rnd4(hh.y);
+    if(r.x > 0.38) continue;
+    vec2 pp = (vec2(ic) + 0.5)*6.0 + (r.yz - 0.5)*3.5;
+    pp += 0.6*vec2(sin(gA + r.w*TAU), cos(gA + r2.x*TAU));
+    if(pp.y < 0.5 || pp.y > 46.0) continue;
+    vec2 dv = P.xy - pp;
+    float rad = max(0.05 + 0.07*r2.y, tp*0.0012);
+    float gl = exp(-dot(dv, dv)/(rad*rad));
+    float fade = smoothstep(2.0, 12.0, tp)*(1.0 - smoothstep(60.0, 88.0, tp));
+    float tw = 0.6 + 0.4*sin(gA*float(1 + int(r2.z*3.0)) + r2.w*TAU);
+    vec3 pc = mix(vec3(0.15,0.95,1.0), vec3(1.0,0.30,0.75), step(0.5, r2.x));
+    pc = mix(pc, vec3(1.0,0.9,0.8), step(0.9, r2.y));
+    acc += pc*gl*fade*tw*1.7;
+  }
+  return acc;
+}
+
+// ------------------------------------------------------------------ main
+void main(){
+  gA = TAU*uT/DUR;
+  vec2 uv = (gl_FragCoord.xy - 0.5*uRes)/uRes.y;
+
+  float zc = L*uT/DUR;
+  float cx = 0.65*pathX(zc) + 1.6*sin(2.0*gA);
+  float cy = 40.0 + 3.0*sin(2.0*gA + 0.8);
+  vec3 ro = vec3(cx, cy, zc);
+  vec3 tgt = vec3(0.65*pathX(zc + 45.0), cy - 7.0 + 1.2*sin(gA), zc + 45.0);
+  vec3 fw = normalize(tgt - ro);
+  float bank = 0.008*(pathX(zc + 30.0) - 2.0*pathX(zc) + pathX(zc - 30.0)) + 0.012*sin(gA);
+  vec3 up0 = vec3(sin(bank), cos(bank), 0.0);
+  vec3 rt = normalize(cross(up0, fw));
+  vec3 upv = cross(fw, rt);
+  vec3 rd = normalize(uv.x*rt + uv.y*upv + 1.15*fw);
+
+  float tT = traceTerrain(ro, rd, 1600.0, 220);
+  float tm = tT > 0.0 ? tT : 450.0;
+  float tR = traceRocks(ro, rd, min(tm, 450.0), 72);
+  float tW = rd.y < -1e-4 ? (WATER - ro.y)/rd.y : -1.0;
+
+  vec3 col; float tt = 1e5;
+  if(tR > 0.0 && (tW < 0.0 || tR < tW)){
+    col = shadeRock(ro, rd, tR); tt = tR;
+    col = applyFog(col, tt, (ro + rd*tt).y, rd);
+  } else if(tW > 0.0 && (tT < 0.0 || tW < tT)){
+    col = shadeWater(ro, rd, tW); tt = tW;
+    col = applyFog(col, tt, WATER, rd);
+  } else if(tT > 0.0){
+    col = shadeTerrain(ro, rd, tT, false); tt = tT;
+    col = applyFog(col, tt, (ro + rd*tt).y, rd);
+  } else {
+    col = sky(rd);
+  }
+  col += particles(ro, rd, tt);
+  fragColor = vec4(col/uEnc, 1.0);
+}
+</script>
+
+<script id="fs-down" type="x-shader/x-fragment">#version 300 es
+precision highp float;
+uniform sampler2D uTex;
+uniform vec2  uTexel;
+uniform int   uFirst;
+uniform float uEnc;
+in vec2 vUv;
+out vec4 o;
+vec3 thr(vec3 c){
+  float b = max(max(c.r, c.g), c.b);
+  return c*(max(b - 1.0, 0.0)/max(b, 1e-4));
+}
+float kw(vec3 c){ return 1.0/(1.0 + dot(c, vec3(0.2126,0.7152,0.0722))); }
+void main(){
+  vec2 uv = vUv, d = uTexel;
+  vec3 a = texture(uTex, uv + d*vec2(-2., 2.)).rgb;
+  vec3 b = texture(uTex, uv + d*vec2( 0., 2.)).rgb;
+  vec3 c = texture(uTex, uv + d*vec2( 2., 2.)).rgb;
+  vec3 dd= texture(uTex, uv + d*vec2(-2., 0.)).rgb;
+  vec3 e = texture(uTex, uv).rgb;
+  vec3 f = texture(uTex, uv + d*vec2( 2., 0.)).rgb;
+  vec3 g = texture(uTex, uv + d*vec2(-2.,-2.)).rgb;
+  vec3 h = texture(uTex, uv + d*vec2( 0.,-2.)).rgb;
+  vec3 i = texture(uTex, uv + d*vec2( 2.,-2.)).rgb;
+  vec3 j = texture(uTex, uv + d*vec2(-1., 1.)).rgb;
+  vec3 k = texture(uTex, uv + d*vec2( 1., 1.)).rgb;
+  vec3 l = texture(uTex, uv + d*vec2(-1.,-1.)).rgb;
+  vec3 m = texture(uTex, uv + d*vec2( 1.,-1.)).rgb;
+  vec3 r;
+  if(uFirst == 1){
+    vec3 g0 = thr((a + b + dd + e)*0.25*uEnc);
+    vec3 g1 = thr((b + c + e + f)*0.25*uEnc);
+    vec3 g2 = thr((dd + e + g + h)*0.25*uEnc);
+    vec3 g3 = thr((e + f + h + i)*0.25*uEnc);
+    vec3 g4 = thr((j + k + l + m)*0.25*uEnc);
+    r = (g0*kw(g0) + g1*kw(g1) + g2*kw(g2) + g3*kw(g3))*0.125 + g4*kw(g4)*0.5;
+    r /= uEnc;
+    r /= max(0.125*(kw(g0)+kw(g1)+kw(g2)+kw(g3)) + 0.5*kw(g4), 1e-4);
+    r *= 0.6;
+  } else {
+    r = e*0.125 + (a + c + g + i)*0.03125 + (b + dd + f + h)*0.0625 + (j + k + l + m)*0.125;
+  }
+  o = vec4(r, 1.0);
+}
+</script>
+
+<script id="fs-up" type="x-shader/x-fragment">#version 300 es
+precision highp float;
+uniform sampler2D uTex;
+uniform vec2  uTexel;
+uniform float uGain;
+in vec2 vUv;
+out vec4 o;
+void main(){
+  vec2 uv = vUv, d = uTexel;
+  vec3 s = texture(uTex, uv).rgb*4.0;
+  s += (texture(uTex, uv + d*vec2( 1., 0.)).rgb + texture(uTex, uv + d*vec2(-1., 0.)).rgb
+      + texture(uTex, uv + d*vec2( 0., 1.)).rgb + texture(uTex, uv + d*vec2( 0.,-1.)).rgb)*2.0;
+  s += texture(uTex, uv + d*vec2( 1., 1.)).rgb + texture(uTex, uv + d*vec2(-1., 1.)).rgb
+     + texture(uTex, uv + d*vec2( 1.,-1.)).rgb + texture(uTex, uv + d*vec2(-1.,-1.)).rgb;
+  o = vec4(s*(1.0/16.0)*uGain, 1.0);
+}
+</script>
+
+<script id="fs-comp" type="x-shader/x-fragment">#version 300 es
+precision highp float;
+uniform sampler2D uScene;
+uniform sampler2D uBloom;
+uniform float uEnc;
+uniform float uFrame;
+in vec2 vUv;
+out vec4 o;
+vec3 aces(vec3 x){
+  return clamp((x*(2.51*x + 0.03))/(x*(2.43*x + 0.59) + 0.14), 0.0, 1.0);
+}
+float hash13(vec3 p){
+  p = fract(p*0.1031); p += dot(p, p.zyx + 31.32);
+  return fract((p.x + p.y)*p.z);
+}
+void main(){
+  vec2 uv = vUv;
+  vec2 c = uv - 0.5;
+  float r2 = dot(c, c);
+  vec2 ca = c*0.0028*r2*4.0;                                   // subtle lens chromatic aberration
+  vec3 sc;
+  sc.r = texture(uScene, uv + ca).r;
+  sc.g = texture(uScene, uv).g;
+  sc.b = texture(uScene, uv - ca).b;
+  vec3 bl = texture(uBloom, uv).rgb;
+  vec3 col = (sc + bl*0.7)*uEnc;
+  col *= 0.9;
+  col = aces(col);
+  float lum = dot(col, vec3(0.2126,0.7152,0.0722));
+  col = mix(vec3(lum), col, 1.16);                             // saturation
+  col = mix(col*vec3(0.92,0.96,1.10), col*vec3(1.06,1.0,0.94), smoothstep(0.1, 0.8, lum));   // split tone
+  col *= 1.0 - 0.55*smoothstep(0.35, 1.05, length(c*vec2(1.0, 1.15)));   // vignette
+  col = pow(col, vec3(1.0/2.2));
+  float g = hash13(vec3(gl_FragCoord.xy, uFrame));
+  col += (g - 0.5)*0.028;                                       // film grain / dither
+  o = vec4(col, 1.0);
+}
+</script>
+
+<script>
+(function(){
+  'use strict';
+  var W = 3840, H = 2160, DUR = 15;
+  window.LOOP_DURATION = DUR;
+  var qs = new URLSearchParams(location.search);
+  var res = Math.min(1, Math.max(0.05, parseFloat(qs.get('res')) || 1));
+  var frozen = qs.has('t') ? parseFloat(qs.get('t')) : null;
+  var IW = Math.round(W*res), IH = Math.round(H*res);
+
+  var canvas = document.getElementById('c');
+  var errBox = document.getElementById('err');
+  canvas.width = IW; canvas.height = IH;
+  function fail(m){ errBox.style.display = 'block'; errBox.textContent += m + '\n'; console.error(m); }
+
+  function fit(){
+    var s = Math.min(window.innerWidth/W, window.innerHeight/H);
+    canvas.style.transform = 'translate(' + ((window.innerWidth - W*s)/2) + 'px,' + ((window.innerHeight - H*s)/2) + 'px) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit); fit();
+
+  var gl = canvas.getContext('webgl2', { antialias: false, alpha: false, depth: false, stencil: false,
+                                         preserveDrawingBuffer: true, powerPreference: 'high-performance' });
+  if(!gl){ fail('WebGL2 is required to play this animation.'); return; }
+  var hdr = !!(gl.getExtension('EXT_color_buffer_float') || gl.getExtension('EXT_color_buffer_half_float'));
+  gl.getExtension('OES_texture_float_linear');
+
+  function compile(type, src, name){
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src.replace(/^\s+/, ''));
+    gl.compileShader(s);
+    if(!gl.getShaderParameter(s, gl.COMPILE_STATUS)) fail(name + ' shader:\n' + gl.getShaderInfoLog(s));
+    return s;
+  }
+  var vsSrc = document.getElementById('vs').textContent;
+  function program(id){
+    var p = gl.createProgram();
+    gl.attachShader(p, compile(gl.VERTEX_SHADER, vsSrc, 'vertex'));
+    gl.attachShader(p, compile(gl.FRAGMENT_SHADER, document.getElementById(id).textContent, id));
+    gl.linkProgram(p);
+    if(!gl.getProgramParameter(p, gl.LINK_STATUS)) fail('link ' + id + ':\n' + gl.getProgramInfoLog(p));
+    var u = {};
+    var n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+    for(var i = 0; i < n; i++){ var nm = gl.getActiveUniform(p, i).name; u[nm] = gl.getUniformLocation(p, nm); }
+    return { p: p, u: u };
+  }
+  var pScene = program('fs-scene'), pDown = program('fs-down'), pUp = program('fs-up'), pComp = program('fs-comp');
+  var vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+
+  function makeTarget(w, h, useHdr){
+    var tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    if(useHdr) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.HALF_FLOAT, null);
+    else       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8,  w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    var fbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    var ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+    return { tex: tex, fbo: fbo, w: w, h: h, ok: ok };
+  }
+  function buildTargets(useHdr){
+    var t = { scene: makeTarget(IW, IH, useHdr), mips: [] };
+    var ok = t.scene.ok;
+    for(var i = 0; i < 6; i++){
+      var m = makeTarget(Math.max(1, Math.ceil(IW/Math.pow(2, i + 1))), Math.max(1, Math.ceil(IH/Math.pow(2, i + 1))), useHdr);
+      ok = ok && m.ok; t.mips.push(m);
+    }
+    t.ok = ok; return t;
+  }
+  var targets = hdr ? buildTargets(true) : null;
+  var enc = 1;
+  if(!targets || !targets.ok){ targets = buildTargets(false); enc = 6; }
+
+  function bindTex(unit, tex){ gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, tex); }
+  function target(t){ gl.bindFramebuffer(gl.FRAMEBUFFER, t ? t.fbo : null); gl.viewport(0, 0, t ? t.w : IW, t ? t.h : IH); }
+  function draw(){ gl.drawArrays(gl.TRIANGLES, 0, 3); }
+
+  function render(t){
+    t = ((t % DUR) + DUR) % DUR;
+    gl.disable(gl.BLEND);
+    // 1) scene
+    target(targets.scene);
+    gl.useProgram(pScene.p);
+    gl.uniform2f(pScene.u.uRes, IW, IH);
+    gl.uniform1f(pScene.u.uT, t);
+    gl.uniform1f(pScene.u.uEnc, enc);
+    draw();
+    // 2) bloom down-chain
+    gl.useProgram(pDown.p);
+    gl.uniform1i(pDown.u.uTex, 0);
+    gl.uniform1f(pDown.u.uEnc, enc);
+    var src = targets.scene;
+    for(var i = 0; i < 6; i++){
+      var m = targets.mips[i];
+      target(m);
+      gl.uniform2f(pDown.u.uTexel, 1/src.w, 1/src.h);
+      gl.uniform1i(pDown.u.uFirst, i === 0 ? 1 : 0);
+      bindTex(0, src.tex);
+      draw();
+      src = m;
+    }
+    // 3) bloom up-chain (additive)
+    gl.useProgram(pUp.p);
+    gl.uniform1i(pUp.u.uTex, 0);
+    gl.uniform1f(pUp.u.uGain, 1.0);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+    for(var j = 5; j >= 1; j--){
+      var s2 = targets.mips[j];
+      target(targets.mips[j - 1]);
+      gl.uniform2f(pUp.u.uTexel, 1/s2.w, 1/s2.h);
+      bindTex(0, s2.tex);
+      draw();
+    }
+    gl.disable(gl.BLEND);
+    // 4) composite to screen
+    target(null);
+    gl.useProgram(pComp.p);
+    gl.uniform1i(pComp.u.uScene, 0);
+    gl.uniform1i(pComp.u.uBloom, 1);
+    gl.uniform1f(pComp.u.uEnc, enc);
+    gl.uniform1f(pComp.u.uFrame, Math.floor(t*30) % 450);
+    bindTex(0, targets.scene.tex);
+    bindTex(1, targets.mips[0].tex);
+    draw();
+  }
+  window.renderAt = function(t){ render(t); };
+
+  if(frozen !== null){ render(frozen); return; }
+
+  var start = null;
+  function tick(now){
+    if(start === null) start = now;
+    render((now - start)/1000);
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>
