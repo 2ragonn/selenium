@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=3840, height=2160">
+<title>Golden Luxury Particles Flow</title>
+<style>
+  html, body { margin: 0; padding: 0; width: 3840px; height: 2160px; overflow: hidden; background: #000; }
+  canvas { display: block; position: absolute; left: 0; top: 0; width: 3840px; height: 2160px; }
+</style>
+</head>
+<body>
+<canvas id="c" width="3840" height="2160"></canvas>
+<script>
+(function () {
+  'use strict';
+  // ---------------------------------------------------------------------------
+  // Golden Luxury Particles Flow
+  // 3840x2160, 15 s seamless loop. Every time-dependent term is a function of
+  // t in [0,15) built from sinusoids whose frequency is an integer multiple of
+  // 2*PI/15, or from life-cycles that are an exact divisor of 15 s, so the
+  // frame at t = 15 is bit-identical to the frame at t = 0.
+  // ---------------------------------------------------------------------------
+  var W = 3840, H = 2160, LOOP = 15.0;
+  var canvas = document.getElementById('c');
+  var qs = new URLSearchParams(location.search);
+  var fixedT = qs.has('t') ? (parseFloat(qs.get('t')) % LOOP + LOOP) % LOOP : null;
+  var once = qs.has('once');
+  window.setLoopTime = function (t) { fixedT = (t === null || t === undefined) ? null : ((t % LOOP) + LOOP) % LOOP; };
+
+  // Deterministic PRNG so every render is identical.
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = a + 0x6D2B79F5 | 0;
+      var t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+
+  var gl = canvas.getContext('webgl2', {
+    antialias: false, alpha: false, depth: false, stencil: false,
+    premultipliedAlpha: false, preserveDrawingBuffer: true, powerPreference: 'high-performance'
+  });
+
+  if (!gl) { fallback2D(); return; }
+
+  // ---------------------------------------------------------------- shaders
+  var VS_QUAD = '#version 300 es\n' +
+    'precision highp float;\n' +
+    'out vec2 vUv;\n' +
+    'void main(){\n' +
+    '  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));\n' +
+    '  vUv = p; gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);\n' +
+    '}\n';
+
+  var FS_BG = '#version 300 es\n' +
+    'precision highp float;\n' +
+    'in vec2 vUv; out vec4 o;\n' +
+    'uniform float uT; uniform vec2 uRes;\n' +
+    'const float TAU = 6.28318530718; const float W0 = TAU / 15.0;\n' +
+    'uvec3 pcg3d(uvec3 v){ v = v * 1664525u + 1013904223u; v.x += v.y*v.z; v.y += v.z*v.x; v.z += v.x*v.y;\n' +
+    '  v ^= v >> 16u; v.x += v.y*v.z; v.y += v.z*v.x; v.z += v.x*v.y; return v; }\n' +
+    'vec3 grad3(vec3 i){ uvec3 h = pcg3d(uvec3(ivec3(i) + 4096)); return vec3(h) * (2.0 / 4294967295.0) - 1.0; }\n' +
+    'float noise(vec3 p){ vec3 i = floor(p); vec3 f = fract(p); vec3 u = f*f*(3.0-2.0*f);\n' +
+    '  return mix(mix(mix(dot(grad3(i+vec3(0,0,0)), f-vec3(0,0,0)), dot(grad3(i+vec3(1,0,0)), f-vec3(1,0,0)), u.x),\n' +
+    '                 mix(dot(grad3(i+vec3(0,1,0)), f-vec3(0,1,0)), dot(grad3(i+vec3(1,1,0)), f-vec3(1,1,0)), u.x), u.y),\n' +
+    '             mix(mix(dot(grad3(i+vec3(0,0,1)), f-vec3(0,0,1)), dot(grad3(i+vec3(1,0,1)), f-vec3(1,0,1)), u.x),\n' +
+    '                 mix(dot(grad3(i+vec3(0,1,1)), f-vec3(0,1,1)), dot(grad3(i+vec3(1,1,1)), f-vec3(1,1,1)), u.x), u.y), u.z); }\n' +
+    'float fbm(vec3 p){ float a = 0.5, s = 0.0; for(int k = 0; k < 5; k++){ s += a * noise(p); p = p * 2.03 + vec3(1.7, 9.2, 3.1); a *= 0.5; } return s; }\n' +
+    'void main(){\n' +
+    '  float aspect = uRes.x / uRes.y;\n' +
+    '  vec2 p = (vUv - 0.5) * vec2(aspect, 1.0);\n' +
+    // base: near-black with a warm dark amber pool low in frame
+    '  vec3 base = mix(vec3(0.0035, 0.0025, 0.0022), vec3(0.026, 0.014, 0.0045), smoothstep(1.25, 0.0, length((p - vec2(0.05, -0.42)) * vec2(0.85, 1.25))));\n' +
+    '  base += vec3(0.010, 0.006, 0.002) * smoothstep(1.4, 0.0, length((p - vec2(-0.55, 0.42)) * vec2(0.9, 1.4)));\n' +
+    // periodic haze: noise sampled along a circle in noise-space -> loops perfectly
+    '  float ang = W0 * uT; vec2 circ = vec2(cos(ang), sin(ang)) * 0.75;\n' +
+    '  float n1 = fbm(vec3(p * 1.5 + vec2(circ.x, 0.0), circ.y));\n' +
+    '  float n2 = fbm(vec3(p * 3.1 + vec2(0.0, circ.y * 0.7) + 5.0, -circ.x * 0.8 + 2.0));\n' +
+    '  float haze = smoothstep(-0.25, 0.55, n1 + 0.35 * n2);\n' +
+    '  float hm = smoothstep(1.35, 0.15, length((p - vec2(0.0, -0.08)) * vec2(0.75, 1.35)));\n' +
+    '  vec3 col = base + vec3(0.36, 0.21, 0.055) * 0.085 * haze * hm;\n' +
+    // volumetric light shafts falling from the upper left
+    '  vec2 dir = normalize(vec2(0.42, -1.0)); vec2 perp = vec2(dir.y, -dir.x);\n' +
+    '  float a = dot(p, dir), b = dot(p, perp);\n' +
+    '  float shafts = 0.0;\n' +
+    '  for(int k = 0; k < 7; k++){\n' +
+    '    float fk = float(k);\n' +
+    '    float c = -1.05 + fk * 0.34 + 0.05 * sin(W0 * uT * (1.0 + mod(fk, 2.0)) + fk * 1.37);\n' +
+    '    float w = 0.055 + 0.045 * fract(fk * 0.618);\n' +
+    '    float I = 0.45 + 0.55 * (0.5 + 0.5 * sin(W0 * uT * (1.0 + mod(fk, 3.0)) + fk * 2.11));\n' +
+    '    shafts += exp(-pow((b - c) / w, 2.0)) * I;\n' +
+    '  }\n' +
+    '  shafts *= smoothstep(0.75, -0.85, a) * (0.55 + 0.45 * smoothstep(-0.3, 0.5, n1));\n' +
+    '  col += vec3(1.0, 0.80, 0.45) * 0.050 * shafts;\n' +
+    '  o = vec4(col, 1.0);\n' +
+    '}\n';
+
+  var VS_PART = '#version 300 es\n' +
+    'precision highp float; precision highp int;\n' +
+    'layout(location = 0) in vec2 aCorner;\n' +
+    'layout(location = 1) in vec4 aSeed;\n' +
+    'layout(location = 2) in vec4 aSeed2;\n' +
+    'uniform float uT; uniform vec2 uRes; uniform int uMode;\n' +
+    'uniform float uCycles; uniform vec2 uSize; uniform vec2 uDrift; uniform float uWobble; uniform float uFlow;\n' +
+    'uniform vec2 uBright; uniform float uTwinkle; uniform vec2 uSoft; uniform float uRing; uniform vec2 uDepth; uniform vec4 uStream;\n' +
+    'out vec2 vUv; out vec3 vCol; out float vSoft; out float vRing;\n' +
+    'const float TAU = 6.28318530718; const float W0 = TAU / 15.0;\n' +
+    'vec2 streamPoint(float s, float t, float v){\n' +
+    '  float x = -0.22 + 1.44 * s;\n' +
+    '  float y = 0.50 + 0.05 * v\n' +
+    '    + 0.165 * sin(TAU * 0.85 * s + 0.9 + v * 1.7 + 0.38 * sin(W0 * t + v))\n' +
+    '    + 0.060 * sin(TAU * 2.10 * s - 2.0 * W0 * t + v * 2.3)\n' +
+    '    + 0.022 * sin(TAU * 4.30 * s + 3.0 * W0 * t + v * 0.9);\n' +
+    '  return vec2(x, y);\n' +
+    '}\n' +
+    'float streamWidth(float s, float t, float v){\n' +
+    '  float m = 0.5 + 0.5 * sin(TAU * 1.6 * s + 2.0 * W0 * t + v * 2.0);\n' +
+    '  return (0.38 + 0.62 * m) * (0.85 + 0.6 * abs(s - 0.5));\n' +
+    '}\n' +
+    'void main(){\n' +
+    '  float aspect = uRes.x / uRes.y;\n' +
+    '  vec2 px = 1.0 / uRes;\n' +
+    '  float d = mix(uDepth.x, uDepth.y, aSeed.w);\n' +
+    '  float env = 1.0; vec2 pos = vec2(0.0);\n' +
+    // periodic wobble (integer multiples of W0)
+    '  float ph1 = aSeed2.w * TAU; float ph2 = fract(aSeed2.w * 13.7) * TAU;\n' +
+    '  float n1 = 1.0 + floor(fract(aSeed2.w * 3.1) * 3.0);\n' +
+    '  float n2 = 3.0 + floor(fract(aSeed2.w * 5.3) * 4.0);\n' +
+    '  vec2 wob = vec2(sin(W0 * n1 * uT + ph1) + 0.5 * sin(W0 * n2 * uT + ph2),\n' +
+    '                  cos(W0 * n1 * uT + ph2 * 0.7) + 0.5 * cos(W0 * n2 * uT + ph1)) * uWobble * (0.4 + 0.8 * d) * px;\n' +
+    // periodic twinkle
+    '  float nt = 12.0 + floor(fract(aSeed2.z * 9.1) * 30.0);\n' +
+    '  float twr = 0.5 + 0.5 * sin(W0 * nt * uT + aSeed2.y * TAU);\n' +
+    '  float tw = mix(1.0, 0.2 + 0.8 * twr * twr, uTwinkle);\n' +
+    '  if (uMode == 1) {\n' +
+    '    float s = fract(aSeed.x + uT / 15.0);\n' +
+    '    vec2 c = streamPoint(s, uT, uStream.z);\n' +
+    '    vec2 c2 = streamPoint(s + 0.003, uT, uStream.z);\n' +
+    '    vec2 tng = normalize((c2 - c) * vec2(aspect, 1.0));\n' +
+    '    vec2 nrm = vec2(-tng.y, tng.x);\n' +
+    '    float wd = streamWidth(s, uT, uStream.z) * uStream.x * px.y;\n' +
+    '    float r = sqrt(aSeed.y);\n' +
+    '    if (aSeed2.x > 0.86) r *= 1.4 + 2.2 * fract(aSeed2.x * 23.0);\n' +
+    '    r *= wd;\n' +
+    '    float th = aSeed.z * TAU + W0 * uStream.y * uT;\n' +
+    '    float dep = sin(th);\n' +
+    '    vec2 off = nrm * (r * cos(th));\n' +
+    '    pos = c + vec2(off.x / aspect, off.y) + wob * 0.4;\n' +
+    '    float sfade = smoothstep(0.0, 0.10, s) * smoothstep(1.0, 0.90, s);\n' +
+    '    env = sfade * (0.70 + 0.30 * dep);\n' +
+    '    d = mix(uDepth.x, uDepth.y, 0.5 + 0.5 * dep);\n' +
+    '  } else {\n' +
+    '    float L = 15.0 / uCycles;\n' +
+    '    float ph = aSeed.x + uT / L;\n' +
+    '    float p = fract(ph);\n' +
+    '    float cyc = mod(floor(ph), uCycles);\n' +
+    '    float age = p * L;\n' +
+    '    vec2 sp = fract(aSeed.yz + cyc * vec2(0.618034, 0.381966) * 3.0);\n' +
+    '    sp = sp * 1.14 - 0.07;\n' +
+    '    vec2 vel = uDrift * (0.6 + 0.8 * fract(aSeed2.x * 7.7));\n' +
+    '    vel.x += (fract(aSeed2.y * 5.5) - 0.5) * abs(uDrift.y) * 0.9;\n' +
+    '    pos = sp + vel * age * px + wob;\n' +
+    '    env = smoothstep(0.0, 0.18, p) * smoothstep(1.0, 0.78, p);\n' +
+    '  }\n' +
+    // large-scale periodic flow field
+    '  vec2 q = pos * vec2(aspect, 1.0);\n' +
+    '  vec2 flow = vec2(sin(q.y * 4.2 + 2.0 * W0 * uT + 0.8 * sin(q.x * 2.3 + W0 * uT)),\n' +
+    '                   cos(q.x * 3.1 - W0 * uT + 0.6 * sin(q.y * 3.7 - 2.0 * W0 * uT)));\n' +
+    '  pos += flow * uFlow * (0.5 + 0.7 * d) * px;\n' +
+    // gentle camera parallax
+    '  pos += vec2(sin(W0 * uT), sin(2.0 * W0 * uT + 1.1)) * (d - 0.5) * 30.0 * px;\n' +
+    '  float szr = fract(aSeed2.x * 3.3);\n' +
+    '  float sz = mix(uSize.x, uSize.y, szr * szr) * (1.0 - 0.15 * uTwinkle + 0.15 * uTwinkle * tw);\n' +
+    '  float bright = mix(uBright.x, uBright.y, fract(aSeed2.y * 2.9)) * env * tw * mix(0.5, 1.0, d);\n' +
+    '  if (uMode == 2) {\n' +
+    '    float nf = 1.0 + floor(fract(aSeed2.z * 4.7) * 3.0);\n' +
+    '    float f = pow(max(0.0, sin(W0 * nf * uT + aSeed2.w * TAU)), 16.0);\n' +
+    '    bright *= f; sz *= 0.55 + 0.45 * f;\n' +
+    '    if (f < 0.015) sz = 0.0;\n' +
+    '  }\n' +
+    '  float blur = clamp(abs(d - 0.38) / 0.62, 0.0, 1.0);\n' +
+    '  vSoft = max(mix(uSoft.x, uSoft.y, blur), clamp(2.6 / max(sz, 0.01), 0.0, 1.0));\n' +
+    '  vRing = uRing * (1.0 - vSoft);\n' +
+    '  float ch = fract(aSeed2.z * 1.7);\n' +
+    '  vec3 g1 = vec3(1.0, 0.52, 0.11), g2 = vec3(1.0, 0.79, 0.38), g3 = vec3(1.0, 0.93, 0.72);\n' +
+    '  vec3 col = ch < 0.5 ? mix(g1, g2, ch * 2.0) : mix(g2, g3, (ch - 0.5) * 2.0);\n' +
+    '  vCol = col * bright;\n' +
+    '  vUv = aCorner;\n' +
+    '  gl_Position = vec4(pos * 2.0 - 1.0 + aCorner * sz * 2.0 * px, 0.0, 1.0);\n' +
+    '}\n';
+
+  var FS_PART = '#version 300 es\n' +
+    'precision highp float; precision highp int;\n' +
+    'in vec2 vUv; in vec3 vCol; in float vSoft; in float vRing;\n' +
+    'uniform int uMode; out vec4 o;\n' +
+    'void main(){\n' +
+    '  float d2 = dot(vUv, vUv); float d = sqrt(d2); float shape;\n' +
+    '  if (uMode == 2) {\n' +
+    '    float ax = abs(vUv.x), ay = abs(vUv.y);\n' +
+    '    float star = exp(-ax * 5.0 - ay * 30.0) + exp(-ay * 5.0 - ax * 30.0);\n' +
+    '    float dx = abs(vUv.x + vUv.y) * 0.7071, dy = abs(vUv.x - vUv.y) * 0.7071;\n' +
+    '    star += 0.28 * (exp(-dx * 6.0 - dy * 34.0) + exp(-dy * 6.0 - dx * 34.0));\n' +
+    '    shape = (star + 1.3 * exp(-d2 * 14.0)) * smoothstep(1.0, 0.5, d);\n' +
+    '  } else {\n' +
+    '    if (d > 1.0) discard;\n' +
+    '    float disc = 1.0 - smoothstep(1.0 - vSoft, 1.0, d);\n' +
+    '    float ring = smoothstep(0.5, 0.93, d) * disc;\n' +
+    '    float core = exp(-d2 * (3.0 + 4.0 * (1.0 - vSoft)));\n' +
+    '    shape = disc * (0.5 + 0.9 * vRing * ring) + core * 0.7;\n' +
+    '  }\n' +
+    '  o = vec4(vCol * shape, 1.0);\n' +
+    '}\n';
+
+  var FS_DOWN = '#version 300 es\n' +
+    'precision highp float; precision highp int;\n' +
+    'in vec2 vUv; out vec4 o;\n' +
+    'uniform sampler2D uTex; uniform vec2 uTexel; uniform int uFirst; uniform float uThresh; uniform float uKnee;\n' +
+    'vec3 S(vec2 uv){ return texture(uTex, uv).rgb; }\n' +
+    'vec3 thr(vec3 c){ float br = max(c.r, max(c.g, c.b)); float sft = clamp(br - uThresh + uKnee, 0.0, 2.0 * uKnee);\n' +
+    '  sft = sft * sft / (4.0 * uKnee + 1e-4); float ct = max(sft, br - uThresh) / max(br, 1e-4); return c * ct; }\n' +
+    'float kw(vec3 c){ return 1.0 / (1.0 + dot(c, vec3(0.2126, 0.7152, 0.0722))); }\n' +
+    'void main(){\n' +
+    '  vec2 t = uTexel; vec2 uv = vUv;\n' +
+    '  vec3 a = S(uv + t * vec2(-2.0, -2.0)), b = S(uv + t * vec2(0.0, -2.0)), c = S(uv + t * vec2(2.0, -2.0));\n' +
+    '  vec3 d = S(uv + t * vec2(-2.0, 0.0)),  e = S(uv),                       f = S(uv + t * vec2(2.0, 0.0));\n' +
+    '  vec3 g = S(uv + t * vec2(-2.0, 2.0)),  h = S(uv + t * vec2(0.0, 2.0)),  i = S(uv + t * vec2(2.0, 2.0));\n' +
+    '  vec3 j = S(uv + t * vec2(-1.0, -1.0)), k = S(uv + t * vec2(1.0, -1.0)), l = S(uv + t * vec2(-1.0, 1.0)), m = S(uv + t * vec2(1.0, 1.0));\n' +
+    '  vec3 col;\n' +
+    '  if (uFirst == 1) {\n' +
+    '    vec3 g0 = thr((a + b + d + e) * 0.25), g1 = thr((b + c + e + f) * 0.25), g2 = thr((d + e + g + h) * 0.25), g3 = thr((e + f + h + i) * 0.25), g4 = thr((j + k + l + m) * 0.25);\n' +
+    '    float w0 = 0.125 * kw(g0), w1 = 0.125 * kw(g1), w2 = 0.125 * kw(g2), w3 = 0.125 * kw(g3), w4 = 0.5 * kw(g4);\n' +
+    '    col = (g0 * w0 + g1 * w1 + g2 * w2 + g3 * w3 + g4 * w4) / (w0 + w1 + w2 + w3 + w4);\n' +
+    '  } else {\n' +
+    '    col = e * 0.125 + (a + c + g + i) * 0.03125 + (b + d + f + h) * 0.0625 + (j + k + l + m) * 0.125;\n' +
+    '  }\n' +
+    '  o = vec4(col, 1.0);\n' +
+    '}\n';
+
+  var FS_UP = '#version 300 es\n' +
+    'precision highp float;\n' +
+    'in vec2 vUv; out vec4 o;\n' +
+    'uniform sampler2D uTex; uniform vec2 uTexel; uniform float uRadius; uniform float uGain;\n' +
+    'vec3 S(vec2 uv){ return texture(uTex, uv).rgb; }\n' +
+    'void main(){\n' +
+    '  vec2 t = uTexel * uRadius; vec2 uv = vUv;\n' +
+    '  vec3 c = S(uv + t * vec2(-1.0, -1.0)) + 2.0 * S(uv + t * vec2(0.0, -1.0)) + S(uv + t * vec2(1.0, -1.0))\n' +
+    '         + 2.0 * S(uv + t * vec2(-1.0, 0.0)) + 4.0 * S(uv) + 2.0 * S(uv + t * vec2(1.0, 0.0))\n' +
+    '         + S(uv + t * vec2(-1.0, 1.0)) + 2.0 * S(uv + t * vec2(0.0, 1.0)) + S(uv + t * vec2(1.0, 1.0));\n' +
+    '  o = vec4(c * (uGain / 16.0), 1.0);\n' +
+    '}\n';
+
+  var FS_BLURH = '#version 300 es\n' +
+    'precision highp float;\n' +
+    'in vec2 vUv; out vec4 o;\n' +
+    'uniform sampler2D uTex; uniform vec2 uTexel; uniform float uSpacing;\n' +
+    'void main(){\n' +
+    '  vec3 c = vec3(0.0); float ws = 0.0;\n' +
+    '  for (int k = -8; k <= 8; k++) {\n' +
+    '    float fk = float(k); float w = exp(-fk * fk / 14.0);\n' +
+    '    c += texture(uTex, vUv + vec2(fk * uSpacing * uTexel.x, 0.0)).rgb * w; ws += w;\n' +
+    '  }\n' +
+    '  o = vec4(c / ws, 1.0);\n' +
+    '}\n';
+
+  var FS_FINAL = '#version 300 es\n' +
+    'precision highp float;\n' +
+    'in vec2 vUv; out vec4 o;\n' +
+    'uniform sampler2D uScene; uniform sampler2D uBloom; uniform sampler2D uStreak;\n' +
+    'uniform float uBloomI; uniform float uStreakI; uniform vec2 uRes;\n' +
+    'vec3 aces(vec3 x){ const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14; return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0); }\n' +
+    'void main(){\n' +
+    '  vec3 c = texture(uScene, vUv).rgb + texture(uBloom, vUv).rgb * uBloomI + texture(uStreak, vUv).rgb * uStreakI * vec3(1.0, 0.82, 0.55);\n' +
+    '  c = aces(c * 0.98);\n' +
+    '  vec2 p = (vUv - 0.5) * vec2(uRes.x / uRes.y, 1.0);\n' +
+    '  c *= 1.0 - 0.45 * smoothstep(0.3, 1.35, length(p));\n' +
+    '  c = pow(c, vec3(1.0 / 2.2));\n' +
+    '  float n = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);\n' +
+    '  c += (n - 0.5) * (1.0 / 255.0);\n' +
+    '  o = vec4(c, 1.0);\n' +
+    '}\n';
+
+  // ---------------------------------------------------------------- GL helpers
+  function compile(type, src) {
+    var sh = gl.createShader(type);
+    gl.shaderSource(sh, src); gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) { throw new Error('Shader: ' + gl.getShaderInfoLog(sh)); }
+    return sh;
+  }
+  function program(vs, fs, names) {
+    var p = gl.createProgram();
+    gl.attachShader(p, compile(gl.VERTEX_SHADER, vs));
+    gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs));
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) { throw new Error('Link: ' + gl.getProgramInfoLog(p)); }
+    var u = {};
+    names.forEach(function (n) { u[n] = gl.getUniformLocation(p, n); });
+    return { p: p, u: u };
+  }
+
+  var hdr = !!gl.getExtension('EXT_color_buffer_float');
+  gl.getExtension('OES_texture_float_linear');
+
+  function createTarget(w, h) {
+    var tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, hdr ? gl.RGBA16F : gl.RGBA8, w, h, 0, gl.RGBA, hdr ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    var fb = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    var ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    if (!ok) { throw new Error('FBO incomplete'); }
+    return { fb: fb, tex: tex, w: w, h: h };
+  }
+
+  var progBg, progPart, progDown, progUp, progBlur, progFinal;
+  var scene, mips = [], streakA, streakB;
+  try {
+    progBg = program(VS_QUAD, FS_BG, ['uT', 'uRes']);
+    progPart = program(VS_PART, FS_PART, ['uT', 'uRes', 'uMode', 'uCycles', 'uSize', 'uDrift', 'uWobble', 'uFlow', 'uBright', 'uTwinkle', 'uSoft', 'uRing', 'uDepth', 'uStream']);
+    progDown = program(VS_QUAD, FS_DOWN, ['uTex', 'uTexel', 'uFirst', 'uThresh', 'uKnee']);
+    progUp = program(VS_QUAD, FS_UP, ['uTex', 'uTexel', 'uRadius', 'uGain']);
+    progBlur = program(VS_QUAD, FS_BLURH, ['uTex', 'uTexel', 'uSpacing']);
+    progFinal = program(VS_QUAD, FS_FINAL, ['uScene', 'uBloom', 'uStreak', 'uBloomI', 'uStreakI', 'uRes']);
+    try {
+      scene = createTarget(W, H);
+    } catch (e) {
+      hdr = false; scene = createTarget(W, H);
+    }
+    var mw = W >> 1, mh = H >> 1;
+    for (var i = 0; i < 6; i++) { mips.push(createTarget(mw, mh)); mw = Math.max(1, mw >> 1); mh = Math.max(1, mh >> 1); }
+    streakA = createTarget(mips[2].w, mips[2].h);
+    streakB = createTarget(mips[2].w, mips[2].h);
+  } catch (err) {
+    if (window.console) console.error(err);
+    fallback2D();
+    return;
+  }
+
+  // ---------------------------------------------------------------- particle layers
+  var quad = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+
+  var rnd = mulberry32(0x9E3779B9);
+  function makeLayer(cfg) {
+    var n = cfg.count;
+    var s1 = new Float32Array(n * 4), s2 = new Float32Array(n * 4);
+    for (var i = 0; i < n * 4; i++) { s1[i] = rnd(); s2[i] = rnd(); }
+    var vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    var b1 = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b1); gl.bufferData(gl.ARRAY_BUFFER, s1, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 0, 0); gl.vertexAttribDivisor(1, 1);
+    var b2 = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b2); gl.bufferData(gl.ARRAY_BUFFER, s2, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 4, gl.FLOAT, false, 0, 0); gl.vertexAttribDivisor(2, 1);
+    gl.bindVertexArray(null);
+    cfg.vao = vao;
+    return cfg;
+  }
+
+  var layers = [
+    // ambient far dust: fine, slow, twinkling
+    makeLayer({ mode: 0, count: 32000, cycles: 1, size: [1.1, 2.6], drift: [9, 20], wobble: 12, flow: 26, bright: [0.12, 0.38], twinkle: 0.65, soft: [0.5, 1.0], ring: 0.0, depth: [0.0, 0.34], stream: [0, 0, 0, 0] }),
+    // ambient mid dust
+    makeLayer({ mode: 0, count: 8000, cycles: 1, size: [2.4, 6.5], drift: [16, 34], wobble: 24, flow: 44, bright: [0.30, 0.95], twinkle: 0.7, soft: [0.35, 1.0], ring: 0.35, depth: [0.30, 0.68], stream: [0, 0, 0, 0] }),
+    // near bokeh discs (out of focus)
+    makeLayer({ mode: 0, count: 340, cycles: 1, size: [26, 120], drift: [24, 46], wobble: 42, flow: 64, bright: [0.010, 0.036], twinkle: 0.35, soft: [0.10, 0.40], ring: 0.9, depth: [0.70, 1.0], stream: [0, 0, 0, 0] }),
+    // very large soft orbs
+    makeLayer({ mode: 0, count: 50, cycles: 1, size: [150, 330], drift: [18, 30], wobble: 60, flow: 80, bright: [0.0012, 0.0036], twinkle: 0.2, soft: [1.0, 1.0], ring: 0.0, depth: [0.85, 1.0], stream: [0, 0, 0, 0] }),
+    // main flowing ribbon: glow body
+    makeLayer({ mode: 1, count: 1400, cycles: 1, size: [60, 210], drift: [0, 0], wobble: 30, flow: 40, bright: [0.0035, 0.0095], twinkle: 0.15, soft: [1.0, 1.0], ring: 0.0, depth: [0.3, 0.7], stream: [175, 2, 0, 0] }),
+    // main ribbon: dense gold dust
+    makeLayer({ mode: 1, count: 18000, cycles: 1, size: [1.2, 4.6], drift: [0, 0], wobble: 18, flow: 40, bright: [0.35, 1.25], twinkle: 0.6, soft: [0.3, 1.0], ring: 0.3, depth: [0.2, 0.7], stream: [175, 2, 0, 0] }),
+    // main ribbon: glitter
+    makeLayer({ mode: 1, count: 7000, cycles: 1, size: [0.9, 2.2], drift: [0, 0], wobble: 14, flow: 40, bright: [0.6, 1.8], twinkle: 1.0, soft: [1.0, 1.0], ring: 0.0, depth: [0.2, 0.6], stream: [175, 2, 0, 0] }),
+    // main ribbon: bokeh
+    makeLayer({ mode: 1, count: 260, cycles: 1, size: [22, 70], drift: [0, 0], wobble: 26, flow: 40, bright: [0.018, 0.05], twinkle: 0.3, soft: [0.12, 0.35], ring: 0.9, depth: [0.75, 1.0], stream: [175, 2, 0, 0] }),
+    // secondary faint ribbon (companion current)
+    makeLayer({ mode: 1, count: 9000, cycles: 1, size: [1.0, 3.2], drift: [0, 0], wobble: 20, flow: 48, bright: [0.16, 0.55], twinkle: 0.7, soft: [0.4, 1.0], ring: 0.2, depth: [0.1, 0.5], stream: [120, 3, 1.35, 0] }),
+    makeLayer({ mode: 1, count: 500, cycles: 1, size: [50, 160], drift: [0, 0], wobble: 30, flow: 48, bright: [0.0018, 0.005], twinkle: 0.15, soft: [1.0, 1.0], ring: 0.0, depth: [0.3, 0.6], stream: [120, 3, 1.35, 0] }),
+    // star sparkles
+    makeLayer({ mode: 2, count: 320, cycles: 1, size: [22, 62], drift: [16, 30], wobble: 20, flow: 44, bright: [1.6, 4.5], twinkle: 0.0, soft: [1.0, 1.0], ring: 0.0, depth: [0.3, 0.8], stream: [0, 0, 0, 0] })
+  ];
+
+  // ---------------------------------------------------------------- render
+  function drawQuad() { gl.drawArrays(gl.TRIANGLES, 0, 3); }
+
+  function render(t) {
+    // 1. scene (HDR)
+    gl.bindFramebuffer(gl.FRAMEBUFFER, scene.fb);
+    gl.viewport(0, 0, W, H);
+    gl.disable(gl.BLEND);
+    gl.useProgram(progBg.p);
+    gl.uniform1f(progBg.u.uT, t); gl.uniform2f(progBg.u.uRes, W, H);
+    drawQuad();
+
+    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+    gl.useProgram(progPart.p);
+    var u = progPart.u;
+    gl.uniform1f(u.uT, t); gl.uniform2f(u.uRes, W, H);
+    for (var i = 0; i < layers.length; i++) {
+      var L = layers[i];
+      gl.uniform1i(u.uMode, L.mode);
+      gl.uniform1f(u.uCycles, L.cycles);
+      gl.uniform2f(u.uSize, L.size[0], L.size[1]);
+      gl.uniform2f(u.uDrift, L.drift[0], L.drift[1]);
+      gl.uniform1f(u.uWobble, L.wobble);
+      gl.uniform1f(u.uFlow, L.flow);
+      gl.uniform2f(u.uBright, L.bright[0], L.bright[1]);
+      gl.uniform1f(u.uTwinkle, L.twinkle);
+      gl.uniform2f(u.uSoft, L.soft[0], L.soft[1]);
+      gl.uniform1f(u.uRing, L.ring);
+      gl.uniform2f(u.uDepth, L.depth[0], L.depth[1]);
+      gl.uniform4f(u.uStream, L.stream[0], L.stream[1], L.stream[2], L.stream[3]);
+      gl.bindVertexArray(L.vao);
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, L.count);
+    }
+    gl.bindVertexArray(null);
+    gl.disable(gl.BLEND);
+
+    // 2. bloom downsample chain
+    gl.useProgram(progDown.p);
+    gl.uniform1i(progDown.u.uTex, 0);
+    gl.uniform1f(progDown.u.uThresh, 0.55); gl.uniform1f(progDown.u.uKnee, 0.45);
+    gl.activeTexture(gl.TEXTURE0);
+    for (var m = 0; m < mips.length; m++) {
+      var src = m === 0 ? scene : mips[m - 1];
+      gl.bindFramebuffer(gl.FRAMEBUFFER, mips[m].fb);
+      gl.viewport(0, 0, mips[m].w, mips[m].h);
+      gl.bindTexture(gl.TEXTURE_2D, src.tex);
+      gl.uniform2f(progDown.u.uTexel, 1 / src.w, 1 / src.h);
+      gl.uniform1i(progDown.u.uFirst, m === 0 ? 1 : 0);
+      drawQuad();
+    }
+
+    // 3. anamorphic streak from mip 2 (three widening horizontal passes)
+    gl.useProgram(progBlur.p);
+    gl.uniform1i(progBlur.u.uTex, 0);
+    gl.uniform2f(progBlur.u.uTexel, 1 / mips[2].w, 1 / mips[2].h);
+    var passes = [[mips[2], streakA, 1.0], [streakA, streakB, 3.0], [streakB, streakA, 9.0]];
+    for (var s = 0; s < passes.length; s++) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, passes[s][1].fb);
+      gl.viewport(0, 0, passes[s][1].w, passes[s][1].h);
+      gl.bindTexture(gl.TEXTURE_2D, passes[s][0].tex);
+      gl.uniform1f(progBlur.u.uSpacing, passes[s][2]);
+      drawQuad();
+    }
+
+    // 4. bloom upsample (accumulate into coarser-to-finer levels)
+    gl.useProgram(progUp.p);
+    gl.uniform1i(progUp.u.uTex, 0);
+    gl.uniform1f(progUp.u.uRadius, 1.0);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+    for (var k = mips.length - 2; k >= 0; k--) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, mips[k].fb);
+      gl.viewport(0, 0, mips[k].w, mips[k].h);
+      gl.bindTexture(gl.TEXTURE_2D, mips[k + 1].tex);
+      gl.uniform2f(progUp.u.uTexel, 1 / mips[k + 1].w, 1 / mips[k + 1].h);
+      gl.uniform1f(progUp.u.uGain, 0.85);
+      drawQuad();
+    }
+    gl.disable(gl.BLEND);
+
+    // 5. composite to screen
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, W, H);
+    gl.useProgram(progFinal.p);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, scene.tex);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, mips[0].tex);
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, streakA.tex);
+    gl.uniform1i(progFinal.u.uScene, 0); gl.uniform1i(progFinal.u.uBloom, 1); gl.uniform1i(progFinal.u.uStreak, 2);
+    gl.uniform1f(progFinal.u.uBloomI, 0.5); gl.uniform1f(progFinal.u.uStreakI, 0.2);
+    gl.uniform2f(progFinal.u.uRes, W, H);
+    drawQuad();
+    gl.activeTexture(gl.TEXTURE0);
+  }
+
+  var t0 = null;
+  function frame(ts) {
+    var now = (typeof ts === 'number' && ts > 0) ? ts : performance.now();
+    if (t0 === null) t0 = now;
+    var t = fixedT !== null ? fixedT : (((now - t0) / 1000) % LOOP);
+    render(t);
+    window.__frameDone = true;
+    if (!once) requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  // ---------------------------------------------------------------- 2D fallback
+  function fallback2D() {
+    var old = document.getElementById('c');
+    var c2 = document.createElement('canvas');
+    c2.id = 'c'; c2.width = W; c2.height = H;
+    old.parentNode.replaceChild(c2, old);
+    var ctx = c2.getContext('2d');
+    var TAU = Math.PI * 2, W0 = TAU / LOOP;
+    var r = mulberry32(1234567);
+    var sprites = {};
+    function sprite(sz, ringy) {
+      var key = sz + '_' + ringy;
+      if (sprites[key]) return sprites[key];
+      var oc = document.createElement('canvas'); oc.width = oc.height = sz * 2;
+      var g = oc.getContext('2d');
+      var gr = g.createRadialGradient(sz, sz, 0, sz, sz, sz);
+      gr.addColorStop(0, 'rgba(255,240,200,1)');
+      gr.addColorStop(ringy ? 0.55 : 0.25, 'rgba(255,200,90,' + (ringy ? 0.35 : 0.6) + ')');
+      if (ringy) gr.addColorStop(0.9, 'rgba(255,190,80,0.55)');
+      gr.addColorStop(1, 'rgba(255,170,50,0)');
+      g.fillStyle = gr; g.fillRect(0, 0, sz * 2, sz * 2);
+      sprites[key] = oc; return oc;
+    }
+    var P = [];
+    for (var i = 0; i < 2600; i++) {
+      var stream = i < 1400;
+      P.push({ s: r(), y: r(), z: r(), w: r(), a: r(), b: r(), stream: stream,
+        size: stream ? 2 + r() * r() * 6 : (r() < 0.9 ? 1.5 + r() * 5 : 30 + r() * 80),
+        n1: 1 + Math.floor(r() * 3), n2: 3 + Math.floor(r() * 4), nt: 12 + Math.floor(r() * 30) });
+    }
+    function sp(s, t) {
+      return [(-0.22 + 1.44 * s) * W, (1 - (0.5 + 0.165 * Math.sin(TAU * 0.85 * s + 0.9 + 0.38 * Math.sin(W0 * t)) + 0.06 * Math.sin(TAU * 2.1 * s - 2 * W0 * t) + 0.022 * Math.sin(TAU * 4.3 * s + 3 * W0 * t))) * H];
+    }
+    var t0b = null;
+    function f2(ts) {
+      var now = (typeof ts === 'number' && ts > 0) ? ts : performance.now();
+      if (t0b === null) t0b = now;
+      var t = fixedT !== null ? fixedT : (((now - t0b) / 1000) % LOOP);
+      var bg = ctx.createRadialGradient(W * 0.52, H * 0.9, 0, W * 0.5, H * 0.6, W * 0.8);
+      bg.addColorStop(0, '#2a1a08'); bg.addColorStop(0.5, '#0c0805'); bg.addColorStop(1, '#030202');
+      ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+      ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+      ctx.globalCompositeOperation = 'lighter';
+      for (var i = 0; i < P.length; i++) {
+        var p = P[i], x, y, al;
+        var wob = 22 * (Math.sin(W0 * p.n1 * t + p.a * TAU) + 0.5 * Math.sin(W0 * p.n2 * t + p.b * TAU));
+        var tw = 0.5 + 0.5 * Math.sin(W0 * p.nt * t + p.b * TAU);
+        if (p.stream) {
+          var s = (p.s + t / LOOP) % 1, c = sp(s, t), c2 = sp(s + 0.003, t);
+          var dx = c2[0] - c[0], dy = c2[1] - c[1], len = Math.hypot(dx, dy) || 1;
+          var th = p.z * TAU + 2 * W0 * t, rr = Math.sqrt(p.y) * 170 * (0.5 + 0.5 * Math.sin(TAU * 1.6 * s + 2 * W0 * t) * 0.6 + 0.4);
+          x = c[0] + (-dy / len) * rr * Math.cos(th) + wob; y = c[1] + (dx / len) * rr * Math.cos(th) + wob * 0.5;
+          al = (Math.min(1, s / 0.1) * Math.min(1, (1 - s) / 0.1)) * (0.7 + 0.3 * Math.sin(th)) * (0.4 + 0.6 * tw * tw);
+        } else {
+          var ph = p.s + t / LOOP, q = ph % 1;
+          x = (p.y * 1.14 - 0.07) * W + 14 * q * LOOP + wob; y = (1 - (p.z * 1.14 - 0.07)) * H - 24 * q * LOOP + wob * 0.6;
+          al = Math.min(1, q / 0.18) * Math.min(1, (1 - q) / 0.22) * (0.35 + 0.65 * tw * tw) * (p.size > 20 ? 0.12 : 0.8);
+        }
+        var img = sprite(Math.ceil(p.size), p.size > 20);
+        ctx.globalAlpha = Math.max(0, Math.min(1, al));
+        ctx.drawImage(img, x - p.size, y - p.size, p.size * 2, p.size * 2);
+      }
+      window.__frameDone = true;
+      if (!once) requestAnimationFrame(f2);
+    }
+    requestAnimationFrame(f2);
+  }
+})();
+</script>
+</body>
+</html>
