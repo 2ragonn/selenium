@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Corporate Blue Abstract Waves</title>
+<meta name="viewport" content="width=3840, initial-scale=1">
+<style>
+  html, body {
+    margin: 0; padding: 0;
+    width: 100%; height: 100%;
+    background: #040c22;
+    overflow: hidden;
+  }
+  #stage {
+    position: absolute; left: 0; top: 0;
+    width: 3840px; height: 2160px;
+    transform-origin: 0 0;
+    display: block;
+    background: #040c22;
+  }
+</style>
+</head>
+<body>
+<canvas id="stage" width="3840" height="2160"></canvas>
+<script>
+(function () {
+'use strict';
+
+/* ------------------------------------------------------------------
+   Corporate Blue Abstract Waves
+   3840 x 2160, 15-second seamless loop, autoplays on open.
+   Everything time-dependent is a function of TAU * (t / LOOP) with
+   integer multipliers, so frame 0 and frame 15.0s are identical.
+   ------------------------------------------------------------------ */
+
+const W = 3840, H = 2160;
+const LOOP = 15.0;                       // loop length in seconds
+const TAU = Math.PI * 2;
+
+const canvas = document.getElementById('stage');
+
+// Fit the 4K canvas into whatever viewport is showing it (identity at 3840x2160).
+function fit() {
+  const s = Math.min(innerWidth / W, innerHeight / H);
+  const sc = (isFinite(s) && s > 0) ? s : 1;
+  const ox = Math.max(0, (innerWidth - W * sc) / 2);
+  const oy = Math.max(0, (innerHeight - H * sc) / 2);
+  canvas.style.transform = 'translate(' + ox + 'px,' + oy + 'px) scale(' + sc + ')';
+}
+addEventListener('resize', fit);
+fit();
+
+/* ---------------------------- shaders ---------------------------- */
+
+const COMMON = `
+const float TAU = 6.283185307179586;
+
+// Loop-safe, domain-warped wave field.  ph = t / LOOP in [0,1).
+// Every phase term is TAU * integer * ph, so the field repeats exactly.
+float waveField(vec2 p, float ph, float layer) {
+  if (layer > 0.5) { p = p * 0.72 + vec2(23.0, -11.0); ph = 0.37 - ph; }
+  vec2 w = p + 2.6 * vec2(sin(0.075 * p.y + TAU * ph + 1.3),
+                          cos(0.062 * p.x - TAU * ph + 2.1));
+  float h = 0.0;
+  h += 0.75 * sin(dot(w, vec2( 0.238,  0.118)) + TAU * 1.0 * ph + 0.70);
+  h += 0.45 * sin(dot(w, vec2(-0.290,  0.395)) - TAU * 1.0 * ph + 2.90);
+  h += 0.25 * sin(dot(w, vec2( 0.190,  0.610)) + TAU * 2.0 * ph + 4.10);
+  h += 0.13 * sin(dot(w, vec2(-0.830,  0.550)) + TAU * 2.0 * ph + 1.10);
+  h += 0.06 * sin(dot(w, vec2( 0.950, -0.900)) + TAU * 3.0 * ph + 5.20);
+  return (layer > 0.5) ? h * 0.6 + 1.5 : h;
+}
+
+// Background / fog colour.  uv in [0,1], y up.  Horizon sits near y = 0.67.
+vec3 background(vec2 uv, float ph) {
+  vec3 top = vec3(0.012, 0.040, 0.120);
+  vec3 mid = vec3(0.030, 0.110, 0.300);
+  vec3 hor = vec3(0.075, 0.280, 0.700);
+  float y = uv.y;
+  vec3 c = mix(hor, mid, smoothstep(0.66, 0.80, y));
+  c = mix(c, top, smoothstep(0.78, 1.0, y));
+  c = mix(c, hor * 0.85, smoothstep(0.68, 0.40, y));
+  vec2 g = vec2(0.585 + 0.035 * sin(TAU * ph), 0.672 + 0.012 * sin(TAU * ph * 2.0 + 1.0));
+  vec2 d = (uv - g) * vec2(1.0, 1.9);
+  float r2 = dot(d, d);
+  c += vec3(0.30, 0.55, 1.00) * exp(-r2 * 22.0) * 0.55;
+  c += vec3(0.16, 0.38, 0.90) * exp(-r2 * 4.0) * 0.30;
+  c += vec3(0.05, 0.14, 0.40) * exp(-r2 * 0.8) * 0.25;
+  return c;
+}
+`;
+
+const SURF_VS = `#version 300 es
+precision highp float;
+in vec2 aPos;
+uniform mat4 uVP;
+uniform float uPhase;
+uniform float uLayer;
+out vec3 vWorld;
+${COMMON}
+void main() {
+  float h = waveField(aPos, uPhase, uLayer);
+  vWorld = vec3(aPos.x, h, aPos.y);
+  gl_Position = uVP * vec4(vWorld, 1.0);
+}`;
+
+const SURF_FS = `#version 300 es
+precision highp float;
+in vec3 vWorld;
+out vec4 fragColor;
+uniform float uPhase;
+uniform float uLayer;
+uniform float uLines;
+uniform float uVeil;
+uniform vec3 uCam;
+uniform vec2 uRes;
+uniform vec2 uNF;
+uniform sampler2D uDepth;
+${COMMON}
+
+float linDepth(float d) {
+  float z = d * 2.0 - 1.0;
+  return 2.0 * uNF.x * uNF.y / (uNF.y + uNF.x - z * (uNF.y - uNF.x));
+}
+
+vec3 skyRefl(vec3 R, vec3 L2) {
+  float k = clamp(R.y, 0.0, 1.0);
+  vec3 c = mix(vec3(0.10, 0.36, 0.90), vec3(0.015, 0.05, 0.15), pow(k, 0.45));
+  float g = max(dot(R, L2), 0.0);
+  c += vec3(0.35, 0.62, 1.0) * (pow(g, 12.0) * 0.45 + pow(g, 3.0) * 0.10);
+  return c;
+}
+
+void main() {
+  float ph = uPhase;
+  vec2 p = vWorld.xz;
+  vec3 V = uCam - vWorld;
+  float dist = length(V);
+  V /= dist;
+
+  // analytic-ish normal from the height field (central differences)
+  float e = 0.05 + dist * 0.004;
+  float hx = waveField(p + vec2(e, 0.0), ph, uLayer) - waveField(p - vec2(e, 0.0), ph, uLayer);
+  float hz = waveField(p + vec2(0.0, e), ph, uLayer) - waveField(p - vec2(0.0, e), ph, uLayer);
+  vec3 n = normalize(vec3(-hx, 2.0 * e, -hz));
+  float hRel = (uLayer > 0.5) ? (vWorld.y - 1.5) / 0.6 : vWorld.y;
+
+  vec2 suv = gl_FragCoord.xy / uRes;
+  float fog = 1.0 - exp(-pow(dist * 0.0175, 2.4));
+
+  vec3 L1 = normalize(vec3(-0.55, 0.62, 0.55));   // key light: upper left, in front
+  vec3 L2 = normalize(vec3(0.12, 0.10, -1.0));    // horizon back light
+  vec3 keyCol  = vec3(0.92, 0.96, 1.00);
+  vec3 backCol = vec3(0.55, 0.78, 1.00);
+
+  float NdV = max(dot(n, V), 0.0);
+  vec3 H1 = normalize(L1 + V);
+  vec3 H2 = normalize(L2 + V);
+  float nh1 = max(dot(n, H1), 0.0);
+  float nh2 = max(dot(n, H2), 0.0);
+
+  if (uLayer > 0.5) {
+    // translucent luminous veil floating above the main surface (additive)
+    float F = pow(1.0 - NdV, 3.0) * smoothstep(0.0, 0.22, NdV);
+    float gap = vWorld.y - waveField(p, ph, 0.0);
+    float soft = smoothstep(0.0, 0.6, gap) * smoothstep(0.0, 0.12, NdV);
+    // soft-particle style fade against the opaque surface depth (no hard cut lines)
+    float sceneZ = linDepth(texture(uDepth, suv).r);
+    float fragZ = linDepth(gl_FragCoord.z);
+    soft *= smoothstep(0.0, 1.2 + 0.05 * dist, sceneZ - fragZ);
+    vec3 vc = vec3(0.18, 0.45, 1.00) * 0.12 + vec3(0.62, 0.85, 1.00) * F * 0.32;
+    vc += keyCol * pow(nh1, 200.0) * 0.25 + backCol * pow(nh2, 120.0) * 0.35;
+    vc *= 0.6 + 0.4 * smoothstep(-1.2, 1.2, hRel);
+    float fv = 1.0 - fog;
+    vc *= soft * fv * fv * smoothstep(6.0, 26.0, dist);
+    fragColor = vec4(vc * uVeil, 1.0);
+    return;
+  }
+
+  // ---- main satin surface ----
+  vec3 albA = vec3(0.040, 0.190, 0.560);
+  vec3 albB = vec3(0.090, 0.330, 0.800);
+  float gx = smoothstep(-45.0, 45.0, p.x + 12.0 * sin(TAU * ph) - 0.25 * p.y);
+  vec3 alb = mix(albA, albB, gx);
+  alb *= 0.80 + 0.30 * smoothstep(-1.6, 1.6, hRel);
+
+  float dif = max(dot(n, L1), 0.0);
+  float wrap = dif * 0.65 + 0.35 * (dot(n, L1) * 0.5 + 0.5);
+  vec3 col = alb * (0.22 + 0.95 * wrap) * keyCol;
+  col += alb * max(dot(n, L2), 0.0) * 0.30 * backCol;
+
+  float F = pow(1.0 - NdV, 4.0);
+  vec3 R = reflect(-V, n);
+  col = mix(col, skyRefl(R, L2) * 1.05, F * 0.85 + 0.06);
+
+  float s1 = pow(nh1, 260.0) * 0.35 + pow(nh1, 24.0) * 0.05;
+  float s2 = pow(nh2, 160.0) * 0.50 + pow(nh2, 20.0) * 0.05;
+  col += keyCol * s1 + backCol * s2;
+
+  // hair-thin flowing lines (anti-aliased, fade with distance)
+  float lc = (p.x + 0.9 * sin(p.y * 0.11 + TAU * ph) + 0.4 * sin(p.y * 0.23 - TAU * ph * 2.0)) / 2.4;
+  float fw = fwidth(lc);
+  float dl = abs(fract(lc + 0.5) - 0.5);
+  float line = 1.0 - smoothstep(0.6 * fw, 1.6 * fw, dl);
+  line *= 1.0 - smoothstep(0.12, 0.35, fw);
+  line *= 1.0 - smoothstep(20.0, 75.0, dist);
+  line *= 0.45 + 0.55 * smoothstep(-1.2, 1.4, hRel);
+  col += vec3(0.55, 0.80, 1.0) * line * uLines;
+
+  col = mix(col, background(suv, ph), fog);
+  fragColor = vec4(col, 1.0);
+}`;
+
+const QUAD_VS = `#version 300 es
+void main() {
+  vec2 p = vec2((gl_VertexID == 1) ? 3.0 : -1.0, (gl_VertexID == 2) ? 3.0 : -1.0);
+  gl_Position = vec4(p, 0.999, 1.0);
+}`;
+
+const BG_FS = `#version 300 es
+precision highp float;
+uniform vec2 uRes;
+uniform float uPhase;
+out vec4 fragColor;
+${COMMON}
+void main() {
+  fragColor = vec4(background(gl_FragCoord.xy / uRes, uPhase), 1.0);
+}`;
+
+const POST_FS = `#version 300 es
+precision highp float;
+uniform sampler2D uScene;
+uniform vec2 uRes;
+uniform float uSeed;
+out vec4 fragColor;
+const float TAU = 6.283185307179586;
+
+float hash(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+float lum(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / uRes;
+  vec3 c = texture(uScene, uv).rgb;
+
+  // soft bloom from the mip chain
+  vec3 b = vec3(0.0);
+  for (int i = 0; i < 8; i++) {
+    float a = (float(i) + 0.5) / 8.0 * TAU;
+    vec2 d = vec2(cos(a), sin(a)) * vec2(9.0 / 16.0, 1.0);
+    b += textureLod(uScene, uv + d * 0.010, 3.5).rgb;
+    b += textureLod(uScene, uv + d * 0.024, 4.5).rgb * 0.8;
+    b += textureLod(uScene, uv + d * 0.050, 5.5).rgb * 0.5;
+  }
+  b /= 8.0 * 2.3;
+  c += b * smoothstep(0.30, 0.90, lum(b)) * 0.50;
+  c += textureLod(uScene, uv, 7.0).rgb * 0.06;
+
+  // gentle highlight shoulder
+  vec3 hi = max(c - 0.78, 0.0);
+  c = min(c, 0.78) + hi / (1.0 + hi * 1.8);
+
+  // vignette
+  vec2 q = (uv - 0.5) * vec2(1.0, 0.9);
+  c *= 1.0 - 0.32 * smoothstep(0.25, 1.05, dot(q, q) * 2.6);
+
+  // fine grain / dither (kills gradient banding)
+  float g = hash(gl_FragCoord.xy + vec2(uSeed * 13.7, uSeed * 7.3)) - 0.5;
+  c += g * 0.016;
+
+  fragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+}`;
+
+/* ------------------------- small math utils ----------------------- */
+
+function perspective(fovy, aspect, near, far) {
+  const f = 1 / Math.tan(fovy / 2), nf = 1 / (near - far);
+  return new Float32Array([
+    f / aspect, 0, 0, 0,
+    0, f, 0, 0,
+    0, 0, (far + near) * nf, -1,
+    0, 0, 2 * far * near * nf, 0
+  ]);
+}
+function sub(a, b) { return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; }
+function dot(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+function cross(a, b) { return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]; }
+function norm(a) { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; }
+function lookAt(eye, c, up) {
+  const z = norm(sub(eye, c)), x = norm(cross(up, z)), y = cross(z, x);
+  return new Float32Array([
+    x[0], y[0], z[0], 0,
+    x[1], y[1], z[1], 0,
+    x[2], y[2], z[2], 0,
+    -dot(x, eye), -dot(y, eye), -dot(z, eye), 1
+  ]);
+}
+function mul(a, b) {
+  const o = new Float32Array(16);
+  for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) {
+    let s = 0;
+    for (let k = 0; k < 4; k++) s += a[k * 4 + j] * b[i * 4 + k];
+    o[i * 4 + j] = s;
+  }
+  return o;
+}
+
+/* ----------------------------- WebGL ------------------------------ */
+
+function startWebGL() {
+  const gl = canvas.getContext('webgl2', {
+    antialias: false, alpha: false, depth: false, stencil: false,
+    preserveDrawingBuffer: true, powerPreference: 'high-performance'
+  });
+  if (!gl) return false;
+
+  function compile(type, src) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      throw new Error(gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+  function program(vs, fs) {
+    const p = gl.createProgram();
+    gl.attachShader(p, compile(gl.VERTEX_SHADER, vs));
+    gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs));
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+      throw new Error(gl.getProgramInfoLog(p));
+    }
+    return p;
+  }
+
+  let surfP, bgP, postP;
+  try {
+    surfP = program(SURF_VS, SURF_FS);
+    bgP = program(QUAD_VS, BG_FS);
+    postP = program(QUAD_VS, POST_FS);
+  } catch (err) {
+    console.error(err);
+    return false;
+  }
+  const U = (p, n) => gl.getUniformLocation(p, n);
+  const su = { vp: U(surfP, 'uVP'), phase: U(surfP, 'uPhase'), layer: U(surfP, 'uLayer'),
+               lines: U(surfP, 'uLines'), veil: U(surfP, 'uVeil'), cam: U(surfP, 'uCam'), res: U(surfP, 'uRes'),
+               nf: U(surfP, 'uNF'), depth: U(surfP, 'uDepth') };
+  const bu = { res: U(bgP, 'uRes'), phase: U(bgP, 'uPhase') };
+  const pu = { scene: U(postP, 'uScene'), res: U(postP, 'uRes'), seed: U(postP, 'uSeed') };
+
+  // ---- surface mesh: dense near the camera, sparser toward the horizon ----
+  const NX = 720, NZ = 480;
+  const pos = new Float32Array(NX * NZ * 2);
+  for (let i = 0; i < NZ; i++) {
+    const u = i / (NZ - 1);
+    const z = 10 - 122 * Math.pow(u, 1.6);
+    for (let j = 0; j < NX; j++) {
+      const x = -72 + 144 * j / (NX - 1);
+      const k = (i * NX + j) * 2;
+      pos[k] = x; pos[k + 1] = z;
+    }
+  }
+  const idx = new Uint32Array((NX - 1) * (NZ - 1) * 6);
+  let q = 0;
+  for (let i = 0; i < NZ - 1; i++) for (let j = 0; j < NX - 1; j++) {
+    const a = i * NX + j, b = a + 1, c = a + NX, d = c + 1;
+    idx[q++] = a; idx[q++] = c; idx[q++] = b;
+    idx[q++] = b; idx[q++] = c; idx[q++] = d;
+  }
+  const vao = gl.createVertexArray();
+  gl.bindVertexArray(vao);
+  const vbo = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+  gl.bufferData(gl.ARRAY_BUFFER, pos, gl.STATIC_DRAW);
+  const aPos = gl.getAttribLocation(surfP, 'aPos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+  const ibo = gl.createBuffer();
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
+  gl.bindVertexArray(null);
+  const emptyVao = gl.createVertexArray();
+
+  // ---- offscreen scene target (mipmapped for the bloom pass) ----
+  const sceneTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, sceneTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  function depthTexture() {
+    const t = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT24, W, H, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    return t;
+  }
+  const depthCopy = depthTexture();
+  // resolved colour target (sampled by the post pass)
+  const fboTex = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fboTex);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, sceneTex, 0);
+  if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return false;
+  }
+  // multisampled scene target (4x MSAA when available)
+  let samples = Math.min(4, gl.getParameter(gl.MAX_SAMPLES) | 0);
+  let fbo = null;
+  function makeMS(n) {
+    const rbC = gl.createRenderbuffer();
+    gl.bindRenderbuffer(gl.RENDERBUFFER, rbC);
+    gl.renderbufferStorageMultisample(gl.RENDERBUFFER, n, gl.RGBA8, W, H);
+    const rbD = gl.createRenderbuffer();
+    gl.bindRenderbuffer(gl.RENDERBUFFER, rbD);
+    gl.renderbufferStorageMultisample(gl.RENDERBUFFER, n, gl.DEPTH_COMPONENT24, W, H);
+    const f = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, f);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, rbC);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, rbD);
+    const ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE && gl.getError() === gl.NO_ERROR;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    if (!ok) { gl.deleteFramebuffer(f); gl.deleteRenderbuffer(rbC); gl.deleteRenderbuffer(rbD); return null; }
+    return f;
+  }
+  fbo = makeMS(samples);
+  if (!fbo && samples > 0) { samples = 0; fbo = makeMS(0); }
+  if (!fbo) return false;
+  const fboDepthCopy = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fboDepthCopy);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, depthCopy, 0);
+  if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return false;
+  }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+  const NEAR = 0.5, FAR = 300;
+  const proj = perspective(34 * Math.PI / 180, W / H, NEAR, FAR);
+  gl.disable(gl.CULL_FACE);
+
+  function draw(t) {
+    const ph = ((t % LOOP) + LOOP) % LOOP / LOOP;
+    const a = TAU * ph;
+
+    // slow, loop-safe camera drift
+    const cam = [0.35 * Math.sin(a), 3.4 + 0.12 * Math.sin(2 * a + 1.0), 10.0];
+    const tgt = [0.25 * Math.sin(a + 0.6), 0.55, -18.0];
+    const vp = mul(proj, lookAt(cam, tgt, [0, 1, 0]));
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.viewport(0, 0, W, H);
+    gl.depthMask(true);
+    gl.clearColor(0, 0, 0, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+    // background gradient + drifting glow
+    gl.disable(gl.DEPTH_TEST);
+    gl.depthMask(false);
+    gl.disable(gl.BLEND);
+    gl.useProgram(bgP);
+    gl.uniform2f(bu.res, W, H);
+    gl.uniform1f(bu.phase, ph);
+    gl.bindVertexArray(emptyVao);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    // opaque satin surface
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    gl.depthMask(true);
+    gl.useProgram(surfP);
+    gl.uniformMatrix4fv(su.vp, false, vp);
+    gl.uniform1f(su.phase, ph);
+    gl.uniform1f(su.lines, 0.06);
+    gl.uniform1f(su.veil, 1.0);
+    gl.uniform3f(su.cam, cam[0], cam[1], cam[2]);
+    gl.uniform2f(su.res, W, H);
+    gl.uniform2f(su.nf, NEAR, FAR);
+    gl.uniform1i(su.depth, 1);
+    gl.uniform1f(su.layer, 0.0);
+    gl.bindVertexArray(vao);
+    gl.drawElements(gl.TRIANGLES, idx.length, gl.UNSIGNED_INT, 0);
+
+    // copy the opaque depth so the veil can fade softly against it
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, fbo);
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, fboDepthCopy);
+    gl.blitFramebuffer(0, 0, W, H, 0, 0, W, H, gl.DEPTH_BUFFER_BIT, gl.NEAREST);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, depthCopy);
+    gl.activeTexture(gl.TEXTURE0);
+
+    // luminous translucent veil (additive, depth-tested against the surface)
+    gl.depthMask(false);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE);
+    gl.uniform1f(su.layer, 1.0);
+    gl.drawElements(gl.TRIANGLES, idx.length, gl.UNSIGNED_INT, 0);
+    gl.disable(gl.BLEND);
+    gl.depthMask(true);
+    gl.bindVertexArray(null);
+
+    // resolve the multisampled scene into the mipmapped texture
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, fbo);
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, fboTex);
+    gl.blitFramebuffer(0, 0, W, H, 0, 0, W, H, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+
+    // post: bloom, shoulder, vignette, grain
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, W, H);
+    gl.disable(gl.DEPTH_TEST);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, sceneTex);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.useProgram(postP);
+    gl.uniform1i(pu.scene, 0);
+    gl.uniform2f(pu.res, W, H);
+    gl.uniform1f(pu.seed, Math.floor(ph * 450));
+    gl.bindVertexArray(emptyVao);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindVertexArray(null);
+  }
+
+  return draw;
+}
+
+/* ----------------------- 2D fallback (no WebGL2) ------------------- */
+
+function start2D() {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  return function draw(t) {
+    const ph = ((t % LOOP) + LOOP) % LOOP / LOOP;
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, '#04102b'); g.addColorStop(0.62, '#0b3a86'); g.addColorStop(1, '#061c4a');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    ctx.globalCompositeOperation = 'lighter';
+    for (let L = 0; L < 9; L++) {
+      const base = H * (0.40 + L * 0.072);
+      ctx.beginPath(); ctx.moveTo(0, H);
+      for (let x = 0; x <= W; x += 12) {
+        const u = x / W;
+        const y = base
+          + 90 * Math.sin(u * 6.0 + TAU * ph * (1 + (L % 2)) + L * 1.7)
+          + 45 * Math.sin(u * 13.0 - TAU * ph * 2 + L * 0.9)
+          + 20 * Math.sin(u * 27.0 + TAU * ph * 3 + L * 2.3);
+        ctx.lineTo(x, y);
+      }
+      ctx.lineTo(W, H); ctx.closePath();
+      const fg = ctx.createLinearGradient(0, base - 220, 0, H);
+      fg.addColorStop(0, 'rgba(120,190,255,0.30)');
+      fg.addColorStop(0.35, 'rgba(30,90,220,0.10)');
+      fg.addColorStop(1, 'rgba(5,20,60,0)');
+      ctx.fillStyle = fg; ctx.fill();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  };
+}
+
+/* ------------------------------ run ------------------------------- */
+
+const draw = startWebGL() || start2D();
+if (draw) {
+  let t0 = null;
+  function frame() {
+    const now = performance.now();
+    if (t0 === null) t0 = now;
+    draw((now - t0) / 1000);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+  // Optional hook for frame-by-frame renderers: window.renderFrame(seconds)
+  window.renderFrame = function (seconds) { draw(seconds); };
+  window.LOOP_SECONDS = LOOP;
+}
+})();
+</script>
+</body>
+</html>
