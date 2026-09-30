@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=3840, height=2160">
+<title>Glowing Optical Fiber Cables – Light Trails Loop</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 3840px;
+    height: 2160px;
+    overflow: hidden;
+    background: #02040a;
+  }
+  #c {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 3840px;
+    height: 2160px;
+    display: block;
+    background: #02040a;
+  }
+</style>
+</head>
+<body>
+<canvas id="c" width="3840" height="2160"></canvas>
+
+<!-- ───────────────────────── Fullscreen triangle ───────────────────────── -->
+<script id="vs" type="x-shader/x-vertex">#version 300 es
+precision highp float;
+out vec2 vUv;
+void main(){
+  // fullscreen triangle
+  vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+  vUv = p;
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}
+</script>
+
+<!-- ───────────────────────── Scene: ray-marched fiber bundle ───────────────────────── -->
+<script id="fs-scene" type="x-shader/x-fragment">#version 300 es
+precision highp float;
+out vec4 fragColor;
+in vec2 vUv;
+uniform vec2  uRes;
+uniform float uTime;      // 0 .. 15 (seamless loop)
+
+const float TAU       = 6.28318530718;
+const float LOOP      = 15.0;               // seconds
+const float CAM_SPEED = 6.0;                // world units / second
+const float L         = CAM_SPEED * LOOP;   // 90 : spatial period of the whole world
+const float K0        = TAU / L;            // base spatial frequency (everything is a multiple of it)
+const float CELL      = 0.6;                // fiber lattice spacing
+const float FOG       = 0.060;
+const int   MAX_STEPS = 170;
+const float MAX_DIST  = 46.0;
+
+// ---------- hashing ----------
+vec4 hash42(vec2 p){
+  vec4 p4 = fract(vec4(p.xyxy) * vec4(0.1031, 0.1030, 0.0973, 0.1099));
+  p4 += dot(p4, p4.wzxy + 33.33);
+  return fract((p4.xxyz + p4.yzzw) * p4.zywx);
+}
+
+mat2 rot(float a){ float c = cos(a), s = sin(a); return mat2(c, s, -s, c); }
+
+// ---------- bundle path (periodic in z with period L) ----------
+vec2 sway(float z){
+  return vec2( sin(z*K0)*1.6 + sin(z*K0*3.0 + 1.7)*0.12,
+               cos(z*K0*2.0 + 0.6)*0.55 );
+}
+vec2 swayD(float z){
+  return vec2( cos(z*K0)*1.6*K0 + cos(z*K0*3.0 + 1.7)*0.12*3.0*K0,
+              -sin(z*K0*2.0 + 0.6)*0.55*2.0*K0 );
+}
+float twist(float z){ return z*K0 + sin(z*K0 + 1.0)*0.2; }
+
+// ---------- per-fiber properties ----------
+vec3 fiberColor(vec2 cell){
+  float h = hash42(cell + 5.5).x;
+  if (h < 0.34) return vec3(0.10, 0.85, 1.00);   // cyan
+  if (h < 0.60) return vec3(0.22, 0.45, 1.00);   // electric blue
+  if (h < 0.78) return vec3(0.62, 0.32, 1.00);   // violet
+  if (h < 0.92) return vec3(1.00, 0.28, 0.72);   // magenta
+  return            vec3(1.00, 0.62, 0.22);      // amber accent
+}
+
+// Light pulses travelling along a fiber. Exactly periodic under (z += L, t += LOOP).
+float pulse(vec2 cell, float z, float t){
+  vec4 h  = hash42(cell + 13.7);
+  vec4 h3 = hash42(cell + 101.0);
+  float m   = 2.0 + floor(h.x*5.0);            // pulses per world period (2..6)
+  float P   = L / m;                           // spatial period of the train
+  float sgn = h.y < 0.5 ? -1.0 : 1.0;
+  float st  = mix(10.0, 34.0, h.z);            // desired speed
+  float j   = floor(st*m/6.0 + 0.5);
+  float s   = sgn * 6.0*j/m;                   // quantised so the loop closes perfectly
+  float u   = (z - s*t) / P;
+  float w   = fract(u);
+  float bright = 0.45 + 0.9*h.w;
+
+  vec3 pos = vec3(h3.x, h3.y, h3.z);
+  vec3 tl  = vec3(0.035, 0.07, 0.11) * (0.6 + 0.9*h3.w);
+  vec3 amp = vec3(1.0, 0.75, 0.55);
+  if (h3.w < 0.35) amp.z = 0.0;                // some fibers carry fewer packets
+
+  float e = 0.0;
+  for (int k = 0; k < 3; k++){
+    float x = fract(w - pos[k] + 0.5) - 0.5;
+    x *= sgn;                                   // head at 0, tail behind travel direction
+    float v = x < 0.0 ? exp(x / tl[k]) : exp(-x*220.0);
+    e += v * amp[k];
+  }
+  // high-frequency "bit stream" on some fibers
+  if (h.w > 0.82){
+    float bits = smoothstep(0.55, 1.0, sin(u*TAU*12.0 + h3.x*TAU));
+    e += bits * 0.25 * (0.5 + 0.5*sin(u*TAU*2.0));
+  }
+  return e * bright;
+}
+
+// ---------- signed distance field ----------
+struct Fib { float d; vec2 n; float ax; float r; vec2 id; bool ok; };
+
+void fiberAt(vec2 cell, vec2 q, float z, inout Fib f){
+  vec2 ctr = (cell + 0.5) * CELL;
+  float rc = length(ctr);
+  if (rc < 2.2 || rc > 6.8) return;            // hollow core (camera tunnel) + outer bound
+  vec4 h = hash42(cell);
+  if (h.x > 0.46) return;                       // sparse bundle: dark space between strands
+  vec4 h2 = hash42(cell + 71.3);
+  float m1 = 3.0 + floor(h.z*4.0);
+  float m2 = 2.0 + floor(h.y*4.0);
+  vec2 off = (h.yz - 0.5)*CELL*0.3
+           + vec2(sin(z*K0*m1 + h.w*TAU), cos(z*K0*m2 + h2.x*TAU))*CELL*0.1;
+  float r = CELL*(0.13 + 0.09*h2.y);
+  vec2 v = q - ctr - off;
+  float len = length(v);
+  float d = len - r;
+  if (d < f.d){
+    f.d = d; f.n = v / max(len, 1e-5); f.ax = len; f.r = r; f.id = cell; f.ok = true;
+  }
+}
+
+Fib map(vec3 p, out float th){
+  th = twist(p.z);
+  vec2 q = rot(-th) * (p.xy - sway(p.z));
+  Fib f;
+  f.d = CELL*0.5; f.ok = false; f.n = vec2(0.0); f.ax = 0.0; f.r = 1.0; f.id = vec2(0.0);
+  vec2 base = floor(q/CELL - 0.5);
+  fiberAt(base,                q, p.z, f);
+  fiberAt(base + vec2(1.0,0.0), q, p.z, f);
+  fiberAt(base + vec2(0.0,1.0), q, p.z, f);
+  fiberAt(base + vec2(1.0,1.0), q, p.z, f);
+  return f;
+}
+
+// ---------- environment for glass reflections ----------
+vec3 env(vec3 d){
+  vec3 base = mix(vec3(0.004, 0.007, 0.020), vec3(0.020, 0.040, 0.100), d.y*0.5 + 0.5);
+  base += vec3(0.10, 0.55, 1.00) * pow(max(dot(d, normalize(vec3( 0.6, 0.8,-0.2))), 0.0), 24.0) * 0.6;
+  base += vec3(1.00, 0.40, 0.90) * pow(max(dot(d, normalize(vec3(-0.7, 0.4, 0.3))), 0.0), 30.0) * 0.4;
+  base += vec3(0.40, 0.70, 1.00) * pow(max(dot(d, normalize(vec3( 0.0,-0.9, 0.4))), 0.0), 16.0) * 0.3;
+  return base;
+}
+
+// ---------- march ----------
+vec3 render(vec3 ro, vec3 rd, float t){
+  vec3 col = vec3(0.0);
+  vec3 T   = vec3(1.0);
+  float dist = 0.0;
+  vec3 p = ro;
+  bool inside = false;
+  float th;
+  vec3 fogCol = vec3(0.004, 0.009, 0.024);
+  vec3 absorb = vec3(0.45, 0.32, 0.20);
+
+  for (int i = 0; i < MAX_STEPS; i++){
+    Fib f = map(p, th);
+    if (!inside){
+      if (f.d < 0.0015){
+        // --- enter glass ---
+        vec3 n = normalize(vec3(rot(th) * f.n, 0.0));
+        float cosi = max(0.0, -dot(n, rd));
+        float F = 0.03 + 0.97*pow(1.0 - cosi, 5.0);
+        col += T * env(reflect(rd, n)) * F;
+        T *= (1.0 - F);
+        vec3 rr = refract(rd, n, 1.0/1.45);
+        if (dot(rr, rr) > 0.0) rd = rr;
+        inside = true;
+        p += rd*0.012; dist += 0.012;
+        continue;
+      }
+      float stp = max(f.d*0.6, 0.004);
+      float fogA = FOG * stp;
+      vec3 halo = vec3(0.0);
+      if (f.ok){
+        float pl = pulse(f.id, p.z, t);
+        halo = fiberColor(f.id) * pl / (f.d*f.d*40.0 + 0.5) * 0.06 * stp;
+      }
+      col += T * (fogCol*fogA + halo);
+      T *= exp(-fogA);
+      p += rd*stp; dist += stp;
+    } else {
+      if (f.d > 0.0){
+        // --- exit glass ---
+        vec3 n = normalize(vec3(rot(th) * f.n, 0.0));
+        vec3 rr = refract(rd, -n, 1.45);
+        if (dot(rr, rr) > 0.0) rd = rr;
+        inside = false;
+        p += rd*0.006; dist += 0.006;
+        continue;
+      }
+      float stp = 0.02;
+      float ax = f.ax / f.r;
+      float pl = pulse(f.id, p.z, t);
+      vec3 fc = fiberColor(f.id);
+      float core = exp(-ax*ax*7.0);
+      vec3 em = fc * (pl * (core*5.5 + 0.30) + core*0.03)
+              + vec3(1.0) * pl * core*core*core * 1.1;          // white-hot centre of the pulse
+      col += T * em * stp;
+      T *= exp(-absorb*stp);
+      p += rd*stp; dist += stp;
+    }
+    if (dist > MAX_DIST || max(T.x, max(T.y, T.z)) < 0.01) break;
+  }
+  col += T * (fogCol*0.5 + env(rd)*0.12);
+  return col;
+}
+
+void main(){
+  float t = uTime;
+  vec2 uv = (gl_FragCoord.xy - 0.5*uRes) / uRes.y;   // y in [-0.5, 0.5]
+  uv *= 2.0;
+
+  // camera rides the bundle path with a small periodic offset
+  float camZ = CAM_SPEED * t;
+  float ph = t / LOOP * TAU;
+  vec2 offs = vec2(sin(ph*2.0 + 0.4)*0.35, cos(ph)*0.28);
+  vec3 ro = vec3(sway(camZ) + offs, camZ);
+  vec2 dz = swayD(camZ + 4.0);
+  vec3 fwd = normalize(vec3(dz*0.9 + vec2(cos(ph*3.0)*0.03, sin(ph*2.0)*0.025), 1.0));
+  vec3 right = normalize(cross(vec3(0.0, 1.0, 0.0), fwd));
+  vec3 up = cross(fwd, right);
+  float roll = sin(ph)*0.10 + sin(ph*2.0 + 1.0)*0.04;
+  mat2 rr = rot(roll);
+  vec2 ru = rr * vec2(uv.x, uv.y);
+  vec3 rd = normalize(fwd*1.35 + right*ru.x + up*ru.y);
+
+  vec3 col = render(ro, rd, t);
+  fragColor = vec4(col, 1.0);
+}
+</script>
+
+<!-- ───────────────────────── Post: bloom prefilter (4x downsample) ───────────────────────── -->
+<script id="fs-prefilter" type="x-shader/x-fragment">#version 300 es
+precision highp float;
+out vec4 fragColor;
+in vec2 vUv;
+uniform sampler2D uTex;
+uniform vec2 uTexel;    // 1 / source size
+void main(){
+  vec3 c = vec3(0.0);
+  c += texture(uTex, vUv + uTexel*vec2(-1.0,-1.0)).rgb;
+  c += texture(uTex, vUv + uTexel*vec2( 1.0,-1.0)).rgb;
+  c += texture(uTex, vUv + uTexel*vec2(-1.0, 1.0)).rgb;
+  c += texture(uTex, vUv + uTexel*vec2( 1.0, 1.0)).rgb;
+  c *= 0.25;
+  float br = max(c.r, max(c.g, c.b));
+  float thr = 0.85, knee = 0.5;
+  float soft = clamp(br - thr + knee, 0.0, 2.0*knee);
+  soft = soft*soft / (4.0*knee + 1e-4);
+  float contrib = max(soft, br - thr) / max(br, 1e-4);
+  fragColor = vec4(c * contrib, 1.0);
+}
+</script>
+
+<!-- ───────────────────────── Post: downsample ───────────────────────── -->
+<script id="fs-down" type="x-shader/x-fragment">#version 300 es
+precision highp float;
+out vec4 fragColor;
+in vec2 vUv;
+uniform sampler2D uTex;
+uniform vec2 uTexel;
+void main(){
+  vec3 c = vec3(0.0);
+  c += texture(uTex, vUv + uTexel*vec2(-1.0,-1.0)).rgb;
+  c += texture(uTex, vUv + uTexel*vec2( 1.0,-1.0)).rgb;
+  c += texture(uTex, vUv + uTexel*vec2(-1.0, 1.0)).rgb;
+  c += texture(uTex, vUv + uTexel*vec2( 1.0, 1.0)).rgb;
+  fragColor = vec4(c*0.25, 1.0);
+}
+</script>
+
+<!-- ───────────────────────── Post: gaussian blur (separable) ───────────────────────── -->
+<script id="fs-blur" type="x-shader/x-fragment">#version 300 es
+precision highp float;
+out vec4 fragColor;
+in vec2 vUv;
+uniform sampler2D uTex;
+uniform vec2 uTexel;
+uniform vec2 uDir;      // (1,0) or (0,1)
+uniform float uRadius;  // in texels
+void main(){
+  const int N = 12;
+  float sigma = uRadius * 0.45;
+  vec3 acc = vec3(0.0);
+  float wsum = 0.0;
+  for (int i = -N; i <= N; i++){
+    float o = float(i) * uRadius / float(N);
+    float w = exp(-o*o / (2.0*sigma*sigma));
+    acc += texture(uTex, vUv + uDir * uTexel * o).rgb * w;
+    wsum += w;
+  }
+  fragColor = vec4(acc / wsum, 1.0);
+}
+</script>
+
+<!-- ───────────────────────── Post: anamorphic streak ───────────────────────── -->
+<script id="fs-streak" type="x-shader/x-fragment">#version 300 es
+precision highp float;
+out vec4 fragColor;
+in vec2 vUv;
+uniform sampler2D uTex;
+uniform vec2 uTexel;
+uniform float uLen;     // in texels
+void main(){
+  const int N = 24;
+  vec3 acc = vec3(0.0);
+  float wsum = 0.0;
+  for (int i = -N; i <= N; i++){
+    float x = float(i) / float(N);
+    float w = exp(-x*x*3.0);
+    acc += texture(uTex, vUv + vec2(uTexel.x * x * uLen, 0.0)).rgb * w;
+    wsum += w;
+  }
+  fragColor = vec4(acc / wsum, 1.0);
+}
+</script>
+
+<!-- ───────────────────────── Post: composite ───────────────────────── -->
+<script id="fs-final" type="x-shader/x-fragment">#version 300 es
+precision highp float;
+out vec4 fragColor;
+in vec2 vUv;
+uniform sampler2D uScene;
+uniform sampler2D uB0;
+uniform sampler2D uB1;
+uniform sampler2D uB2;
+uniform sampler2D uStreak;
+uniform vec2  uRes;
+uniform float uTime;
+
+vec3 aces(vec3 x){
+  const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
+  return clamp((x*(a*x + b)) / (x*(c*x + d) + e), 0.0, 1.0);
+}
+float hash13(vec3 p){
+  p = fract(p * 0.1031);
+  p += dot(p, p.zyx + 31.32);
+  return fract((p.x + p.y) * p.z);
+}
+
+void main(){
+  vec2 uv = vUv;
+  vec2 cen = uv - 0.5;
+  float r2 = dot(cen*vec2(uRes.x/uRes.y, 1.0), cen*vec2(uRes.x/uRes.y, 1.0));
+
+  // chromatic aberration (stronger toward edges)
+  vec2 ca = cen * (0.0006 + 0.0016*r2);
+  vec3 scene;
+  scene.r = texture(uScene, uv + ca).r;
+  scene.g = texture(uScene, uv).g;
+  scene.b = texture(uScene, uv - ca).b;
+
+  vec3 bloom = texture(uB0, uv).rgb*0.55 + texture(uB1, uv).rgb*0.75 + texture(uB2, uv).rgb*1.0;
+  vec3 streak = texture(uStreak, uv).rgb * vec3(0.45, 0.70, 1.00);
+
+  vec3 col = scene + bloom*0.8 + streak*0.35;
+  col *= 1.0;                                   // exposure
+  col = aces(col);
+
+  // gentle saturation lift to keep the neon vivid after tonemapping
+  float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
+  col = mix(vec3(lum), col, 1.18);
+
+  // vignette
+  float vig = 1.0 - 0.38*smoothstep(0.25, 1.35, r2*1.15);
+  col *= vig;
+
+  col = pow(max(col, 0.0), vec3(1.0/2.2));
+
+  // subtle film grain, seeded so the loop is exact
+  float fr = floor(uTime*60.0);
+  float g = hash13(vec3(gl_FragCoord.xy, fr)) - 0.5;
+  col += g * 0.012;
+  fragColor = vec4(col, 1.0);
+}
+</script>
+
+<script>
+(function(){
+  const LOOP = 15.0;
+  const W = 3840, H = 2160;
+  const canvas = document.getElementById('c');
+  canvas.width = W; canvas.height = H;
+
+  const gl = canvas.getContext('webgl2', {
+    antialias: false, alpha: false, depth: false, stencil: false,
+    premultipliedAlpha: false, preserveDrawingBuffer: true,
+    powerPreference: 'high-performance'
+  });
+  if (!gl){ document.body.innerHTML = '<p style="color:#fff;font:32px sans-serif;padding:40px">WebGL2 is required.</p>'; return; }
+
+  const extF = gl.getExtension('EXT_color_buffer_float');
+  const halfFloat = !!extF;
+
+  function compile(type, src){
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src.trim());
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)){
+      console.error(gl.getShaderInfoLog(s));
+      throw new Error('shader compile failed');
+    }
+    return s;
+  }
+  const vsSrc = document.getElementById('vs').textContent;
+  const vs = compile(gl.VERTEX_SHADER, vsSrc);
+  function program(id){
+    const fs = compile(gl.FRAGMENT_SHADER, document.getElementById(id).textContent);
+    const p = gl.createProgram();
+    gl.attachShader(p, vs); gl.attachShader(p, fs);
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)){
+      console.error(gl.getProgramInfoLog(p));
+      throw new Error('link failed: ' + id);
+    }
+    const u = {};
+    const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+    for (let i = 0; i < n; i++){
+      const info = gl.getActiveUniform(p, i);
+      u[info.name] = gl.getUniformLocation(p, info.name);
+    }
+    return { p, u };
+  }
+
+  const P = {
+    scene:     program('fs-scene'),
+    prefilter: program('fs-prefilter'),
+    down:      program('fs-down'),
+    blur:      program('fs-blur'),
+    streak:    program('fs-streak'),
+    final:     program('fs-final')
+  };
+
+  function makeTarget(w, h){
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    if (halfFloat){
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.HALF_FLOAT, null);
+    } else {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    }
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    const fb = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE){
+      console.error('framebuffer incomplete');
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return { tex, fb, w, h };
+  }
+
+  const scene = makeTarget(W, H);
+  const w4 = W >> 2, h4 = H >> 2, w8 = W >> 3, h8 = H >> 3, w16 = W >> 4, h16 = H >> 4;
+  const b0 = makeTarget(w4, h4),  t0 = makeTarget(w4, h4);
+  const b1 = makeTarget(w8, h8),  t1 = makeTarget(w8, h8);
+  const b2 = makeTarget(w16, h16), t2 = makeTarget(w16, h16);
+  const s0 = makeTarget(w4, h4),  s1 = makeTarget(w4, h4);
+
+  const vao = gl.createVertexArray();
+  gl.bindVertexArray(vao);
+
+  function bindTex(unit, tex, loc){
+    gl.activeTexture(gl.TEXTURE0 + unit);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.uniform1i(loc, unit);
+  }
+  function draw(target){
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target ? target.fb : null);
+    gl.viewport(0, 0, target ? target.w : W, target ? target.h : H);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+  function blurPass(src, tmp, dst, radius){
+    gl.useProgram(P.blur.p);
+    gl.uniform2f(P.blur.u.uTexel, 1/src.w, 1/src.h);
+    gl.uniform1f(P.blur.u.uRadius, radius);
+    gl.uniform2f(P.blur.u.uDir, 1, 0);
+    bindTex(0, src.tex, P.blur.u.uTex);
+    draw(tmp);
+    gl.uniform2f(P.blur.u.uDir, 0, 1);
+    bindTex(0, tmp.tex, P.blur.u.uTex);
+    draw(dst);
+  }
+
+  function render(t){
+    // 1. scene
+    gl.useProgram(P.scene.p);
+    gl.uniform2f(P.scene.u.uRes, W, H);
+    gl.uniform1f(P.scene.u.uTime, t);
+    draw(scene);
+
+    // 2. bloom prefilter -> 1/4
+    gl.useProgram(P.prefilter.p);
+    gl.uniform2f(P.prefilter.u.uTexel, 1/W, 1/H);
+    bindTex(0, scene.tex, P.prefilter.u.uTex);
+    draw(b0);
+    blurPass(b0, t0, b0, 6.0);
+
+    // 3. 1/8
+    gl.useProgram(P.down.p);
+    gl.uniform2f(P.down.u.uTexel, 1/b0.w, 1/b0.h);
+    bindTex(0, b0.tex, P.down.u.uTex);
+    draw(b1);
+    blurPass(b1, t1, b1, 8.0);
+
+    // 4. 1/16
+    gl.useProgram(P.down.p);
+    gl.uniform2f(P.down.u.uTexel, 1/b1.w, 1/b1.h);
+    bindTex(0, b1.tex, P.down.u.uTex);
+    draw(b2);
+    blurPass(b2, t2, b2, 10.0);
+
+    // 5. anamorphic streak (two horizontal passes)
+    gl.useProgram(P.streak.p);
+    gl.uniform2f(P.streak.u.uTexel, 1/w4, 1/h4);
+    gl.uniform1f(P.streak.u.uLen, 70.0);
+    bindTex(0, b0.tex, P.streak.u.uTex);
+    draw(s0);
+    gl.uniform1f(P.streak.u.uLen, 110.0);
+    bindTex(0, s0.tex, P.streak.u.uTex);
+    draw(s1);
+
+    // 6. composite
+    gl.useProgram(P.final.p);
+    gl.uniform2f(P.final.u.uRes, W, H);
+    gl.uniform1f(P.final.u.uTime, t);
+    bindTex(0, scene.tex, P.final.u.uScene);
+    bindTex(1, b0.tex, P.final.u.uB0);
+    bindTex(2, b1.tex, P.final.u.uB1);
+    bindTex(3, b2.tex, P.final.u.uB2);
+    bindTex(4, s1.tex, P.final.u.uStreak);
+    draw(null);
+  }
+
+  // Optional: open with #t=SECONDS to freeze a single frame (useful for previews).
+  const fixed = /[#&]t=([0-9.]+)/.exec(location.hash);
+  if (fixed){
+    render(parseFloat(fixed[1]) % LOOP);
+    return;
+  }
+
+  let start = null;
+  function frame(now){
+    if (start === null) start = now;
+    const t = ((now - start) / 1000) % LOOP;
+    render(t);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
