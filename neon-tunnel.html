@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pulsing Neon Concentric Circles - Endless Energy Tunnel</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; object-fit: contain; background: #000; }
+</style>
+</head>
+<body>
+<canvas id="c" width="3840" height="2160"></canvas>
+
+<script>
+/*
+  Pulsing Neon Concentric Circles - endless tunnel of glowing rings pulsing with energy.
+  3840 x 2160, 15 second seamless loop, WebGL2 (HDR scene -> multi-level bloom -> ACES grade).
+
+  Loop maths: every animated term is either a function of the ring depth (which is
+  identical at t=0 and t=15 because the ring set advances by exactly K rings) or a
+  sinusoid with an integer number of cycles per 15 s.
+
+  Hooks for capture tools:
+    window.renderAt(seconds)  -> draws a single deterministic frame
+    ?t=7.5                    -> draw one frame at 7.5 s and stop
+    ?scale=0.5                -> internal render scale (preview only)
+*/
+(function () {
+  'use strict';
+
+  var LOOP = 15.0;
+  var params = new URLSearchParams(location.search);
+  var scale = Math.max(0.1, Math.min(1, parseFloat(params.get('scale')) || 1));
+  var canvas = document.getElementById('c');
+  var W = Math.round(3840 * scale), H = Math.round(2160 * scale);
+  canvas.width = W; canvas.height = H;
+
+  var gl = canvas.getContext('webgl2', {
+    antialias: false, alpha: false, depth: false, stencil: false,
+    preserveDrawingBuffer: true, powerPreference: 'high-performance'
+  });
+  if (!gl) { document.body.style.color = '#0ff'; document.body.textContent = 'WebGL2 is required.'; return; }
+
+  var hasFloat = !!gl.getExtension('EXT_color_buffer_float');
+  if (!hasFloat) hasFloat = !!gl.getExtension('EXT_color_buffer_half_float');
+  gl.getExtension('OES_texture_float_linear');
+
+  /* ------------------------------------------------------------------ shaders */
+  var VERT = '#version 300 es\n' +
+    'out vec2 vUv;\n' +
+    'void main(){ vec2 p = vec2((gl_VertexID<<1)&2, gl_VertexID&2); vUv = p; gl_Position = vec4(p*2.0-1.0, 0.0, 1.0); }';
+
+  var SCENE = `#version 300 es
+precision highp float;
+uniform vec2  uRes;
+uniform float uT;
+out vec4 o;
+
+const float TAU  = 6.28318530718;
+const float LOOP = 15.0;
+const float K    = 12.0;     // rings travelled per loop (integer -> seamless)
+const float S    = 1.5;      // tunnel radius in screen units at depth 1
+const int   N    = 64;
+
+float hash(float p){ p = fract(p*.1031); p *= p+33.33; p *= p+p; return fract(p); }
+
+// electric palette: cyan -> blue -> violet -> magenta, ping-ponged (period 1)
+vec3 neon(float x){
+  float q = abs(fract(x)*2.-1.) * 3.;
+  vec3 c0 = vec3(0.00,0.92,1.00);
+  vec3 c1 = vec3(0.10,0.36,1.00);
+  vec3 c2 = vec3(0.60,0.14,1.00);
+  vec3 c3 = vec3(1.00,0.06,0.66);
+  if(q < 1.) return mix(c0,c1,smoothstep(0.,1.,q));
+  if(q < 2.) return mix(c1,c2,smoothstep(0.,1.,q-1.));
+  return mix(c2,c3,smoothstep(0.,1.,q-2.));
+}
+
+float ph;   // 0..1 loop phase
+
+// centre-line of the tunnel (world offset), gentle serpentine motion
+vec2 path(float d){
+  return 0.30*vec2( sin(0.085*d - TAU*ph*2.0),
+                    sin(0.070*d*1.3 - TAU*ph*3.0 + 1.3) );
+}
+vec2 ctr(float d, vec2 w0){ return S*(path(d)-w0)/d; }
+
+// streaming energy sparks flying down the walls
+vec3 sparks(vec2 p, vec2 w0){
+  vec3 acc = vec3(0.);
+  float r0 = max(length(p), 1e-3);
+  vec2 pc = p - ctr(S/r0, w0);
+  float r  = max(length(pc), 1e-3);
+  float th = atan(pc.y, pc.x);
+  float dpix = S/r;
+  for(int L=0; L<3; L++){
+    float fl = float(L);
+    float B  = 110. + fl*83.;
+    float a  = (th/TAU + .5)*B;
+    float id = mod(floor(a), B);
+    float fa = fract(a) - .5;
+    float h1 = hash(id + fl*131.7);
+    float h2 = hash(id*1.37 + fl*17.9 + 5.);
+    if(h2 < .55) continue;
+    float DM  = 42.;
+    float ks  = 2. + fl;                       // integer cycles per loop
+    float dp  = fract(h1 + ph*ks)*DM;
+    float len = .7 + dp*.16 + fl*.25;
+    float u   = (dpix - dp)/len;
+    if(u < 0. || u > 1.) continue;
+    float sig = clamp((0.0011 + 0.0004*fl)/(r*TAU/B), .02, .22);
+    float ang = exp(-fa*fa/(2.*sig*sig));
+    float fade = exp(-dp*.045) * smoothstep(.6,2.2,dp) * (1.-smoothstep(DM-12.,DM,dp));
+    float tail = pow(1.-u, 2.2) * smoothstep(0.,.04,u);
+    vec3 c = mix(neon(h1*.7 - ph*1. + .1*fl), vec3(1.), .55*tail);
+    acc += c * ang * tail * fade * (1.6 + 1.2*h2);
+  }
+  return acc;
+}
+
+void main(){
+  vec2 p = (gl_FragCoord.xy - .5*uRes)/uRes.y*2.;      // -1..1 vertically
+  ph = uT/LOOP;
+  float prog = ph*K;
+  float n0   = floor(prog);
+  float kick = pow(.5+.5*cos(TAU*20.*ph), 5.);         // 20 beats / loop
+  float beat = pow(.5+.5*cos(TAU*10.*ph), 8.);         // 10 big pulses / loop
+
+  vec2 w0 = path(0.);
+
+  // camera breathes with the beat
+  vec2 q = p * (1. - .028*kick);
+
+  vec3 col = vec3(0.);
+
+  // ---------------------------------------------------------------- rings
+  for(int i=0; i<N; i++){
+    float n = n0 + float(i);
+    float d = n - prog + .3;
+    if(d < .28) continue;
+
+    float rk   = mod(n, K);                   // periodic ring identity
+    float hA   = hash(rk + 1.7);
+    float hB   = hash(rk + 9.3);
+    float hC   = hash(rk + 21.1);
+
+    float R  = S/d;
+    vec2  c  = ctr(d, w0);
+    vec2  pp = q - c;
+    float len = length(pp);
+    float dist = abs(len - R);
+
+    float sc = 0.0014 + R*0.0042;             // core sigma
+    float core = exp(-dist*dist/(2.*sc*sc));
+    float h1   = exp(-dist/(sc*4.5));
+    float h2   = exp(-dist/(sc*20.));
+
+    // depth fade (fog + near clip + far spawn)
+    float fog  = exp(-d*.058) * smoothstep(.28,1.0,d) * (1.-smoothstep(float(N)-10.,float(N)-3.,d));
+
+    // travelling energy wave (moves towards camera) + heartbeat
+    float wv = pow(.5+.5*sin(TAU*(d/9. + 5.*ph)), 4.);
+    float wv2 = pow(.5+.5*sin(TAU*(d/4.3 - 3.*ph) + 1.), 6.);
+    float bright = (.30 + 1.4*wv + .45*wv2) * (1. + .55*kick);
+
+    // per ring shimmer (integer cycles)
+    bright *= .82 + .18*sin(TAU*(2.*ph) + hA*TAU);
+
+    // rotating energy arcs on some rings
+    float th = atan(pp.y, pp.x);
+    float nseg = 2. + floor(hB*7.);
+    float dir  = hC < .5 ? 1. : -1.;
+    float seg  = .5 + .5*cos(nseg*th - dir*TAU*ph*(1.+floor(hA*3.)) - hB*TAU);
+    float arcMask = step(.55, hA);
+    float arc = mix(1., .08 + 1.8*pow(seg, 3.), arcMask);
+
+    // tick marks / dashes on a few rings
+    float ticks = 1.;
+    if(hC > .72){
+      float tk = .5+.5*cos(th*48. + dir*TAU*ph*2.);
+      ticks = .25 + 1.6*smoothstep(.55,.75,tk);
+    }
+
+    vec3 base = neon(d*.085 + hA*.05 - ph*1.);
+    vec3 hot  = mix(base, vec3(1.), .38);
+
+    vec3 ring = hot*core*1.7 + base*(h1*.5 + h2*.10);
+
+    // fine inner rim (gives the rings a machined, layered look)
+    float rim = abs(len - R*1.045);
+    ring += base*exp(-rim*rim/(2.*sc*sc*.6))*.55*step(.4,hB);
+
+    col += ring * bright * arc * ticks * fog;
+  }
+
+  // ------------------------------------------------------ tunnel wall haze
+  {
+    float r  = max(length(q), 1e-3);
+    float dp = S/r;
+    float wv = pow(.5+.5*sin(TAU*(dp/9. + 5.*ph)), 3.);
+    vec3 hz = neon(dp*.085 - ph*1. + .05);
+    col += hz * (.004 + .025*wv) * exp(-dp*.05) * (1.+.4*kick) * smoothstep(.3,1.,dp);
+  }
+
+  // ------------------------------------------------------- flying sparks
+  col += sparks(q, w0) * 1.1;
+
+  // --------------------------------------------------- shockwave rings
+  {
+    float r = length(p);
+    for(int k=0; k<2; k++){
+      float f  = fract(ph*10. + float(k)*.5);
+      float Rs = pow(f, 1.9)*2.9;
+      float w  = 0.004 + .012*f;
+      float d0 = abs(r - Rs);
+      float e  = exp(-d0*d0/(2.*w*w)) + .25*exp(-d0/(w*7.));
+      vec3 sc  = k==0 ? vec3(.35,.95,1.) : vec3(1.,.25,.85);
+      col += sc * e * pow(1.-f, 1.6) * .55 * (.5+.5*smoothstep(0.,.1,f));
+    }
+  }
+
+  // ------------------------------------------------------- vanishing core
+  {
+    float r = length(p);
+    float g = exp(-r*11.)*(.30 + .8*beat + .3*kick) + exp(-r*3.5)*.035*(1.+beat) + exp(-r*40.)*(.6+1.4*beat);
+    col += mix(vec3(.15,.6,1.), vec3(.9,.95,1.), exp(-r*30.)) * g;
+  }
+
+  // deep-space backdrop
+  float vr = length(p);
+  vec3 bg = mix(vec3(.010,.004,.030), vec3(.0005,.0005,.004), smoothstep(0.,1.6,vr));
+  col += bg;
+
+  o = vec4(col, 1.);
+}
+`;
+
+  var DOWN = `#version 300 es
+precision highp float;
+uniform sampler2D uTex;
+uniform vec2  uTexel;
+uniform float uKaris;
+in vec2 vUv;
+out vec4 o;
+float lum(vec3 c){ return dot(c, vec3(.2126,.7152,.0722)); }
+void main(){
+  vec2 t = uTexel;
+  vec3 a = texture(uTex, vUv + t*vec2(-2., 2.)).rgb;
+  vec3 b = texture(uTex, vUv + t*vec2( 0., 2.)).rgb;
+  vec3 c = texture(uTex, vUv + t*vec2( 2., 2.)).rgb;
+  vec3 d = texture(uTex, vUv + t*vec2(-2., 0.)).rgb;
+  vec3 e = texture(uTex, vUv).rgb;
+  vec3 f = texture(uTex, vUv + t*vec2( 2., 0.)).rgb;
+  vec3 g = texture(uTex, vUv + t*vec2(-2.,-2.)).rgb;
+  vec3 h = texture(uTex, vUv + t*vec2( 0.,-2.)).rgb;
+  vec3 i = texture(uTex, vUv + t*vec2( 2.,-2.)).rgb;
+  vec3 j = texture(uTex, vUv + t*vec2(-1., 1.)).rgb;
+  vec3 k = texture(uTex, vUv + t*vec2( 1., 1.)).rgb;
+  vec3 l = texture(uTex, vUv + t*vec2(-1.,-1.)).rgb;
+  vec3 m = texture(uTex, vUv + t*vec2( 1.,-1.)).rgb;
+  vec3 r;
+  if(uKaris > .5){
+    vec3 g0 = (j+k+l+m)*.25, g1 = (a+b+d+e)*.25, g2 = (b+c+e+f)*.25, g3 = (d+e+g+h)*.25, g4 = (e+f+h+i)*.25;
+    float w0 = .5/(1.+lum(g0)), w1 = .125/(1.+lum(g1)), w2 = .125/(1.+lum(g2)), w3 = .125/(1.+lum(g3)), w4 = .125/(1.+lum(g4));
+    r = (g0*w0 + g1*w1 + g2*w2 + g3*w3 + g4*w4)/(w0+w1+w2+w3+w4);
+  } else {
+    r = e*.125 + (a+c+g+i)*.03125 + (b+d+f+h)*.0625 + (j+k+l+m)*.125;
+  }
+  o = vec4(r, 1.);
+}
+`;
+
+  var UP = `#version 300 es
+precision highp float;
+uniform sampler2D uTex;
+uniform vec2  uTexel;
+uniform float uWeight;
+in vec2 vUv;
+out vec4 o;
+void main(){
+  vec2 t = uTexel;
+  vec3 a = texture(uTex, vUv + t*vec2(-1., 1.)).rgb;
+  vec3 b = texture(uTex, vUv + t*vec2( 0., 1.)).rgb;
+  vec3 c = texture(uTex, vUv + t*vec2( 1., 1.)).rgb;
+  vec3 d = texture(uTex, vUv + t*vec2(-1., 0.)).rgb;
+  vec3 e = texture(uTex, vUv).rgb;
+  vec3 f = texture(uTex, vUv + t*vec2( 1., 0.)).rgb;
+  vec3 g = texture(uTex, vUv + t*vec2(-1.,-1.)).rgb;
+  vec3 h = texture(uTex, vUv + t*vec2( 0.,-1.)).rgb;
+  vec3 i = texture(uTex, vUv + t*vec2( 1.,-1.)).rgb;
+  vec3 r = (e*4. + (b+d+f+h)*2. + (a+c+g+i))/16.;
+  o = vec4(r*uWeight, 1.);
+}
+`;
+
+  var COMP = `#version 300 es
+precision highp float;
+uniform sampler2D uScene;
+uniform sampler2D uBloom;
+uniform vec2  uRes;
+uniform float uT;
+in vec2 vUv;
+out vec4 o;
+const float TAU = 6.28318530718;
+
+vec3 aces(vec3 x){
+  x *= 0.55;
+  return clamp((x*(2.51*x+.03))/(x*(2.43*x+.59)+.14), 0., 1.);
+}
+float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx)*.1031); p3 += dot(p3, p3.yzx+33.33); return fract((p3.x+p3.y)*p3.z); }
+
+void main(){
+  float ph   = uT/15.;
+  float kick = pow(.5+.5*cos(TAU*20.*ph), 5.);
+  float beat = pow(.5+.5*cos(TAU*10.*ph), 8.);
+
+  vec2  cv = vUv - .5;
+  float r2 = dot(cv*vec2(uRes.x/uRes.y,1.), cv*vec2(uRes.x/uRes.y,1.));
+  // chromatic aberration grows towards the edges and kicks on the beat
+  float ca = (.0009 + .0022*kick + .0012*beat) * (.4 + r2*2.4);
+  vec3 s;
+  s.r = texture(uScene, vUv - cv*ca*1.6).r;
+  s.g = texture(uScene, vUv).g;
+  s.b = texture(uScene, vUv + cv*ca*1.6).b;
+
+  vec3 bl = texture(uBloom, vUv).rgb;
+  vec3 col = s + bl*(.20 + .12*kick + .10*beat);
+
+  col = aces(col);
+
+  // vignette
+  col *= mix(1., .55, smoothstep(.15,1.1,r2*1.6));
+
+  col = pow(col, vec3(1./2.2));
+  // static triangular dither (kills banding in dark gradients, keeps the loop exact)
+  float n = hash12(gl_FragCoord.xy) + hash12(gl_FragCoord.xy+17.3) - 1.;
+  col += n/255.;
+  o = vec4(col, 1.);
+}
+`;
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error(gl.getShaderInfoLog(s));
+      throw new Error('shader compile failed');
+    }
+    return s;
+  }
+  function program(fs) {
+    var p = gl.createProgram();
+    gl.attachShader(p, compile(gl.VERTEX_SHADER, VERT));
+    gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs));
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+    var u = {}, n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+    for (var i = 0; i < n; i++) { var nm = gl.getActiveUniform(p, i).name; u[nm] = gl.getUniformLocation(p, nm); }
+    return { p: p, u: u };
+  }
+
+  var pScene = program(SCENE), pDown = program(DOWN), pUp = program(UP), pComp = program(COMP);
+  var vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+
+  /* ------------------------------------------------------------ render targets */
+  function target(w, h) {
+    var tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    if (hasFloat) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.HALF_FLOAT, null);
+    else gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    var fb = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    return { tex: tex, fb: fb, w: w, h: h };
+  }
+
+  var sceneRT = target(W, H);
+  var LEVELS = 6, mips = [];
+  for (var l = 0, mw = W, mh = H; l < LEVELS; l++) {
+    mw = Math.max(2, mw >> 1); mh = Math.max(2, mh >> 1);
+    mips.push(target(mw, mh));
+  }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+  function bindTex(unit, tex) { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, tex); }
+  function draw(rt, w, h) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, rt ? rt.fb : null);
+    gl.viewport(0, 0, w, h);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  /* -------------------------------------------------------------------- frame */
+  function render(t) {
+    t = ((t % LOOP) + LOOP) % LOOP;
+    gl.disable(gl.BLEND);
+
+    // 1. HDR scene
+    gl.useProgram(pScene.p);
+    gl.uniform2f(pScene.u.uRes, W, H);
+    gl.uniform1f(pScene.u.uT, t);
+    draw(sceneRT, W, H);
+
+    // 2. bloom: downsample chain
+    gl.useProgram(pDown.p);
+    gl.uniform1i(pDown.u.uTex, 0);
+    var src = sceneRT;
+    for (var i = 0; i < LEVELS; i++) {
+      bindTex(0, src.tex);
+      gl.uniform2f(pDown.u.uTexel, 1 / src.w, 1 / src.h);
+      gl.uniform1f(pDown.u.uKaris, i === 0 ? 1 : 0);
+      draw(mips[i], mips[i].w, mips[i].h);
+      src = mips[i];
+    }
+
+    // 3. bloom: additive upsample chain
+    gl.useProgram(pUp.p);
+    gl.uniform1i(pUp.u.uTex, 0);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE);
+    for (var j = LEVELS - 2; j >= 0; j--) {
+      bindTex(0, mips[j + 1].tex);
+      gl.uniform2f(pUp.u.uTexel, 1 / mips[j + 1].w, 1 / mips[j + 1].h);
+      gl.uniform1f(pUp.u.uWeight, .75);
+      draw(mips[j], mips[j].w, mips[j].h);
+    }
+    gl.disable(gl.BLEND);
+
+    // 4. composite to screen
+    gl.useProgram(pComp.p);
+    gl.uniform1i(pComp.u.uScene, 0);
+    gl.uniform1i(pComp.u.uBloom, 1);
+    bindTex(0, sceneRT.tex);
+    bindTex(1, mips[0].tex);
+    gl.uniform2f(pComp.u.uRes, W, H);
+    gl.uniform1f(pComp.u.uT, t);
+    draw(null, W, H);
+  }
+
+  window.renderAt = function (sec) { render(sec); return true; };
+
+  var fixed = params.get('t');
+  if (fixed !== null) {
+    render(parseFloat(fixed) || 0);
+    window.__ready = true;
+    return;
+  }
+
+  var t0 = null;
+  function loop(now) {
+    if (t0 === null) t0 = now;
+    render((now - t0) / 1000);
+    window.__ready = true;
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
