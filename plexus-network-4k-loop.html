@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=3840, height=2160">
+<title>Abstract Plexus Network Connections - 4K Seamless Loop</title>
+<style>
+  html, body { margin:0; padding:0; width:3840px; height:2160px; background:#03040c; overflow:hidden; }
+  #c { position:absolute; left:0; top:0; width:3840px; height:2160px; display:block; }
+</style>
+</head>
+<body>
+<canvas id="c" width="3840" height="2160"></canvas>
+<script>
+(function(){
+'use strict';
+/* ------------------------------------------------------------------
+   Abstract Plexus Network Connections
+   3840x2160, 15 s seamless loop, deterministic (seeded) simulation.
+   Renderer: WebGL2 (HDR scene buffer + multi-scale bloom + depth of
+   field + tonemapping). Falls back to Canvas2D if WebGL2 is missing.
+   Every time-dependent quantity is a function of phase = t / 15 with
+   integer frequencies, so frame(0) === frame(15) exactly.
+------------------------------------------------------------------- */
+const W = 3840, H = 2160, DUR = 15, TAU = Math.PI * 2;
+const canvas = document.getElementById('c');
+canvas.width = W; canvas.height = H;
+
+/* ---------- deterministic random ---------- */
+function mulberry32(a){return function(){a|=0;a=(a+0x6D2B79F5)|0;let t=Math.imul(a^(a>>>15),1|a);t=(t+Math.imul(t^(t>>>7),61|t))^t;return((t^(t>>>14))>>>0)/4294967296;};}
+const rnd = mulberry32(0x5EED1234);
+const R = (a,b)=>a+(b-a)*rnd();
+function gauss(){let u=rnd();while(u<1e-9)u=rnd();return Math.sqrt(-2*Math.log(u))*Math.cos(TAU*rnd());}
+function randDir(){const y=R(-1,1),a=R(0,TAU),r=Math.sqrt(Math.max(0,1-y*y));return[r*Math.cos(a),y,r*Math.sin(a)];}
+
+/* ---------- 3x3 matrix helpers (row-major) ---------- */
+function rotY(a){const c=Math.cos(a),s=Math.sin(a);return[c,0,s, 0,1,0, -s,0,c];}
+function rotX(a){const c=Math.cos(a),s=Math.sin(a);return[1,0,0, 0,c,-s, 0,s,c];}
+function rotZ(a){const c=Math.cos(a),s=Math.sin(a);return[c,-s,0, s,c,0, 0,0,1];}
+function mul(a,b){const r=new Array(9);for(let i=0;i<3;i++)for(let j=0;j<3;j++)r[i*3+j]=a[i*3]*b[j]+a[i*3+1]*b[3+j]+a[i*3+2]*b[6+j];return r;}
+
+/* ---------- scene generation ---------- */
+const CORE = 340, HALO = 120, N = CORE + HALO, DUST = 1200, PULSES = 64, HOPS = 30;
+const base = new Float32Array(N*3), reach = new Float32Array(N), amp = new Float32Array(N),
+      fk = new Float32Array(N*3), phs = new Float32Array(N*3), colP = new Float32Array(N), nsz = new Float32Array(N);
+
+const clusters = [];
+for (let i=0;i<9;i++){ const d=randDir(), r=0.25+0.5*Math.sqrt(rnd()); clusters.push([d[0]*r, d[1]*r*0.7, d[2]*r]); }
+
+for (let i=0;i<N;i++){
+  let x,y,z;
+  if (i < CORE){
+    if (i < Math.floor(CORE*0.45)){ const c=clusters[i%9]; x=c[0]+gauss()*0.15; y=c[1]+gauss()*0.11; z=c[2]+gauss()*0.15; }
+    else { const d=randDir(), r=Math.pow(rnd(),0.32); x=d[0]*r; y=d[1]*r*0.78; z=d[2]*r; }
+    reach[i]=0.33; amp[i]=R(0.025,0.05); nsz[i]=R(0.0055,0.0105);
+  } else {
+    const d=randDir(), r=1.12+0.75*Math.pow(rnd(),0.85); x=d[0]*r; y=d[1]*r*0.7; z=d[2]*r;
+    reach[i]=0.46; amp[i]=R(0.05,0.09); nsz[i]=R(0.005,0.0095);
+  }
+  base[i*3]=x; base[i*3+1]=y; base[i*3+2]=z;
+  for (let k=0;k<3;k++){ fk[i*3+k] = rnd()<0.62 ? 1 : 2; phs[i*3+k]=R(0,TAU); }
+  colP[i] = Math.atan2(z,x)/TAU + 0.5 + y*0.10 + R(-0.06,0.06);
+}
+
+/* base adjacency (for pulse random walks) */
+const adj = []; for (let i=0;i<CORE;i++) adj.push([]);
+for (let i=0;i<CORE;i++) for (let j=i+1;j<CORE;j++){
+  const D=(reach[i]+reach[j])*0.5*0.78;
+  const dx=base[i*3]-base[j*3], dy=base[i*3+1]-base[j*3+1], dz=base[i*3+2]-base[j*3+2];
+  if (dx*dx+dy*dy+dz*dz < D*D){ adj[i].push(j); adj[j].push(i); }
+}
+const starts = []; for (let i=0;i<CORE;i++) if (adj[i].length>0) starts.push(i);
+const pulses = [];
+for (let p=0;p<PULSES;p++){
+  let cur = starts[Math.floor(rnd()*starts.length)], prev=-1; const path=[cur];
+  for (let h=0;h<HOPS;h++){
+    const nb=adj[cur]; let nxt=nb[Math.floor(rnd()*nb.length)], guard=0;
+    while (nb.length>1 && nxt===prev && guard++<8) nxt=nb[Math.floor(rnd()*nb.length)];
+    prev=cur; cur=nxt; path.push(cur);
+  }
+  pulses.push({ path:new Int32Array(path), off:rnd() });
+}
+
+/* dust field */
+const dust=new Float32Array(DUST*3), dSz=new Float32Array(DUST), dB=new Float32Array(DUST), dC=new Float32Array(DUST);
+for (let i=0;i<DUST;i++){
+  const d=randDir(), r=0.45+2.3*Math.pow(rnd(),0.75);
+  dust[i*3]=d[0]*r; dust[i*3+1]=d[1]*r*0.8; dust[i*3+2]=d[2]*r;
+  dSz[i]=R(0.0018,0.0042); dB[i]=R(0.07,0.22); dC[i]=rnd()<0.8?R(0,0.6):R(0.78,0.9);
+}
+
+/* ---------- per-frame buffers ---------- */
+const MAXL = 20000, LF = 11, PF = 6;
+const MAXP = N + DUST + PULSES + 8;
+const lineData = new Float32Array(MAXL*LF);
+const pointData = new Float32Array(MAXP*PF);
+const mpos=new Float32Array(N*3), vpos=new Float32Array(N*3), energy=new Float32Array(N), dvpos=new Float32Array(DUST*3);
+let lineCount=0, pointCount=0;
+const cam = { proj:[0,0], focus:3, dof:0.010, phase:0 };
+
+function buildFrame(t){
+  const ph = t/DUR; cam.phase = ph;
+  const theta = TAU*ph;                                 // one full slow turn per loop
+  const dist  = 3.35 + 0.10*Math.sin(TAU*ph+0.8);       // gentle dolly
+  const pitch = 0.20 + 0.06*Math.sin(TAU*ph);
+  const yaw   = 0.07*Math.sin(TAU*ph+2.2);
+  const ex=dist*Math.sin(yaw)*Math.cos(pitch), ey=dist*Math.sin(pitch), ez=dist*Math.cos(yaw)*Math.cos(pitch);
+  let fx=-ex, fy=-ey, fz=-ez; const fl=Math.hypot(fx,fy,fz); fx/=fl; fy/=fl; fz/=fl;
+  let sx=-fz, sy=0, sz2=fx; const sl=Math.hypot(sx,sz2); sx/=sl; sz2/=sl;
+  const ux=sy*fz-sz2*fy, uy=sz2*fx-sx*fz, uz=sx*fy-sy*fx;
+  const Rv=[sx,sy,sz2, ux,uy,uz, -fx,-fy,-fz];
+  const M = mul(mul(rotZ(-0.20), rotX(0.28)), rotY(theta));
+  const C = mul(Rv, M);
+  const tx=-(sx*ex+sy*ey+sz2*ez), ty=-(ux*ex+uy*ey+uz*ez), tz=(fx*ex+fy*ey+fz*ez);
+  const f = 1/Math.tan(36*Math.PI/360);
+  cam.proj[0]=f/(W/H); cam.proj[1]=f; cam.focus=dist-0.55; cam.dof=0.010;
+  const breathe = 1 + 0.025*Math.sin(TAU*ph+1.0);
+
+  for (let i=0;i<N;i++){
+    const i3=i*3, a=amp[i];
+    const x=(base[i3]  +a*Math.sin(TAU*fk[i3]*ph+phs[i3]))*breathe;
+    const y=(base[i3+1]+a*0.7*Math.sin(TAU*fk[i3+1]*ph+phs[i3+1]))*breathe;
+    const z=(base[i3+2]+a*Math.sin(TAU*fk[i3+2]*ph+phs[i3+2]))*breathe;
+    mpos[i3]=x; mpos[i3+1]=y; mpos[i3+2]=z;
+    vpos[i3]  =C[0]*x+C[1]*y+C[2]*z+tx;
+    vpos[i3+1]=C[3]*x+C[4]*y+C[5]*z+ty;
+    vpos[i3+2]=C[6]*x+C[7]*y+C[8]*z+tz;
+  }
+  for (let i=0;i<DUST;i++){
+    const i3=i*3, x=dust[i3], y=dust[i3+1], z=dust[i3+2];
+    dvpos[i3]  =C[0]*x+C[1]*y+C[2]*z+tx;
+    dvpos[i3+1]=C[3]*x+C[4]*y+C[5]*z+ty;
+    dvpos[i3+2]=C[6]*x+C[7]*y+C[8]*z+tz;
+  }
+
+  /* connections */
+  energy.fill(0); let lc=0; const DMAX=0.46;
+  for (let i=0;i<N;i++){
+    const i3=i*3, xi=mpos[i3], yi=mpos[i3+1], zi=mpos[i3+2], ri=reach[i], ci=colP[i];
+    for (let j=i+1;j<N;j++){
+      const j3=j*3;
+      const dx=mpos[j3]-xi;   if (dx>DMAX||dx<-DMAX) continue;
+      const dy=mpos[j3+1]-yi; if (dy>DMAX||dy<-DMAX) continue;
+      const dz=mpos[j3+2]-zi; if (dz>DMAX||dz<-DMAX) continue;
+      const D=(ri+reach[j])*0.5, d2=dx*dx+dy*dy+dz*dz;
+      if (d2>=D*D) continue;
+      const w=1-Math.sqrt(d2)/D;
+      energy[i]+=w; energy[j]+=w;
+      if (lc>=MAXL) continue;
+      const mx=xi+dx*0.5, my=yi+dy*0.5, mz=zi+dz*0.5;
+      const wave=0.72+0.28*Math.sin(TAU*2*ph-(mx*1.1+my*0.7+mz*0.5)*2.2);   // brightness ripple through the net
+      const al=0.95*Math.pow(w,1.3)*wave;
+      let cj=colP[j]; if (cj-ci>0.5) cj-=1; else if (ci-cj>0.5) cj+=1;
+      const o=lc*LF;
+      lineData[o]=vpos[i3]; lineData[o+1]=vpos[i3+1]; lineData[o+2]=vpos[i3+2];
+      lineData[o+3]=vpos[j3]; lineData[o+4]=vpos[j3+1]; lineData[o+5]=vpos[j3+2];
+      lineData[o+6]=al; lineData[o+7]=al; lineData[o+8]=ci; lineData[o+9]=cj; lineData[o+10]=0.75+0.7*w;
+      lc++;
+    }
+  }
+
+  /* nodes */
+  let pc=0;
+  for (let i=0;i<N;i++){
+    const E=Math.min(energy[i],6), o=pc*PF, i3=i*3;
+    pointData[o]=vpos[i3]; pointData[o+1]=vpos[i3+1]; pointData[o+2]=vpos[i3+2];
+    pointData[o+3]=nsz[i]*(0.8+0.11*E);
+    pointData[o+4]=(0.45+0.10*E)*(i<CORE?1:0.8);
+    pointData[o+5]=colP[i]; pc++;
+  }
+  for (let i=0;i<DUST;i++){
+    const o=pc*PF, i3=i*3;
+    pointData[o]=dvpos[i3]; pointData[o+1]=dvpos[i3+1]; pointData[o+2]=dvpos[i3+2];
+    pointData[o+3]=dSz[i]; pointData[o+4]=dB[i]; pointData[o+5]=dC[i]; pc++;
+  }
+
+  /* data pulses travelling along connections */
+  const TL=0.7;
+  for (let p=0;p<PULSES;p++){
+    const P=pulses[p]; const s=((ph+P.off)%1)*HOPS; const j=Math.min(HOPS-1,Math.floor(s)); const loc=s-j;
+    let env=Math.min(1,Math.min(s,HOPS-s)); env=env*env*(3-2*env);
+    const a=P.path[j], b=P.path[j+1], a3=a*3, b3=b*3;
+    const dx=mpos[b3]-mpos[a3], dy=mpos[b3+1]-mpos[a3+1], dz=mpos[b3+2]-mpos[a3+2];
+    const D=(reach[a]+reach[b])*0.5, w=1-Math.sqrt(dx*dx+dy*dy+dz*dz)/D;
+    let vis=Math.max(0,Math.min(1,w/0.22)); vis=vis*vis*(3-2*vis);
+    const al=env*vis; if (al<0.01) continue;
+    const e=0.7*loc+0.3*loc*loc*(3-2*loc);
+    const ax=vpos[a3], ay=vpos[a3+1], az=vpos[a3+2];
+    const hx=ax+(vpos[b3]-ax)*e, hy=ay+(vpos[b3+1]-ay)*e, hz=az+(vpos[b3+2]-az)*e;
+    if (pc<MAXP){ const o=pc*PF; pointData[o]=hx; pointData[o+1]=hy; pointData[o+2]=hz; pointData[o+3]=0.0060; pointData[o+4]=1.4*al; pointData[o+5]=2.0; pc++; }
+    const te=e-TL;
+    if (lc<MAXL){
+      const u0=Math.max(0,te), a0=(u0-te)/TL, o=lc*LF;
+      lineData[o]=ax+(vpos[b3]-ax)*u0; lineData[o+1]=ay+(vpos[b3+1]-ay)*u0; lineData[o+2]=az+(vpos[b3+2]-az)*u0;
+      lineData[o+3]=hx; lineData[o+4]=hy; lineData[o+5]=hz;
+      lineData[o+6]=a0*al*1.15; lineData[o+7]=al*1.15; lineData[o+8]=2; lineData[o+9]=2; lineData[o+10]=1.5; lc++;
+    }
+    if (te<0 && j>0 && lc<MAXL){
+      const pa=P.path[j-1], p3=pa*3, u1=1+te, o=lc*LF;
+      const px=vpos[p3], py=vpos[p3+1], pz=vpos[p3+2];
+      lineData[o]=px+(ax-px)*u1; lineData[o+1]=py+(ay-py)*u1; lineData[o+2]=pz+(az-pz)*u1;
+      lineData[o+3]=ax; lineData[o+4]=ay; lineData[o+5]=az;
+      lineData[o+6]=0; lineData[o+7]=(-te/TL)*al*1.15; lineData[o+8]=2; lineData[o+9]=2; lineData[o+10]=1.5; lc++;
+    }
+  }
+  lineCount=lc; pointCount=pc;
+}
+
+/* ---------- palette (JS mirror for 2D fallback) ---------- */
+function sstep(a,b,x){x=Math.max(0,Math.min(1,(x-a)/(b-a)));return x*x*(3-2*x);}
+function mix3(a,b,t){return[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t,a[2]+(b[2]-a[2])*t];}
+function paletteJS(c){
+  if (c>1.5) return [1.0,0.93,0.86];
+  c=c-Math.floor(c);
+  const c0=[0.16,0.90,1.00], c1=[0.22,0.52,1.00], c2=[0.60,0.38,1.00], c3=[1.00,0.38,0.78];
+  let col=mix3(c0,c1,sstep(0.05,0.40,c)); col=mix3(col,c2,sstep(0.40,0.70,c));
+  col=mix3(col,c3,sstep(0.76,0.90,c)); col=mix3(col,c0,sstep(0.92,1.00,c)); return col;
+}
+
+/* ================= WebGL2 renderer ================= */
+function initGL(){
+  const gl = canvas.getContext('webgl2', {antialias:false, alpha:false, depth:false, stencil:false, premultipliedAlpha:false, powerPreference:'high-performance', preserveDrawingBuffer:true});
+  if (!gl) return null;
+
+  const PAL = `
+  vec3 palette(float c){
+    if (c > 1.5) return pow(vec3(1.0,0.93,0.86), vec3(2.2));
+    c = fract(c);
+    vec3 c0 = vec3(0.16,0.90,1.00);
+    vec3 c1 = vec3(0.22,0.52,1.00);
+    vec3 c2 = vec3(0.60,0.38,1.00);
+    vec3 c3 = vec3(1.00,0.38,0.78);
+    vec3 col = mix(c0,c1,smoothstep(0.05,0.40,c));
+    col = mix(col,c2,smoothstep(0.40,0.70,c));
+    col = mix(col,c3,smoothstep(0.76,0.90,c));
+    col = mix(col,c0,smoothstep(0.92,1.00,c));
+    return pow(col, vec3(2.2));
+  }`;
+
+  const VS_LINE = `#version 300 es
+  precision highp float;
+  layout(location=0) in vec2 aC;
+  layout(location=1) in vec3 iP0;
+  layout(location=2) in vec3 iP1;
+  layout(location=3) in vec2 iA;
+  layout(location=4) in vec2 iC;
+  layout(location=5) in float iW;
+  uniform vec2 uProj; uniform vec2 uRes; uniform float uFocus; uniform float uDof; uniform float uLineW;
+  out float vAcross; out float vHw; out float vSoft; out float vAlpha; out float vCol;
+  vec2 toPx(vec3 p, float z){ return (vec2(uProj.x*p.x, uProj.y*p.y)/z*0.5+0.5)*uRes; }
+  void main(){
+    float z0=-iP0.z, z1=-iP1.z;
+    vec2 s0=toPx(iP0,z0), s1=toPx(iP1,z1);
+    vec2 d=s1-s0; float len=max(length(d),1e-4); d/=len; vec2 n=vec2(-d.y,d.x);
+    float z=mix(z0,z1,aC.x);
+    float ppu=0.5*uRes.y*uProj.y/z;
+    float hw=uLineW*iW*ppu;
+    float coc=uDof*abs(z-uFocus)/z*uRes.y*0.5;
+    float ext=hw+coc+1.5;
+    vec2 p=mix(s0,s1,aC.x)+n*(aC.y*ext);
+    gl_Position=vec4(p/uRes*2.0-1.0,0.0,1.0);
+    vAcross=aC.y*ext; vHw=hw; vSoft=coc;
+    float fade=clamp(1.15-(z-uFocus)*0.32,0.35,1.3);
+    vAlpha=mix(iA.x,iA.y,aC.x)*fade*hw/(hw+coc*0.6);
+    vCol=mix(iC.x,iC.y,aC.x);
+  }`;
+  const FS_LINE = `#version 300 es
+  precision highp float;
+  in float vAcross; in float vHw; in float vSoft; in float vAlpha; in float vCol;
+  out vec4 o;
+  ${PAL}
+  void main(){
+    float d=abs(vAcross);
+    float e=(vHw-d)/(vSoft*0.7+1.0);
+    float cov=clamp(e*0.5+0.5,0.0,1.0); cov=cov*cov*(3.0-2.0*cov);
+    o=vec4(palette(vCol)*cov*vAlpha,1.0);
+  }`;
+
+  const VS_POINT = `#version 300 es
+  precision highp float;
+  layout(location=0) in vec2 aC;
+  layout(location=1) in vec3 iP;
+  layout(location=2) in float iS;
+  layout(location=3) in float iB;
+  layout(location=4) in float iC;
+  uniform vec2 uProj; uniform vec2 uRes; uniform float uFocus; uniform float uDof;
+  out vec2 vL; out float vR; out float vSoft; out float vB; out float vC;
+  void main(){
+    float z=-iP.z;
+    vec2 c=(vec2(uProj.x*iP.x,uProj.y*iP.y)/z*0.5+0.5)*uRes;
+    float ppu=0.5*uRes.y*uProj.y/z;
+    float r=iS*ppu;
+    float coc=uDof*abs(z-uFocus)/z*uRes.y;
+    float Rr=r+coc;
+    float q=Rr*2.4+2.0;
+    gl_Position=vec4((c+aC*q)/uRes*2.0-1.0,0.0,1.0);
+    vL=aC*q; vR=Rr; vSoft=coc*0.5+0.8;
+    float fade=clamp(1.15-(z-uFocus)*0.32,0.35,1.3);
+    vB=iB*fade*r/(r+coc*0.8);
+    vC=iC;
+  }`;
+  const FS_POINT = `#version 300 es
+  precision highp float;
+  in vec2 vL; in float vR; in float vSoft; in float vB; in float vC;
+  out vec4 o;
+  ${PAL}
+  void main(){
+    float d=length(vL);
+    float e=(vR-d)/vSoft; float disk=clamp(e*0.5+0.5,0.0,1.0); disk=disk*disk*(3.0-2.0*disk);
+    float r2=vR*vR;
+    float hot=exp(-d*d/(r2*0.30));
+    float halo=exp(-d*d/(r2*1.6));
+    vec3 col=palette(vC);
+    vec3 c=col*(disk*0.9+halo*0.30)+vec3(1.0)*hot*0.6;
+    o=vec4(c*vB,1.0);
+  }`;
+
+  const VS_FS = `#version 300 es
+  precision highp float;
+  layout(location=0) in vec2 aP; out vec2 vUv;
+  void main(){ vUv=aP*0.5+0.5; gl_Position=vec4(aP,0.0,1.0); }`;
+  const FS_DOWN = `#version 300 es
+  precision highp float;
+  uniform sampler2D uTex; uniform vec2 uHalfPx; in vec2 vUv; out vec4 o;
+  void main(){
+    vec2 h=uHalfPx;
+    vec4 s=texture(uTex,vUv)*4.0;
+    s+=texture(uTex,vUv-h); s+=texture(uTex,vUv+h);
+    s+=texture(uTex,vUv+vec2(h.x,-h.y)); s+=texture(uTex,vUv-vec2(h.x,-h.y));
+    o=s/8.0;
+  }`;
+  const FS_UP = `#version 300 es
+  precision highp float;
+  uniform sampler2D uTex; uniform sampler2D uAdd; uniform vec2 uHalfPx; in vec2 vUv; out vec4 o;
+  void main(){
+    vec2 h=uHalfPx;
+    vec4 s=texture(uTex,vUv+vec2(-h.x*2.0,0.0));
+    s+=texture(uTex,vUv+vec2(-h.x,h.y))*2.0;
+    s+=texture(uTex,vUv+vec2(0.0,h.y*2.0));
+    s+=texture(uTex,vUv+vec2(h.x,h.y))*2.0;
+    s+=texture(uTex,vUv+vec2(h.x*2.0,0.0));
+    s+=texture(uTex,vUv+vec2(h.x,-h.y))*2.0;
+    s+=texture(uTex,vUv+vec2(0.0,-h.y*2.0));
+    s+=texture(uTex,vUv+vec2(-h.x,-h.y))*2.0;
+    o=s/12.0+texture(uAdd,vUv);
+  }`;
+  const FS_COMP = `#version 300 es
+  precision highp float;
+  uniform sampler2D uScene; uniform sampler2D uBloom; uniform vec2 uRes; uniform float uPhase; uniform float uBloomStr; uniform float uExposure;
+  in vec2 vUv; out vec4 o;
+  float hash(vec2 p){ return fract(sin(dot(p,vec2(12.9898,78.233)))*43758.5453); }
+  void main(){
+    vec2 uv=vUv; float asp=uRes.x/uRes.y; vec2 p=(uv-0.5)*vec2(asp,1.0)*2.0;
+    float rad=length(p);
+    vec3 bgD=mix(vec3(0.040,0.052,0.135), vec3(0.008,0.010,0.030), smoothstep(0.0,1.45,rad));
+    float phz=uPhase*6.2831853;
+    vec2 b1=vec2(-0.75,0.35)+0.10*vec2(sin(phz),cos(phz+1.0));
+    vec2 b2=vec2(0.85,-0.40)+0.10*vec2(cos(phz+2.0),sin(phz+0.5));
+    bgD+=vec3(0.03,0.13,0.17)*exp(-dot(p-b1,p-b1)*1.6)*0.55;
+    bgD+=vec3(0.13,0.05,0.20)*exp(-dot(p-b2,p-b2)*1.4)*0.55;
+    vec3 bg=pow(bgD,vec3(2.2));
+    vec3 s=texture(uScene,uv).rgb+texture(uBloom,uv).rgb*uBloomStr;
+    vec3 lit=1.0-exp(-s*uExposure);
+    vec3 col=bg+lit;
+    col*=1.0-0.38*smoothstep(0.55,1.75,rad);
+    col=pow(max(col,0.0),vec3(1.0/2.2));
+    col+=(hash(gl_FragCoord.xy+fract(uPhase*7.0)*100.0)-0.5)*(1.5/255.0);
+    o=vec4(col,1.0);
+  }`;
+
+  function sh(type,src){const s=gl.createShader(type);gl.shaderSource(s,src);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw new Error(gl.getShaderInfoLog(s));return s;}
+  function prog(vs,fs){const p=gl.createProgram();gl.attachShader(p,sh(gl.VERTEX_SHADER,vs));gl.attachShader(p,sh(gl.FRAGMENT_SHADER,fs));gl.linkProgram(p);if(!gl.getProgramParameter(p,gl.LINK_STATUS))throw new Error(gl.getProgramInfoLog(p));const u={};const n=gl.getProgramParameter(p,gl.ACTIVE_UNIFORMS);for(let i=0;i<n;i++){const inf=gl.getActiveUniform(p,i);u[inf.name]=gl.getUniformLocation(p,inf.name);}return{p,u};}
+
+  const pLine=prog(VS_LINE,FS_LINE), pPoint=prog(VS_POINT,FS_POINT), pDown=prog(VS_FS,FS_DOWN), pUp=prog(VS_FS,FS_UP), pComp=prog(VS_FS,FS_COMP);
+
+  /* HDR render targets (fall back to 8-bit if float rendering unsupported) */
+  let hdr = !!(gl.getExtension('EXT_color_buffer_float') || gl.getExtension('EXT_color_buffer_half_float'));
+  function mkTex(w,h){
+    const t=gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,t);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+    if (hdr) gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA16F,w,h,0,gl.RGBA,gl.HALF_FLOAT,null);
+    else gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA8,w,h,0,gl.RGBA,gl.UNSIGNED_BYTE,null);
+    return t;
+  }
+  function mkFbo(w,h){
+    const tex=mkTex(w,h), fb=gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER,fb); gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,tex,0);
+    const ok=gl.checkFramebufferStatus(gl.FRAMEBUFFER)===gl.FRAMEBUFFER_COMPLETE;
+    gl.bindFramebuffer(gl.FRAMEBUFFER,null);
+    return {fb,tex,ok};
+  }
+  let scene=mkFbo(W,H);
+  if (!scene.ok && hdr){ hdr=false; scene=mkFbo(W,H); }
+  const levels=[]; let lw=W>>1, lh=H>>1;
+  for (let i=0;i<5;i++){ levels.push({down:mkFbo(lw,lh), up:(i<4?mkFbo(lw,lh):null), w:lw, h:lh}); lw=Math.max(1,lw>>1); lh=Math.max(1,lh>>1); }
+
+  /* geometry */
+  const lineBuf=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,lineBuf); gl.bufferData(gl.ARRAY_BUFFER,lineData.byteLength,gl.DYNAMIC_DRAW);
+  const pointBuf=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,pointBuf); gl.bufferData(gl.ARRAY_BUFFER,pointData.byteLength,gl.DYNAMIC_DRAW);
+  function mkInstVao(quad, buf, stride, layout){
+    const vao=gl.createVertexArray(); gl.bindVertexArray(vao);
+    const qb=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,qb); gl.bufferData(gl.ARRAY_BUFFER,quad,gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0,2,gl.FLOAT,false,0,0);
+    gl.bindBuffer(gl.ARRAY_BUFFER,buf);
+    for (const a of layout){ gl.enableVertexAttribArray(a[0]); gl.vertexAttribPointer(a[0],a[1],gl.FLOAT,false,stride*4,a[2]*4); gl.vertexAttribDivisor(a[0],1); }
+    gl.bindVertexArray(null); return vao;
+  }
+  const vaoL=mkInstVao(new Float32Array([0,-1, 1,-1, 1,1, 0,-1, 1,1, 0,1]), lineBuf, LF, [[1,3,0],[2,3,3],[3,2,6],[4,2,8],[5,1,10]]);
+  const vaoP=mkInstVao(new Float32Array([-1,-1, 1,-1, 1,1, -1,-1, 1,1, -1,1]), pointBuf, PF, [[1,3,0],[2,1,3],[3,1,4],[4,1,5]]);
+  const vaoFS=gl.createVertexArray(); gl.bindVertexArray(vaoFS);
+  const fsb=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,fsb); gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1, 3,-1, -1,3]),gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0,2,gl.FLOAT,false,0,0); gl.bindVertexArray(null);
+
+  const LINE_W = 0.0015, BLOOM = 0.42, EXPOSURE = hdr ? 1.15 : 1.5;
+
+  function render(t){
+    buildFrame(t);
+    gl.bindBuffer(gl.ARRAY_BUFFER,lineBuf); gl.bufferSubData(gl.ARRAY_BUFFER,0,lineData,0,lineCount*LF);
+    gl.bindBuffer(gl.ARRAY_BUFFER,pointBuf); gl.bufferSubData(gl.ARRAY_BUFFER,0,pointData,0,pointCount*PF);
+
+    /* scene (additive, HDR) */
+    gl.bindFramebuffer(gl.FRAMEBUFFER,scene.fb); gl.viewport(0,0,W,H);
+    gl.clearColor(0,0,0,1); gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE,gl.ONE);
+    gl.useProgram(pLine.p);
+    gl.uniform2f(pLine.u.uProj,cam.proj[0],cam.proj[1]); gl.uniform2f(pLine.u.uRes,W,H);
+    gl.uniform1f(pLine.u.uFocus,cam.focus); gl.uniform1f(pLine.u.uDof,cam.dof); gl.uniform1f(pLine.u.uLineW,LINE_W);
+    gl.bindVertexArray(vaoL); gl.drawArraysInstanced(gl.TRIANGLES,0,6,lineCount);
+    gl.useProgram(pPoint.p);
+    gl.uniform2f(pPoint.u.uProj,cam.proj[0],cam.proj[1]); gl.uniform2f(pPoint.u.uRes,W,H);
+    gl.uniform1f(pPoint.u.uFocus,cam.focus); gl.uniform1f(pPoint.u.uDof,cam.dof);
+    gl.bindVertexArray(vaoP); gl.drawArraysInstanced(gl.TRIANGLES,0,6,pointCount);
+    gl.disable(gl.BLEND);
+
+    /* bloom: progressive downsample, then upsample + accumulate */
+    gl.bindVertexArray(vaoFS);
+    gl.useProgram(pDown.p); gl.uniform1i(pDown.u.uTex,0);
+    let src=scene.tex;
+    for (let i=0;i<levels.length;i++){
+      const L=levels[i]; gl.bindFramebuffer(gl.FRAMEBUFFER,L.down.fb); gl.viewport(0,0,L.w,L.h);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,src);
+      gl.uniform2f(pDown.u.uHalfPx,0.5/L.w,0.5/L.h); gl.drawArrays(gl.TRIANGLES,0,3); src=L.down.tex;
+    }
+    gl.useProgram(pUp.p); gl.uniform1i(pUp.u.uTex,0); gl.uniform1i(pUp.u.uAdd,1);
+    for (let i=levels.length-2;i>=0;i--){
+      const L=levels[i]; gl.bindFramebuffer(gl.FRAMEBUFFER,L.up.fb); gl.viewport(0,0,L.w,L.h);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,src);
+      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D,L.down.tex);
+      gl.uniform2f(pUp.u.uHalfPx,0.5/L.w,0.5/L.h); gl.drawArrays(gl.TRIANGLES,0,3); src=L.up.tex;
+    }
+
+    /* composite: background + scene + bloom, tonemap, vignette, dither */
+    gl.bindFramebuffer(gl.FRAMEBUFFER,null); gl.viewport(0,0,W,H);
+    gl.useProgram(pComp.p);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,scene.tex);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D,src);
+    gl.uniform1i(pComp.u.uScene,0); gl.uniform1i(pComp.u.uBloom,1);
+    gl.uniform2f(pComp.u.uRes,W,H); gl.uniform1f(pComp.u.uPhase,cam.phase);
+    gl.uniform1f(pComp.u.uBloomStr,BLOOM); gl.uniform1f(pComp.u.uExposure,EXPOSURE);
+    gl.drawArrays(gl.TRIANGLES,0,3);
+  }
+  return { render };
+}
+
+/* ================= Canvas2D fallback ================= */
+function init2D(){
+  const ctx=canvas.getContext('2d'); if (!ctx) return null;
+  const SPR=64;
+  function mkSprite(r,g,b){
+    const c=document.createElement('canvas'); c.width=c.height=SPR*2; const x=c.getContext('2d');
+    const gr=x.createRadialGradient(SPR,SPR,0,SPR,SPR,SPR);
+    gr.addColorStop(0,'rgba(255,255,255,1)'); gr.addColorStop(0.22,`rgba(${r},${g},${b},0.95)`);
+    gr.addColorStop(0.55,`rgba(${r},${g},${b},0.25)`); gr.addColorStop(1,`rgba(${r},${g},${b},0)`);
+    x.fillStyle=gr; x.fillRect(0,0,SPR*2,SPR*2); return c;
+  }
+  const NS=24, sprites=[];
+  for (let i=0;i<NS;i++){ const c=paletteJS(i/NS).map(v=>Math.round(v*255)); sprites.push(mkSprite(c[0],c[1],c[2])); }
+  const white=mkSprite(255,238,222);
+  function render(t){
+    buildFrame(t);
+    const px=cam.proj[0], py=cam.proj[1];
+    ctx.globalCompositeOperation='source-over'; ctx.globalAlpha=1;
+    const g=ctx.createRadialGradient(W*0.5,H*0.5,0,W*0.5,H*0.5,H*0.95);
+    g.addColorStop(0,'#0b0f2c'); g.addColorStop(1,'#020308'); ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+    ctx.globalCompositeOperation='lighter'; ctx.lineCap='round';
+    for (let i=0;i<lineCount;i++){
+      const o=i*LF; const z0=-lineData[o+2], z1=-lineData[o+5];
+      const x0=(px*lineData[o]/z0*0.5+0.5)*W, y0=(0.5-py*lineData[o+1]/z0*0.5)*H;
+      const x1=(px*lineData[o+3]/z1*0.5+0.5)*W, y1=(0.5-py*lineData[o+4]/z1*0.5)*H;
+      const a=Math.min(1,(lineData[o+6]+lineData[o+7])*0.5*0.9); if (a<0.01) continue;
+      const c=paletteJS((lineData[o+8]+lineData[o+9])*0.5);
+      ctx.strokeStyle=`rgba(${Math.round(c[0]*255)},${Math.round(c[1]*255)},${Math.round(c[2]*255)},${a.toFixed(3)})`;
+      ctx.lineWidth=Math.max(1.2, 0.0015*lineData[o+10]*(0.5*H*py/((z0+z1)*0.5))*2);
+      ctx.beginPath(); ctx.moveTo(x0,y0); ctx.lineTo(x1,y1); ctx.stroke();
+    }
+    for (let i=0;i<pointCount;i++){
+      const o=i*PF; const z=-pointData[o+2];
+      const x=(px*pointData[o]/z*0.5+0.5)*W, y=(0.5-py*pointData[o+1]/z*0.5)*H;
+      const r=pointData[o+3]*(0.5*H*py/z)*2.6+2; const b=Math.min(1,pointData[o+4]*0.9);
+      const cp=pointData[o+5]; const spr=cp>1.5?white:sprites[((Math.floor((cp-Math.floor(cp))*NS))%NS+NS)%NS];
+      ctx.globalAlpha=b; ctx.drawImage(spr,x-r,y-r,r*2,r*2);
+    }
+    ctx.globalAlpha=1;
+  }
+  return { render };
+}
+
+let renderer=null;
+try { renderer=initGL(); } catch(e){ renderer=null; }
+if (!renderer) renderer=init2D();
+
+/* ---------- main loop: 15 s seamless cycle, autoplays ---------- */
+let t0=null, frozen=null;
+const m=/[#&?]t=([0-9.]+)/.exec(location.hash||''); if (m) frozen=parseFloat(m[1])%DUR;
+function frame(ts){
+  if (t0===null) t0=ts;
+  const t = frozen!==null ? frozen : (((ts-t0)/1000)%DUR);
+  renderer.render(t);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+window.PLEXUS={ duration:DUR, seek(s){ frozen=((s%DUR)+DUR)%DUR; }, play(){ frozen=null; t0=null; } };
+})();
+</script>
+</body>
+</html>
