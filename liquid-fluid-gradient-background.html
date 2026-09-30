@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=3840, initial-scale=1">
+<title>Liquid Fluid Gradient Background · 4K Seamless Loop</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body {
+    margin: 0; padding: 0;
+    width: 3840px; height: 2160px;
+    overflow: hidden;
+    background: #07051a;
+  }
+  canvas#stage {
+    display: block;
+    width: 3840px; height: 2160px;
+    position: absolute; top: 0; left: 0;
+    image-rendering: auto;
+  }
+</style>
+</head>
+<body>
+<canvas id="stage" width="3840" height="2160"></canvas>
+
+<script id="vs" type="x-shader/x-vertex">#version 300 es
+precision highp float;
+in vec2 aPos;
+void main(){ gl_Position = vec4(aPos, 0.0, 1.0); }
+</script>
+
+<script id="fs" type="x-shader/x-fragment">#version 300 es
+precision highp float;
+precision highp int;
+
+uniform vec2  uRes;     // 3840 x 2160
+uniform float uPhase;   // 0..1 loop phase (15 s per cycle)
+uniform float uFrame;   // integer frame index inside the loop (0..449)
+
+out vec4 fragColor;
+
+#define TAU 6.28318530718
+
+// ---------------------------------------------------------------------------
+// 4D simplex noise (Ian McEwan / Stefan Gustavson, MIT). Time is fed in on a
+// circle in the (z,w) plane, so the field is mathematically periodic: the
+// frame at phase 0 and phase 1 are bit-identical -> seamless loop.
+// ---------------------------------------------------------------------------
+vec4  permute(vec4 x){ return mod(((x*34.0)+1.0)*x, 289.0); }
+float permute(float x){ return floor(mod(((x*34.0)+1.0)*x, 289.0)); }
+vec4  taylorInvSqrt(vec4 r){ return 1.79284291400159 - 0.85373472095314 * r; }
+float taylorInvSqrt(float r){ return 1.79284291400159 - 0.85373472095314 * r; }
+
+vec4 grad4(float j, vec4 ip){
+  const vec4 ones = vec4(1.0, 1.0, 1.0, -1.0);
+  vec4 p, s;
+  p.xyz = floor(fract(vec3(j) * ip.xyz) * 7.0) * ip.z - 1.0;
+  p.w   = 1.5 - dot(abs(p.xyz), ones.xyz);
+  s     = vec4(lessThan(p, vec4(0.0)));
+  p.xyz = p.xyz + (s.xyz * 2.0 - 1.0) * s.www;
+  return p;
+}
+
+float snoise(vec4 v){
+  const vec2 C = vec2(0.138196601125010504, 0.309016994374947451);
+  vec4 i  = floor(v + dot(v, C.yyyy));
+  vec4 x0 = v - i + dot(i, C.xxxx);
+
+  vec4 i0;
+  vec3 isX  = step(x0.yzw, x0.xxx);
+  vec3 isYZ = step(x0.zww, x0.yyz);
+  i0.x   = isX.x + isX.y + isX.z;
+  i0.yzw = 1.0 - isX;
+  i0.y  += isYZ.x + isYZ.y;
+  i0.zw += 1.0 - isYZ.xy;
+  i0.z  += isYZ.z;
+  i0.w  += 1.0 - isYZ.z;
+
+  vec4 i3 = clamp(i0,       0.0, 1.0);
+  vec4 i2 = clamp(i0 - 1.0, 0.0, 1.0);
+  vec4 i1 = clamp(i0 - 2.0, 0.0, 1.0);
+
+  vec4 x1 = x0 - i1  + 1.0 * C.xxxx;
+  vec4 x2 = x0 - i2  + 2.0 * C.xxxx;
+  vec4 x3 = x0 - i3  + 3.0 * C.xxxx;
+  vec4 x4 = x0 - 1.0 + 4.0 * C.xxxx;
+
+  i = mod(i, 289.0);
+  float j0 = permute(permute(permute(permute(i.w) + i.z) + i.y) + i.x);
+  vec4  j1 = permute(permute(permute(permute(
+              i.w + vec4(i1.w, i2.w, i3.w, 1.0))
+            + i.z + vec4(i1.z, i2.z, i3.z, 1.0))
+            + i.y + vec4(i1.y, i2.y, i3.y, 1.0))
+            + i.x + vec4(i1.x, i2.x, i3.x, 1.0));
+
+  vec4 ip = vec4(1.0/294.0, 1.0/49.0, 1.0/7.0, 0.0);
+  vec4 p0 = grad4(j0,   ip);
+  vec4 p1 = grad4(j1.x, ip);
+  vec4 p2 = grad4(j1.y, ip);
+  vec4 p3 = grad4(j1.z, ip);
+  vec4 p4 = grad4(j1.w, ip);
+
+  vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3)));
+  p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;
+  p4 *= taylorInvSqrt(dot(p4,p4));
+
+  vec3 m0 = max(0.6 - vec3(dot(x0,x0), dot(x1,x1), dot(x2,x2)), 0.0);
+  vec2 m1 = max(0.6 - vec2(dot(x3,x3), dot(x4,x4)), 0.0);
+  m0 = m0 * m0; m1 = m1 * m1;
+  return 49.0 * (dot(m0*m0, vec3(dot(p0,x0), dot(p1,x1), dot(p2,x2)))
+               + dot(m1*m1, vec2(dot(p3,x3), dot(p4,x4))));
+}
+
+// fractal Brownian motion in 4D (xy = space, zw = looping time circle).
+// Few octaves + low gain -> big, soft, smooth forms (no "marble" micro detail).
+float fbm(vec4 p){
+  float a = 0.55, s = 0.0, n = 0.0;
+  mat2 rot = mat2(0.80, 0.60, -0.60, 0.80);
+  for (int i = 0; i < 3; i++){
+    s += a * snoise(p);
+    n += a;
+    p.xy = rot * p.xy * 1.9;
+    p.zw *= 1.25;
+    a *= 0.42;
+  }
+  return s / n;
+}
+
+// -------------------------- palette ----------------------------------------
+// Six contemporary, saturated pools. Each one lives in its own smooth
+// noise field; a softmax blend keeps boundaries silky and lets several colors
+// coexist on screen at once (no global colour "flashing").
+const vec3 C0 = vec3(0.36, 0.10, 0.98);   // electric violet
+const vec3 C1 = vec3(1.00, 0.16, 0.60);   // hot magenta
+const vec3 C2 = vec3(1.00, 0.47, 0.30);   // coral
+const vec3 C3 = vec3(1.00, 0.78, 0.30);   // warm amber
+const vec3 C4 = vec3(0.10, 0.82, 0.95);   // aqua
+const vec3 C5 = vec3(0.09, 0.05, 0.42);   // deep indigo (shadow pools)
+
+// ---------------------------- utils -----------------------------------------
+float hash21(vec2 p){
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+mat2 rot2(float a){ float c = cos(a), s = sin(a); return mat2(c, -s, s, c); }
+vec3 sat(vec3 c, float k){ float l = dot(c, vec3(0.2126, 0.7152, 0.0722)); return mix(vec3(l), c, k); }
+
+void main(){
+  vec2 frag = gl_FragCoord.xy;
+  vec2 uv   = (frag - 0.5 * uRes) / uRes.y;        // aspect-correct, centered
+  float ang = uPhase * TAU;                         // one revolution per loop
+
+  // ---- looping time vectors: every time dependency goes through cos/sin(ang)
+  vec2 tc  = vec2(cos(ang),       sin(ang));
+  vec2 tc2 = vec2(cos(2.0 * ang), sin(2.0 * ang));
+
+  // ---- gentle periodic global motion: slow circular drift + soft sway
+  vec2 p = uv;
+  p  = rot2(0.08 * sin(ang)) * p;
+  p += 0.22 * vec2(cos(ang + 0.7), sin(ang - 0.4));
+  p *= 0.85;                                        // big forms for 16:9
+
+  // ---- liquid domain warp (two stages, all periodic in time)
+  vec4 P  = vec4(p, 0.85 * tc);
+  vec2 w1 = vec2(fbm(P + vec4(0.0, 0.0, 0.5 * tc2)),
+                 fbm(P + vec4(5.2, 1.3, 0.5 * tc2.yx)));
+  vec2 pw = p + 1.35 * w1;
+  vec4 Q  = vec4(pw, 0.65 * tc.yx);
+  vec2 w2 = vec2(fbm(Q + vec4(1.7, 9.2, 0.4 * tc2)),
+                 fbm(Q + vec4(8.3, 2.8, 0.4 * tc2.yx)));
+  vec2 pf = pw + 0.9 * w2;
+
+  // ---- one smooth field per colour, softmax-blended
+  vec4 F = vec4(pf, 0.55 * tc);
+  float n0 = fbm(F * 1.00 + vec4( 0.0,  0.0, 0.0, 0.0));
+  float n1 = fbm(F * 1.10 + vec4( 3.7, -2.1, 0.7, 0.2));
+  float n2 = fbm(F * 0.95 + vec4(-4.2,  5.6, 0.1, 0.9));
+  float n3 = fbm(F * 1.20 + vec4( 7.9,  3.3, 0.5, 0.6));
+  float n4 = fbm(F * 1.05 + vec4(-6.1, -7.4, 0.3, 0.4));
+  float n5 = fbm(F * 0.90 + vec4( 2.4,  8.8, 0.8, 0.1));
+
+  const float K = 6.5;                              // softness of pool edges
+  float e0 = exp(K * n0), e1 = exp(K * n1), e2 = exp(K * n2),
+        e3 = exp(K * n3), e4 = exp(K * n4), e5 = exp(K * n5 * 0.7);
+  float sum = e0 + e1 + e2 + e3 + e4 + e5;
+  vec3 col = (C0*e0 + C1*e1 + C2*e2 + C3*e3 + C4*e4 + C5*e5) / sum;
+
+  // ---- glossy liquid surface: height = dominant field, soft normals
+  float h = (n0*e0 + n1*e1 + n2*e2 + n3*e3 + n4*e4 + n5*e5) / sum;
+  float dhx = dFdx(h), dhy = dFdy(h);
+  vec3 n = normalize(vec3(-dhx * 90.0, -dhy * 90.0, 1.0));
+  vec3 L = normalize(vec3(0.45 * tc.x, 0.6 + 0.2 * tc.y, 0.8));
+  vec3 V = vec3(0.0, 0.0, 1.0);
+  vec3 H = normalize(L + V);
+  float spec = pow(max(dot(n, H), 0.0), 60.0);
+  float fres = pow(1.0 - max(dot(n, V), 0.0), 2.5);
+  float diff = 0.82 + 0.18 * max(dot(n, L), 0.0);
+
+  col *= diff;
+  col += vec3(1.0, 0.96, 0.93) * spec * 0.16;   // soft highlights
+  col += vec3(0.55, 0.65, 1.0) * fres * 0.10;   // cool rim glow
+
+  // ---- light bloom: luminous pools glow a bit
+  float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
+  col += col * smoothstep(0.55, 1.0, lum) * 0.15;
+
+  // ---- grade: rich saturation, gentle contrast, soft vignette
+  col = sat(col, 1.24);
+  col = mix(col, col * col * (3.0 - 2.0 * col), 0.22);
+  float vig = smoothstep(1.45, 0.4, length(uv * vec2(0.8, 1.0)));
+  col *= mix(0.88, 1.0, vig);
+
+  // ---- fine dither (loop-safe: seeded by integer frame index 0..449)
+  float grain = hash21(frag + vec2(uFrame * 17.0, uFrame * 31.0));
+  col += (grain - 0.5) * (1.5 / 255.0);          // prevents 8-bit banding in video
+
+  fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+}
+</script>
+
+<script>
+(function(){
+  'use strict';
+  const DURATION_MS = 15000;      // 15-second seamless loop
+  const FPS_HINT    = 30;         // grain seed granularity (450 frames)
+  const W = 3840, H = 2160;
+
+  const canvas = document.getElementById('stage');
+  canvas.width = W; canvas.height = H;
+
+  const gl = canvas.getContext('webgl2', {
+    antialias: false, alpha: false, depth: false, stencil: false,
+    premultipliedAlpha: false, preserveDrawingBuffer: true,
+    powerPreference: 'high-performance'
+  });
+
+  if (!gl) {
+    document.body.innerHTML =
+      '<div style="color:#fff;font:48px system-ui;padding:80px">WebGL2 is required.</div>';
+    return;
+  }
+
+  function compile(type, src){
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src.trim());
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error(gl.getShaderInfoLog(s));
+      throw new Error('Shader compile failed');
+    }
+    return s;
+  }
+
+  const prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER,   document.getElementById('vs').textContent));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, document.getElementById('fs').textContent));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error(gl.getProgramInfoLog(prog));
+    throw new Error('Program link failed');
+  }
+  gl.useProgram(prog);
+
+  // full-screen triangle
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+  const aPos = gl.getAttribLocation(prog, 'aPos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  const uRes   = gl.getUniformLocation(prog, 'uRes');
+  const uPhase = gl.getUniformLocation(prog, 'uPhase');
+  const uFrame = gl.getUniformLocation(prog, 'uFrame');
+  gl.viewport(0, 0, W, H);
+  gl.uniform2f(uRes, W, H);
+
+  function render(phase){
+    phase = phase - Math.floor(phase);            // wrap to [0,1)
+    gl.uniform1f(uPhase, phase);
+    gl.uniform1f(uFrame, Math.floor(phase * DURATION_MS / 1000 * FPS_HINT));
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  // Autoplay: time is taken from the rAF timestamp so headless / virtual-time
+  // frame capture tools (puppeteer, timecut, etc.) stay frame-accurate.
+  let t0 = null;
+  function frame(ts){
+    if (t0 === null) t0 = ts;
+    render(((ts - t0) % DURATION_MS) / DURATION_MS);
+    requestAnimationFrame(frame);
+  }
+  render(0);
+  requestAnimationFrame(frame);
+
+  // Optional deterministic hooks for offline renderers:
+  //   window.__seek(seconds)  -> draws the exact frame at that time (0..15)
+  //   window.__duration       -> loop length in seconds
+  window.__seek = (sec) => render((sec * 1000) / DURATION_MS);
+  window.__duration = DURATION_MS / 1000;
+})();
+</script>
+</body>
+</html>
