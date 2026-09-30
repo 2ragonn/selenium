@@ -113,15 +113,15 @@ vec4 fieldState(vec2 c){
     if(g>0.0){
       float R=ORM[k]*(1.0-(1.0-g)*(1.0-g));
       float d=distance(q,ORG[k])+(hj-0.5)*4.0+(lo-0.5)*9.0;
-      inf=max(inf,ss(-0.3,0.3,R-d));
-      eI=max(eI,exp(-abs(R-d)*1.4)*(1.0-g));
+      inf=max(inf,ss(-1.2,1.2,R-d));
+      eI=max(eI,exp(-abs(R-d)*0.7)*(1.0-g));
     }
   }
-  float Rc=(uT-8.6)*30.0;
+  float Rc=(uT-8.6)*24.0;
   float dc=distance(q,SH)+(hj-0.5)*3.0+(lo-0.5)*4.0;
-  float cure=ss(-0.3,0.3,Rc-dc);
-  float fr=1.0-ss(110.0,170.0,Rc);
-  float eC=exp(-abs(Rc-dc)*1.0)*fr*step(0.0,Rc);
+  float cure=ss(-1.5,1.5,Rc-dc);
+  float fr=1.0-ss(90.0,125.0,Rc);
+  float eC=exp(-abs(Rc-dc)*0.55)*fr*step(0.0,Rc);
   float aft=exp(-max(Rc-dc,0.0)*0.2)*inf*step(0.0,Rc-dc)*fr;
   return vec4(inf*(1.0-cure),eI*(1.0-cure),eC,aft);
 }
@@ -214,8 +214,8 @@ void main(){
   vec3 rc=mix(vec3(0.15,0.60,1.0),vec3(1.0,0.12,0.15),uAlert);
   vec3 plinth=rc*(ringG*1.5+exp(-rs*0.08)*0.05);
 
-  float Rc=(uT-8.6)*30.0;
-  float frr=(1.0-ss(110.0,170.0,Rc))*step(0.0,Rc);
+  float Rc=(uT-8.6)*24.0;
+  float frr=(1.0-ss(90.0,125.0,Rc))*step(0.0,Rc);
   float wr=0.20+fw;
   float ringW=ss(wr,0.0,abs(rs-Rc))+0.35*ss(wr,0.0,abs(rs-Rc*0.80))
              +0.10*exp(-abs(rs-Rc)*0.30)*step(rs,Rc);
@@ -933,7 +933,7 @@ function frameState(t){
   const p=t/LOOP, th=p*Math.PI*2;
   const alert=sstep(3.0,5.6,t)*(1-sstep(8.5,10.5,t));
   const burst=(c,w,a)=>a*Math.exp(-Math.pow((t-c)/w,2));
-  const glitch=Math.min(1,burst(3.3,0.13,0.6)+burst(4.9,0.11,0.45)+burst(6.5,0.11,0.55)+burst(8.2,0.14,0.7)+burst(8.8,0.22,0.9));
+  const glitch=Math.min(1,burst(3.3,0.12,0.40)+burst(6.5,0.12,0.40)+burst(8.6,0.14,0.55));
   const atk=0.25+0.75*sstep(2.2,4.5,t)*(1-sstep(8.6,10.5,t));
   const def=0.25+0.75*sstep(8.4,9.6,t)*(1-sstep(13.0,14.6,t));
   const shake=glitch*0.07;
