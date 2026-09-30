@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Soft Pastel Bokeh Lights</title>
+<meta name="description" content="Soft pastel bokeh lights - defocused glowing light circles drifting smoothly. 3840x2160, 15 second seamless loop.">
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 3840px;
+    height: 2160px;
+    overflow: hidden;
+    background: #7a6fa6;
+  }
+  #c {
+    display: block;
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 3840px;
+    height: 2160px;
+  }
+</style>
+</head>
+<body>
+<canvas id="c" width="3840" height="2160"></canvas>
+<script>
+(function () {
+  'use strict';
+
+  // ------------------------------------------------------------------
+  //  Soft Pastel Bokeh Lights
+  //  3840 x 2160, 15 s seamless loop, time-based (frame-rate independent)
+  //  Every motion / colour parameter is a periodic function of the loop
+  //  phase with integer harmonics, so frame(15 s) == frame(0 s) exactly.
+  // ------------------------------------------------------------------
+
+  var W = 3840, H = 2160;
+  var LOOP = 15.0;                // seconds
+  var TAU = Math.PI * 2;
+
+  var canvas = document.getElementById('c');
+
+  // ---------- deterministic PRNG so every render is identical ----------
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = a + 0x6D2B79F5 | 0;
+      var t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+  var rnd = mulberry32(0x5EEDB0CE);
+  function rr(a, b) { return a + (b - a) * rnd(); }
+  function pick(arr) { return arr[Math.floor(rnd() * arr.length)]; }
+  function clamp(x, a, b) { return x < a ? a : (x > b ? b : x); }
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function smoothstep(e0, e1, x) {
+    var t = clamp((x - e0) / (e1 - e0), 0, 1);
+    return t * t * (3 - 2 * t);
+  }
+
+  // ---------- pastel palette (weighted) ----------
+  var PALETTE = [
+    [1.00, 0.58, 0.78], [1.00, 0.58, 0.78],          // blush pink
+    [1.00, 0.72, 0.50], [1.00, 0.72, 0.50],          // peach
+    [0.68, 0.58, 1.00], [0.68, 0.58, 1.00],          // lavender
+    [0.50, 1.00, 0.82],                              // mint
+    [0.52, 0.76, 1.00], [0.52, 0.76, 1.00],          // baby blue
+    [1.00, 0.92, 0.52],                              // butter
+    [0.92, 0.62, 1.00],                              // lilac
+    [1.00, 0.96, 0.90]                               // warm white
+  ];
+  function pastel() {
+    var c = pick(PALETTE);
+    return [
+      clamp(c[0] + rr(-0.04, 0.04), 0, 1),
+      clamp(c[1] + rr(-0.04, 0.04), 0, 1),
+      clamp(c[2] + rr(-0.04, 0.04), 0, 1)
+    ];
+  }
+
+  // ---------- scene description ----------
+  var lights = [];
+  function addLights(count, sMin, sMax, aMin, aMax) {
+    for (var i = 0; i < count; i++) {
+      lights.push({
+        bx: rr(-0.05, 1.05),
+        by: rr(0, 1.8),
+        z: rnd(),                       // 0 = near camera, 1 = far
+        size: rr(sMin, sMax),           // blur-circle scale in px
+        alpha: rr(aMin, aMax),
+        col: pastel(),
+        k1: pick([1, 1, 1, 2]), p1: rr(0, TAU), a1: rr(0.012, 0.045),   // horizontal sway
+        k2: pick([1, 2, 2, 3]), p2: rr(0, TAU), a2: rr(0.004, 0.016),   // secondary sway
+        k3: pick([1, 1, 2]),    p3: rr(0, TAU), a3: rr(0.006, 0.024),   // vertical sway
+        kt: pick([1, 2, 2, 3, 4]), pt: rr(0, TAU), tw: rr(0.05, 0.16),  // twinkle
+        rot: rr(-0.07, 0.07)
+      });
+    }
+  }
+  addLights(20, 460, 760, 0.30, 0.50);   // large, dreamy blobs
+  addLights(30, 240, 460, 0.40, 0.62);   // medium discs
+  addLights(36,  80, 240, 0.55, 0.88);   // small lights / sparkles
+
+  // huge, ultra-soft colour washes for depth (light leaks)
+  var blobs = [];
+  var BLOB_COLS = [
+    [1.00, 0.55, 0.75], [0.62, 0.55, 1.00], [1.00, 0.72, 0.45],
+    [0.45, 0.95, 0.82], [0.50, 0.72, 1.00], [1.00, 0.88, 0.50]
+  ];
+  for (var b = 0; b < 6; b++) {
+    blobs.push({
+      bx: rr(0.0, 1.0), by: rr(0.0, 1.0),
+      R0: rr(900, 1500),
+      alpha: rr(0.12, 0.24),
+      col: BLOB_COLS[b],
+      k1: pick([1, 1, 2]), p1: rr(0, TAU), a1: rr(0.06, 0.13),
+      k2: pick([1, 1, 2]), p2: rr(0, TAU), a2: rr(0.04, 0.09),
+      p3: rr(0, TAU)
+    });
+  }
+
+  var N = lights.length + blobs.length;
+  var STRIDE = 12;                       // floats per instance
+  var inst = new Float32Array(N * STRIDE);
+
+  // ---------- per-frame scene evaluation (pure function of phase) ----------
+  // Layout per instance: x, y, R, feather | r, g, b, alpha | rim, poly, rot, dz
+  var GLOBAL_ROT = 0.18;
+  function computeScene(p) {
+    var th = TAU * p;
+    var focus = 0.5 + 0.28 * Math.sin(th + 0.7);          // focus plane breathes through the field
+    var panx = 0.030 * Math.sin(th + 1.3);                 // slow camera drift (parallax)
+    var pany = 0.018 * Math.sin(th + 2.9);
+    var o = 0, i, L;
+
+    for (i = 0; i < lights.length; i++) {
+      L = lights[i];
+      var persp = 1.25 - 0.70 * L.z;
+      var dz = L.z - focus;
+      var adz = Math.abs(dz);
+      var blur = 0.03 + 0.97 * Math.pow(adz, 0.9);
+      var R = Math.max(16, L.size * persp * blur);
+
+      // wrapped vertical drift: exactly one traverse per loop, wrap happens fully off-screen
+      var Rmax = L.size * persp * (0.03 + 0.97 * Math.pow(0.78, 0.9));
+      var m = (Rmax * 1.2) / H + L.a3 + 0.022 * 1.25 + 0.03;
+      var Lr = 1 + 2 * m;
+      var yn = (((L.by - p * Lr) % Lr) + Lr) % Lr - m;
+      yn += L.a3 * Math.sin(L.k3 * th + L.p3) + pany * (1.25 - L.z);
+      var xn = L.bx
+             + L.a1 * Math.sin(L.k1 * th + L.p1)
+             + L.a2 * Math.sin(L.k2 * th + L.p2)
+             + panx * (1.25 - L.z);
+
+      // edge softness: glow when in focus, crisp-ish disc at moderate defocus, hazy when far out
+      var f = clamp(lerp(0.72, 0.27, smoothstep(0, 0.12, adz)) + 0.42 * smoothstep(0.35, 0.8, adz), 0.1, 0.95);
+      var tw = 1 - L.tw + L.tw * Math.sin(L.kt * th + L.pt);
+      var a = L.alpha * (0.45 + 0.55 * (1 - smoothstep(0, 0.65, adz))) * tw;
+      var rim = 0.85 * smoothstep(0.03, 0.13, adz) * (1 - 0.7 * smoothstep(0.3, 0.75, adz));
+      var poly = 0.22 * smoothstep(0.04, 0.14, adz) * (1 - smoothstep(0.3, 0.6, adz));
+
+      inst[o++] = xn * W; inst[o++] = yn * H; inst[o++] = R; inst[o++] = f;
+      inst[o++] = L.col[0]; inst[o++] = L.col[1]; inst[o++] = L.col[2]; inst[o++] = a;
+      inst[o++] = rim; inst[o++] = poly; inst[o++] = GLOBAL_ROT + L.rot; inst[o++] = dz;
+    }
+
+    for (i = 0; i < blobs.length; i++) {
+      var B = blobs[i];
+      var bx = B.bx + B.a1 * Math.sin(B.k1 * th + B.p1) + panx * 0.4;
+      var by = B.by + B.a2 * Math.sin(B.k2 * th + B.p2) + pany * 0.4;
+      var BR = B.R0 * (1 + 0.10 * Math.sin(th + B.p3));
+      var ba = B.alpha * (0.9 + 0.1 * Math.sin(th * 2 + B.p1));
+      inst[o++] = bx * W; inst[o++] = by * H; inst[o++] = BR; inst[o++] = 1.0;
+      inst[o++] = B.col[0]; inst[o++] = B.col[1]; inst[o++] = B.col[2]; inst[o++] = ba;
+      inst[o++] = 0; inst[o++] = 0; inst[o++] = 0; inst[o++] = 0;
+    }
+  }
+
+  // background gradient colours (two palettes, cross-faded over the loop)
+  var BG_A = { top: [0.36, 0.36, 0.65], mid: [0.66, 0.48, 0.66], bot: [0.92, 0.67, 0.58] };
+  var BG_B = { top: [0.31, 0.43, 0.70], mid: [0.68, 0.55, 0.78], bot: [0.95, 0.72, 0.66] };
+
+  // =====================================================================
+  //  WebGL2 renderer (primary)
+  // =====================================================================
+  var gl = canvas.getContext('webgl2', {
+    antialias: false,
+    alpha: false,
+    depth: false,
+    stencil: false,
+    premultipliedAlpha: false,
+    preserveDrawingBuffer: true,
+    powerPreference: 'high-performance'
+  });
+
+  var VS_QUAD = '#version 300 es\n' +
+    'precision highp float;\n' +
+    'layout(location=0) in vec2 aPos;\n' +
+    'void main(){ gl_Position = vec4(aPos, 0.0, 1.0); }';
+
+  var FS_BG = '#version 300 es\n' +
+    'precision highp float;\n' +
+    'uniform vec2 uRes; uniform float uTh;\n' +
+    'uniform vec3 uTopA, uMidA, uBotA, uTopB, uMidB, uBotB;\n' +
+    'out vec4 o;\n' +
+    'float hash(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }\n' +
+    'void main(){\n' +
+    '  vec2 uv = gl_FragCoord.xy / uRes;\n' +
+    '  float ang = 0.30 + 0.10 * sin(uTh + 0.4);\n' +
+    '  vec2 dir = vec2(sin(ang), cos(ang));\n' +
+    '  float g = clamp(dot(uv - 0.5, dir) * 0.95 + 0.5, 0.0, 1.0);\n' +
+    '  float mx = 0.5 + 0.5 * sin(uTh + 2.0);\n' +
+    '  vec3 top = mix(uTopA, uTopB, mx);\n' +
+    '  vec3 mid = mix(uMidA, uMidB, mx);\n' +
+    '  vec3 bot = mix(uBotA, uBotB, mx);\n' +
+    '  vec3 col = g < 0.5 ? mix(bot, mid, smoothstep(0.0, 0.5, g)) : mix(mid, top, smoothstep(0.5, 1.0, g));\n' +
+    '  float r = length((uv - 0.5) * vec2(1.6, 1.0));\n' +
+    '  col += vec3(0.07, 0.045, 0.06) * (1.0 - smoothstep(0.0, 1.0, r));\n' +
+    '  col += (hash(gl_FragCoord.xy) - 0.5) / 255.0;\n' +
+    '  o = vec4(col, 1.0);\n' +
+    '}';
+
+  var VS_LIGHT = '#version 300 es\n' +
+    'precision highp float;\n' +
+    'layout(location=0) in vec2 aQuad;\n' +
+    'layout(location=1) in vec4 aA;\n' +   // x, y, R, feather
+    'layout(location=2) in vec4 aB;\n' +   // r, g, b, alpha
+    'layout(location=3) in vec4 aC;\n' +   // rim, poly, rot, dz
+    'uniform vec2 uRes;\n' +
+    'out vec2 vUV; out vec4 vB; out vec4 vC; out float vF;\n' +
+    'void main(){\n' +
+    '  float pad = 1.12;\n' +
+    '  vec2 pos = aA.xy + aQuad * aA.z * pad;\n' +
+    '  vec2 clip = pos / uRes * 2.0 - 1.0;\n' +
+    '  gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);\n' +
+    '  vUV = aQuad * pad; vB = aB; vC = aC; vF = aA.w;\n' +
+    '}';
+
+  var FS_LIGHT = '#version 300 es\n' +
+    'precision highp float;\n' +
+    'in vec2 vUV; in vec4 vB; in vec4 vC; in float vF;\n' +
+    'out vec4 o;\n' +
+    'const float PI = 3.14159265359;\n' +
+    'void main(){\n' +
+    '  float d = length(vUV);\n' +
+    '  float f = vF; float rim = vC.x; float poly = vC.y; float rot = vC.z; float dz = vC.w;\n' +
+    // 8-blade aperture, softly blended with a perfect circle
+    '  float n = 9.0;\n' +
+    '  float a = atan(vUV.y, vUV.x) + rot;\n' +
+    '  float seg = 2.0 * PI / n;\n' +
+    '  float pr = cos(PI / n) / cos(mod(a, seg) - PI / n);\n' +
+    '  float boundary = mix(1.0, pr / cos(PI / n) * 0.975, poly);\n' +
+    '  float dn = d / boundary;\n' +
+    '  if (dn > 1.0) { o = vec4(0.0); return; }\n' +
+    // disc body with soft edge
+    '  float disc = smoothstep(1.0, 1.0 - f, dn);\n' +
+    // bright rim (soap-bubble bokeh) with slightly darker centre
+    '  float rimPos = 1.0 - f * 0.7;\n' +
+    '  float rw = 0.05 + 0.05 * f;\n' +
+    '  float rimB = exp(-pow((dn - rimPos) / rw, 2.0));\n' +
+    '  float inner = 1.0 - smoothstep(rimPos - 0.3, rimPos, dn);\n' +
+    '  float I = disc * (1.0 - 0.22 * rim * inner) + rimB * rim * 0.70;\n' +
+    '  I += disc * 0.10 * (1.0 - dn * dn);\n' +
+    // longitudinal chromatic fringe: magenta in front of focus, green behind
+    '  vec3 col = vB.rgb;\n' +
+    '  vec3 fr = dz < 0.0 ? vec3(1.0, 0.76, 0.97) : vec3(0.82, 1.0, 0.86);\n' +
+    '  float frs = min(1.0, abs(dz) * 3.0) * 0.38 * smoothstep(rimPos - 0.2, 1.0, dn) * (1.0 - step(0.98, f));\n' +
+    '  col = mix(col, col * fr * 1.04, frs);\n' +
+    '  float alpha = vB.a * I;\n' +
+    '  o = vec4(col * alpha, alpha);\n' +
+    '}';
+
+  var FS_POST = '#version 300 es\n' +
+    'precision highp float;\n' +
+    'uniform sampler2D uTex; uniform vec2 uRes; uniform float uSeed;\n' +
+    'out vec4 o;\n' +
+    'float hash(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }\n' +
+    'void main(){\n' +
+    '  vec2 uv = gl_FragCoord.xy / uRes;\n' +
+    '  vec2 c = uv - 0.5;\n' +
+    // gentle radial chromatic aberration (~2.5 px at the corners)
+    '  vec2 ca = c * dot(c, c) * 0.0020;\n' +
+    '  vec3 col;\n' +
+    '  col.r = texture(uTex, uv + ca).r;\n' +
+    '  col.g = texture(uTex, uv).g;\n' +
+    '  col.b = texture(uTex, uv - ca).b;\n' +
+    '  col = clamp(col, 0.0, 1.0);\n' +
+    // soft filmic contrast, slight saturation, airy lift
+    '  col = mix(col, col * col * (3.0 - 2.0 * col), 0.10);\n' +
+    '  float l = dot(col, vec3(0.299, 0.587, 0.114));\n' +
+    '  col = mix(vec3(l), col, 1.10);\n' +
+    '  col = col * 0.955 + 0.03;\n' +
+    // subtle vignette
+    '  vec2 q = c * vec2(2.0, 1.6);\n' +
+    '  col *= 1.0 - 0.20 * smoothstep(0.45, 1.35, length(q));\n' +
+    // fine film grain + dither
+    '  float g1 = hash(gl_FragCoord.xy + vec2(uSeed * 17.0, uSeed * 29.0));\n' +
+    '  float g2 = hash(gl_FragCoord.yx * 1.7 + vec2(uSeed * 7.0, 3.1));\n' +
+    '  float grain = (g1 - 0.5) * 0.85 + (g2 - 0.5) * 0.45;\n' +
+    '  col += grain * 0.020 * (1.0 - 0.4 * l);\n' +
+    '  col += (g2 - 0.5) / 255.0;\n' +
+    '  o = vec4(clamp(col, 0.0, 1.0), 1.0);\n' +
+    '}';
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      throw new Error(gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+  function program(vs, fs) {
+    var p = gl.createProgram();
+    gl.attachShader(p, compile(gl.VERTEX_SHADER, vs));
+    gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs));
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+      throw new Error(gl.getProgramInfoLog(p));
+    }
+    return p;
+  }
+
+  var startTime = null;
+  function phase() {
+    var now = performance.now();
+    if (startTime === null) startTime = now;
+    var t = (now - startTime) / 1000;
+    return ((t % LOOP) + LOOP) % LOOP / LOOP;
+  }
+
+  function initGL() {
+    var progBG = program(VS_QUAD, FS_BG);
+    var progLight = program(VS_LIGHT, FS_LIGHT);
+    var progPost = program(VS_QUAD, FS_POST);
+
+    // full-screen triangle
+    var vaoFS = gl.createVertexArray();
+    gl.bindVertexArray(vaoFS);
+    var fsBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, fsBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+    // instanced light quads
+    var vaoL = gl.createVertexArray();
+    gl.bindVertexArray(vaoL);
+    var quadBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    var instBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, inst.byteLength, gl.DYNAMIC_DRAW);
+    for (var loc = 1; loc <= 3; loc++) {
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, 4, gl.FLOAT, false, STRIDE * 4, (loc - 1) * 16);
+      gl.vertexAttribDivisor(loc, 1);
+    }
+    gl.bindVertexArray(null);
+
+    // offscreen scene buffer (half-float if available, to keep gradients band-free)
+    var extF = gl.getExtension('EXT_color_buffer_float');
+    var tex = gl.createTexture();
+    var fbo = gl.createFramebuffer();
+    function makeTarget(useFloat) {
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, useFloat ? gl.RGBA16F : gl.RGBA8, W, H, 0, gl.RGBA,
+                    useFloat ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE, null);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+      var ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      return ok;
+    }
+    if (!(extF && makeTarget(true))) makeTarget(false);
+
+    var uBG = {
+      res: gl.getUniformLocation(progBG, 'uRes'), th: gl.getUniformLocation(progBG, 'uTh'),
+      topA: gl.getUniformLocation(progBG, 'uTopA'), midA: gl.getUniformLocation(progBG, 'uMidA'), botA: gl.getUniformLocation(progBG, 'uBotA'),
+      topB: gl.getUniformLocation(progBG, 'uTopB'), midB: gl.getUniformLocation(progBG, 'uMidB'), botB: gl.getUniformLocation(progBG, 'uBotB')
+    };
+    var uL = { res: gl.getUniformLocation(progLight, 'uRes') };
+    var uP = {
+      tex: gl.getUniformLocation(progPost, 'uTex'), res: gl.getUniformLocation(progPost, 'uRes'),
+      seed: gl.getUniformLocation(progPost, 'uSeed')
+    };
+
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.CULL_FACE);
+
+    function render(p) {
+      computeScene(p);
+      var th = TAU * p;
+
+      // pass 1a: background gradient -> scene buffer
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+      gl.viewport(0, 0, W, H);
+      gl.disable(gl.BLEND);
+      gl.useProgram(progBG);
+      gl.uniform2f(uBG.res, W, H);
+      gl.uniform1f(uBG.th, th);
+      gl.uniform3fv(uBG.topA, BG_A.top); gl.uniform3fv(uBG.midA, BG_A.mid); gl.uniform3fv(uBG.botA, BG_A.bot);
+      gl.uniform3fv(uBG.topB, BG_B.top); gl.uniform3fv(uBG.midB, BG_B.mid); gl.uniform3fv(uBG.botB, BG_B.bot);
+      gl.bindVertexArray(vaoFS);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+      // pass 1b: bokeh discs, screen-blended (order independent, never clips to white harshly)
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_COLOR);
+      gl.useProgram(progLight);
+      gl.uniform2f(uL.res, W, H);
+      gl.bindVertexArray(vaoL);
+      gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, inst);
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, N);
+
+      // pass 2: grade, vignette, chromatic aberration, grain -> canvas
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, W, H);
+      gl.disable(gl.BLEND);
+      gl.useProgram(progPost);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.uniform1i(uP.tex, 0);
+      gl.uniform2f(uP.res, W, H);
+      gl.uniform1f(uP.seed, Math.floor(p * LOOP * 60) % 900 + 1);
+      gl.bindVertexArray(vaoFS);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      gl.bindVertexArray(null);
+    }
+
+    function frame() {
+      render(phase());
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  }
+
+  // =====================================================================
+  //  Canvas 2D fallback (used only if WebGL2 is unavailable)
+  // =====================================================================
+  function init2D() {
+    var ctx = canvas.getContext('2d');
+    var noise = document.createElement('canvas');
+    noise.width = noise.height = 256;
+    var nctx = noise.getContext('2d');
+    var nimg = nctx.createImageData(256, 256);
+
+    function rgba(c, a) {
+      return 'rgba(' + Math.round(c[0] * 255) + ',' + Math.round(c[1] * 255) + ',' + Math.round(c[2] * 255) + ',' + clamp(a, 0, 1).toFixed(4) + ')';
+    }
+    function mix3(a, b, t) { return [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)]; }
+
+    function render(p) {
+      computeScene(p);
+      var th = TAU * p;
+
+      // background
+      var ang = 0.30 + 0.10 * Math.sin(th + 0.4);
+      var dx = Math.sin(ang), dy = -Math.cos(ang);
+      var grad = ctx.createLinearGradient(W / 2 - dx * H * 0.55, H / 2 - dy * H * 0.55, W / 2 + dx * H * 0.55, H / 2 + dy * H * 0.55);
+      var mx = 0.5 + 0.5 * Math.sin(th + 2.0);
+      grad.addColorStop(0, rgba(mix3(BG_A.bot, BG_B.bot, mx), 1));
+      grad.addColorStop(0.5, rgba(mix3(BG_A.mid, BG_B.mid, mx), 1));
+      grad.addColorStop(1, rgba(mix3(BG_A.top, BG_B.top, mx), 1));
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, W, H);
+
+      // bokeh discs
+      ctx.globalCompositeOperation = 'screen';
+      for (var i = 0; i < N; i++) {
+        var o = i * STRIDE;
+        var x = inst[o], y = inst[o + 1], R = inst[o + 2], f = inst[o + 3];
+        var col = [inst[o + 4], inst[o + 5], inst[o + 6]], a = inst[o + 7];
+        var rim = inst[o + 8];
+        if (x + R < 0 || x - R > W || y + R < 0 || y - R > H) continue;
+        var g = ctx.createRadialGradient(x, y, 0, x, y, R);
+        var inner = a * (1 - 0.26 * rim) * 1.1;
+        var rimPos = 1 - f * 0.7;
+        g.addColorStop(0, rgba(col, inner));
+        g.addColorStop(clamp(rimPos - 0.12, 0.01, 0.98), rgba(col, a * (1 - 0.26 * rim)));
+        g.addColorStop(clamp(rimPos, 0.02, 0.99), rgba(col, a * (1 + 0.62 * rim)));
+        g.addColorStop(1, rgba(col, 0));
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(x, y, R, 0, TAU);
+        ctx.fill();
+      }
+
+      // vignette
+      ctx.globalCompositeOperation = 'multiply';
+      var v = ctx.createRadialGradient(W / 2, H / 2, H * 0.35, W / 2, H / 2, H * 1.05);
+      v.addColorStop(0, 'rgba(255,255,255,1)');
+      v.addColorStop(1, 'rgba(205,205,210,1)');
+      ctx.fillStyle = v;
+      ctx.fillRect(0, 0, W, H);
+
+      // grain
+      var d = nimg.data;
+      var seed = mulberry32(Math.floor(p * LOOP * 60) + 7);
+      for (var k = 0; k < d.length; k += 4) {
+        var n = 128 + (seed() - 0.5) * 70;
+        d[k] = d[k + 1] = d[k + 2] = n; d[k + 3] = 255;
+      }
+      nctx.putImageData(nimg, 0, 0);
+      ctx.globalCompositeOperation = 'soft-light';
+      ctx.globalAlpha = 0.35;
+      ctx.fillStyle = ctx.createPattern(noise, 'repeat');
+      ctx.fillRect(0, 0, W, H);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+    }
+
+    function frame() {
+      render(phase());
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  }
+
+  try {
+    if (gl) initGL(); else init2D();
+  } catch (e) {
+    init2D();
+  }
+})();
+</script>
+</body>
+</html>
