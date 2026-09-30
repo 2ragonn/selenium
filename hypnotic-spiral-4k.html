@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hypnotic Spiral – 4K Loop</title>
+<meta name="viewport" content="width=3840, height=2160">
+<style>
+  html, body {
+    margin: 0; padding: 0; width: 3840px; height: 2160px;
+    background: #000; overflow: hidden;
+  }
+  canvas#spiral {
+    position: fixed; left: 0; top: 0;
+    width: 3840px; height: 2160px; display: block; background: #000;
+  }
+</style>
+</head>
+<body>
+<canvas id="spiral" width="3840" height="2160"></canvas>
+<script>
+(function () {
+  'use strict';
+
+  var LOOP_SECONDS = 15.0;           // full seamless loop length
+  var canvas = document.getElementById('spiral');
+  var gl = canvas.getContext('webgl2', {
+    antialias: false, alpha: false, depth: false, stencil: false,
+    premultipliedAlpha: false, preserveDrawingBuffer: true, powerPreference: 'high-performance'
+  });
+
+  var VERT = [
+    '#version 300 es',
+    'precision highp float;',
+    'out vec2 vUv;',
+    'void main(){',
+    '  vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);',
+    '  vUv = p;',
+    '  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);',
+    '}'
+  ].join('\n');
+
+  var FRAG = [
+    '#version 300 es',
+    'precision highp float;',
+    'in vec2 vUv;',
+    'out vec4 fragColor;',
+    'uniform vec2  uRes;',
+    'uniform float uPhase;',     // 0..1 over one loop (all motion is periodic in this)
+    'uniform float uFrame;',     // integer frame index inside the loop (grain seed, loops too)',
+    '',
+    'const float PI  = 3.14159265358979;',
+    'const float TAU = 6.28318530717959;',
+    '',
+    'float hash21(vec2 p){',
+    '  p = fract(p * vec2(233.34, 851.73));',
+    '  p += dot(p, p + 23.45);',
+    '  return fract(p.x * p.y);',
+    '}',
+    '',
+    // Neon palette: electric cyan -> violet -> magenta -> mint
+    'vec3 neon(float t){',
+    '  return 0.55 + 0.45 * cos(TAU * (t + vec3(0.00, 0.28, 0.58)));',
+    '}',
+    '',
+    // Anti-aliased hard band from a sine field
+    'float band(float s, float sharp){',
+    '  float v = sin(s);',
+    '  float w = fwidth(s) * 0.9 + 0.002;',
+    '  return smoothstep(-w, w, v * sharp);',
+    '}',
+    '',
+    // Thin neon line where sin(s) crosses zero
+    'float line(float s, float thick){',
+    '  float v = abs(sin(s));',
+    '  float w = fwidth(s);',
+    '  return 1.0 - smoothstep(0.0, thick + w * 1.5, v);',
+    '}',
+    '',
+    'vec3 render(vec2 uvPix, float chroma){',
+    '  vec2 p = (uvPix - 0.5 * uRes) / uRes.y;',     // aspect-correct, y in [-0.5,0.5]
+    '  p *= 2.0;',
+    '  float ph = uPhase;',
+    '',
+    // Slow periodic breathing of the whole field + chromatic radial offset
+    '  float breathe = 1.0 + 0.06 * sin(ph * TAU);',
+    '  p *= breathe * (1.0 + chroma);',
+    '',
+    '  float r  = length(p) + 1e-5;',
+    '  float a  = atan(p.y, p.x);',
+    '  float lr = log(r);',
+    '',
+    // Periodic domain warp (twists the arms back and forth once per loop)
+    '  float twist = 0.22 * sin(ph * TAU) * sin(lr * 1.7 + 0.6 * sin(ph * TAU * 2.0));',
+    '  float aw = a + twist;',
+    '',
+    // ---- Layer A : main 3-arm log-spiral, zooming IN (6 band-periods per loop) ----
+    '  float sA = 3.0 * aw - 11.0 * lr + ph * TAU * 6.0 + ph * TAU * 1.0;',
+    '  float A  = band(sA, 1.0);',
+    '',
+    // ---- Layer B : 7-arm counter spiral, zooming OUT, drawn as neon hairlines ----
+    '  float sB = -7.0 * aw - 19.0 * lr - ph * TAU * 4.0 + ph * TAU * 2.0;',
+    '  float B  = line(sB, 0.10);',
+    '',
+    // ---- Layer C : concentric pulse rings sweeping outward (5 per loop) ----
+    '  float sC = 16.0 * lr - ph * TAU * 5.0;',
+    '  float C  = line(sC, 0.16);',
+    '',
+    // ---- Layer D : ultra-fine moiré in the black regions (opposite direction) ----
+    '  float sD = 12.0 * aw + 40.0 * lr - ph * TAU * 8.0;',
+    '  float D  = band(sD, 1.0);',
+    '',
+    // Core fade: the spiral collapses into a glowing singularity at the center
+    '  float core = smoothstep(0.0, 0.035, r);',
+    '  float coreGlow = exp(-r * 22.0);',
+    '',
+    // Black & white base
+    '  float bw = A;',
+    '  bw = mix(bw, bw * (0.82 + 0.18 * D), 0.55);',        // subtle texture inside white arms
+    '  bw = mix(0.5, bw, core);',
+    '',
+    // Neon edge glow on the main spiral (hue drifts with angle, radius and time)
+    '  float edge = exp(-abs(sin(sA)) * 7.0);',
+    '  float hue  = aw / TAU * 1.0 + lr * 0.09 + ph * 2.0;   // integer angular multiple keeps hue seamless across the atan cut',
+    '  vec3  glowCol = neon(hue);',
+    '',
+    '  vec3 col = vec3(bw);',
+    '  col += glowCol * edge * 0.95 * core;',
+    '  col += neon(hue + 0.5) * B * 1.35 * core;',
+    '  col += neon(hue + 0.25) * C * 0.9 * (0.35 + 0.65 * (1.0 - A)) * core;',
+    '  col += neon(ph * 2.0 + 0.1) * coreGlow * 3.0;',
+    '  col += vec3(1.0) * exp(-r * 60.0) * 2.0;',
+    '',
+    '  return col;',
+    '}',
+    '',
+    'void main(){',
+    '  vec2 uvPix = vUv * uRes;',
+    '',
+    // Chromatic aberration by radially offset re-sampling per channel
+    '  float ca = 0.0045;',
+    '  vec3 c0 = render(uvPix, -ca);',
+    '  vec3 c1 = render(uvPix,  0.0);',
+    '  vec3 c2 = render(uvPix,  ca);',
+    '  vec3 col = vec3(c0.r, c1.g, c2.b);',
+    '',
+    // Soft bloom approximation: add blurred-ish contribution from the mid sample
+    '  col += (c1 - vec3(dot(c1, vec3(0.333)))) * 0.25;',
+    '',
+    // Vignette
+    '  vec2 q = vUv - 0.5;',
+    '  q.x *= uRes.x / uRes.y;',
+    '  float vig = 1.0 - smoothstep(0.55, 1.35, length(q) * 1.15);',
+    '  col *= mix(0.55, 1.0, vig);',
+    '',
+    // Filmic tonemap + gamma
+    '  col = col / (1.0 + col * 0.22);',
+    '  col = pow(max(col, 0.0), vec3(0.92));',
+    '',
+    // Fine looping grain / dither (seeded by loop-relative frame index)
+    '  float g = hash21(uvPix + vec2(uFrame * 13.7, uFrame * 7.1));',
+    '  col += (g - 0.5) * (1.8 / 255.0);',
+    '',
+    '  fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);',
+    '}'
+  ].join('\n');
+
+  function compile(type, src) {
+    var sh = gl.createShader(type);
+    gl.shaderSource(sh, src);
+    gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+      throw new Error(gl.getShaderInfoLog(sh));
+    }
+    return sh;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, VERT));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FRAG));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    throw new Error(gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var uRes   = gl.getUniformLocation(prog, 'uRes');
+  var uPhase = gl.getUniformLocation(prog, 'uPhase');
+  var uFrame = gl.getUniformLocation(prog, 'uFrame');
+
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.uniform2f(uRes, canvas.width, canvas.height);
+
+  var t0 = null;
+
+  // Optional deterministic hook for frame-exact renderers:
+  //   window.__setLoopTime(seconds) -> renders that exact moment of the 15 s loop.
+  function drawAt(seconds) {
+    var t = seconds % LOOP_SECONDS;
+    if (t < 0) t += LOOP_SECONDS;
+    gl.uniform1f(uPhase, t / LOOP_SECONDS);
+    gl.uniform1f(uFrame, Math.floor(t * 60.0));
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+  window.__setLoopTime = function (seconds) { manual = true; drawAt(seconds); };
+  window.__loopSeconds = LOOP_SECONDS;
+
+  var manual = false;
+  function frame(ts) {
+    if (!manual) {
+      if (t0 === null) t0 = ts;
+      drawAt((ts - t0) / 1000.0);
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  canvas.addEventListener('webglcontextlost', function (e) {
+    e.preventDefault();
+    setTimeout(function () { location.reload(); }, 100);
+  });
+})();
+</script>
+</body>
+</html>
