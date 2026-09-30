@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Disco Ball Light Reflections</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  html,body{margin:0;height:100%;background:#000;overflow:hidden}
+  #stage{position:absolute;left:50%;top:50%;
+    width:min(100vw,177.7778vh);height:min(100vh,56.25vw);
+    transform:translate(-50%,-50%);display:block;background:#000}
+</style>
+</head>
+<body>
+<canvas id="stage" width="3840" height="2160"></canvas>
+<script>
+/* =====================================================================
+   DISCO BALL LIGHT REFLECTIONS  -  3840x2160  -  15 s seamless loop
+   A spinning mirror ball throws hundreds of physically traced light
+   spots (ray -> facet mirror -> room walls) across a dark club room.
+   Everything is a pure function of time t in [0,15) and periodic in 15 s,
+   so the last frame flows straight into the first one.
+   Hooks for renderers:  window.renderAt(t)  window.DURATION
+   ===================================================================== */
+(() => {
+'use strict';
+
+const W = 3840, H = 2160, DUR = 15, TAU = Math.PI * 2;
+const canvas = document.getElementById('stage');
+const ctx = canvas.getContext('2d', { alpha: false });
+const clamp = (x, a, b) => x < a ? a : x > b ? b : x;
+const smooth = (a, b, x) => { x = clamp((x - a) / (b - a), 0, 1); return x * x * (3 - 2 * x); };
+const hash = n => { const s = Math.sin(n * 127.1 + 311.7) * 43758.5453; return s - Math.floor(s); };
+
+/* ------------------------------------------------------------------ */
+/*  Scene                                                              */
+/* ------------------------------------------------------------------ */
+const FOCAL = 2450;
+const BOX  = { x0: -9, x1: 9, y0: -4.6, y1: 5.2, z0: -9.5, z1: 9.6 };
+const BALL = { x: 0, y: 0.55, z: 0, r: 1.15 };
+
+const LIGHTS = [
+  // pos, base hue, hue swing, saturation, hue cycles/loop, phase, level cycles, level phase, strength, beam?
+  { pos: [-6.4,  3.4,  4.2], hue: 324, amp: 26, sat: 0.92, hk: 1, hp: 0.0, lk: 1, lp: 0.0, gain: 1.00, beam: true  },
+  { pos: [ 6.6,  3.0,  3.6], hue: 188, amp: 22, sat: 0.95, hk: 1, hp: 2.1, lk: 1, lp: 2.1, gain: 1.00, beam: true  },
+  { pos: [ 1.2,  4.4, -6.8], hue:  34, amp: 10, sat: 0.62, hk: 2, hp: 1.0, lk: 2, lp: 1.0, gain: 0.95, beam: true  },
+  { pos: [-2.8, -3.6,  6.4], hue: 262, amp: 24, sat: 0.90, hk: 1, hp: 4.0, lk: 1, lp: 4.0, gain: 1.0, beam: false },
+  { pos: [ 5.2, -3.9, -4.5], hue: 160, amp: 20, sat: 0.85, hk: 1, hp: 5.3, lk: 2, lp: 3.3, gain: 1.0, beam: true  },
+];
+const NL = LIGHTS.length;
+
+/* ------------------------------------------------------------------ */
+/*  Colour helpers                                                     */
+/* ------------------------------------------------------------------ */
+function hsl(h, s, l) {
+  h = (((h % 360) + 360) % 360) / 360;
+  const q = l < .5 ? l * (1 + s) : l + s - l * s, p = 2 * l - q;
+  const f = t => { if (t < 0) t += 1; if (t > 1) t -= 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t; if (t < .5) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6; return p; };
+  return [f(h + 1 / 3), f(h), f(h - 1 / 3)];
+}
+
+/* ------------------------------------------------------------------ */
+/*  Pre-rendered sprites                                               */
+/* ------------------------------------------------------------------ */
+const NB = 72;                       // hue buckets (5 deg)
+const SPOT_S = 128, FLARE_S = 256;
+const SPOT_SCALE = 1.55;             // quad -> sprite core scaling
+const spotSprites = [], flareSprites = [];
+
+function makeSprite(size, rgb, fn) {
+  const c = document.createElement('canvas'); c.width = c.height = size;
+  const g = c.getContext('2d'); const im = g.createImageData(size, size); const d = im.data;
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    const u = (x + .5) / size - .5, v = (y + .5) / size - .5;
+    const [a, w] = fn(u, v);
+    const i = (y * size + x) * 4;
+    d[i]   = (rgb[0] * (1 - w) + w) * 255;
+    d[i+1] = (rgb[1] * (1 - w) + w) * 255;
+    d[i+2] = (rgb[2] * (1 - w) + w) * 255;
+    d[i+3] = clamp(a, 0, 1) * 255;
+  }
+  g.putImageData(im, 0, 0); return c;
+}
+function spotFn(u, v) {                         // soft rounded-square light patch with a hot core
+  const bx = Math.abs(u) - 0.30 + 0.10, by = Math.abs(v) - 0.30 + 0.10;
+  const sd = Math.hypot(Math.max(bx, 0), Math.max(by, 0)) + Math.min(Math.max(bx, by), 0) - 0.10;
+  const body = 1 - smooth(-0.035, 0.05, sd);
+  const halo = 0.20 * Math.exp(-Math.max(sd, 0) * 15);
+  const fade = 1 - smooth(0.60, 1.0, Math.max(Math.abs(u), Math.abs(v)) * 2);
+  const a = Math.min(1, body * 0.80 + halo) * fade;
+  const w = Math.exp(-(u * u + v * v) / 0.016) * 0.42 + body * 0.03;
+  return [a, w];
+}
+function flareFn(u, v) {                        // 4 + 4 point star glint
+  const x = u * 2, y = v * 2, r2 = x * x + y * y;
+  const core = Math.exp(-r2 * 110), glow = Math.exp(-Math.sqrt(r2) * 8) * 0.24;
+  const ax = Math.abs(x), ay = Math.abs(y);
+  const cross = Math.exp(-ay * 85) * Math.exp(-ax * 4.2) + Math.exp(-ax * 85) * Math.exp(-ay * 4.2);
+  const dx = (x + y) * 0.7071, dy = (x - y) * 0.7071, adx = Math.abs(dx), ady = Math.abs(dy);
+  const diag = 0.35 * (Math.exp(-ady * 100) * Math.exp(-adx * 7.5) + Math.exp(-adx * 100) * Math.exp(-ady * 7.5));
+  const fade = 1 - smooth(0.80, 1.0, Math.max(ax, ay));
+  const val = (core + glow + cross * 0.85 + diag) * fade;
+  return [val, Math.min(1, core * 1.4 + cross * 0.35)];
+}
+for (let b = 0; b < NB; b++) {
+  const rgb = hsl(b * 5, 0.92, 0.55);
+  spotSprites.push(makeSprite(SPOT_S, rgb, spotFn));
+  flareSprites.push(makeSprite(FLARE_S, rgb, flareFn));
+}
+{ const rgb = [1, 0.93, 0.80];                      // warm white bucket
+  spotSprites.push(makeSprite(SPOT_S, rgb, spotFn));
+  flareSprites.push(makeSprite(FLARE_S, rgb, flareFn)); }
+const WHITE_B = NB;
+
+const bokehSprites = [];
+for (let i = 0; i < 6; i++) {
+  const rgb = hsl([325, 190, 40, 265, 160, 210][i], 0.7, 0.62);
+  bokehSprites.push(makeSprite(96, rgb, (u, v) => {
+    const r = Math.hypot(u, v) * 2;
+    const disc = (1 - smooth(0.86, 1.0, r)) * 0.55;
+    const ring = Math.exp(-Math.pow((r - 0.90) / 0.07, 2)) * 0.45;
+    return [disc + ring, 0.25];
+  }));
+}
+
+/* grain tile */
+const grainTile = (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 512;
+  const g = c.getContext('2d'), im = g.createImageData(512, 512);
+  for (let i = 0; i < im.data.length; i += 4) {
+    const v = 128 + (Math.random() + Math.random() + Math.random() - 1.5) * 90;
+    im.data[i] = im.data[i+1] = im.data[i+2] = v; im.data[i+3] = 255;
+  }
+  g.putImageData(im, 0, 0); return c;
+})();
+const grainPattern = ctx.createPattern(grainTile, 'repeat');
+
+/* bloom buffers */
+const bloomA = document.createElement('canvas'); bloomA.width = 960; bloomA.height = 540;
+const bloomB = document.createElement('canvas'); bloomB.width = 240; bloomB.height = 135;
+const bA = bloomA.getContext('2d'), bB = bloomB.getContext('2d');
+
+/* vignette */
+const vignette = ctx.createRadialGradient(W / 2, H * 0.48, H * 0.35, W / 2, H * 0.5, W * 0.62);
+vignette.addColorStop(0, 'rgba(0,0,0,0)');
+vignette.addColorStop(0.65, 'rgba(0,0,0,0.30)');
+vignette.addColorStop(1, 'rgba(0,0,0,0.78)');
+
+/* ------------------------------------------------------------------ */
+/*  Camera                                                             */
+/* ------------------------------------------------------------------ */
+const cam = { x: 0, y: 0, z: 0, rx: 1, ry: 0, rz: 0, ux: 0, uy: 1, uz: 0, fx: 0, fy: 0, fz: -1 };
+function setCamera(t) {
+  const a = TAU * t / DUR;
+  cam.x = 0.60 * Math.sin(a);
+  cam.y = 0.35 + 0.20 * Math.sin(a + 1.0);
+  cam.z = 8.3 + 0.45 * Math.sin(2 * a + 2.2);
+  let fx = 0 - cam.x, fy = BALL.y + 0.10 - cam.y, fz = 0 - cam.z;
+  let l = Math.hypot(fx, fy, fz); fx /= l; fy /= l; fz /= l;
+  // right = f x up(0,1,0)
+  let rx = -fz, ry = 0, rz = fx; l = Math.hypot(rx, rz); rx /= l; rz /= l;
+  // up = r x f
+  const ux = ry * fz - rz * fy, uy = rz * fx - rx * fz, uz = rx * fy - ry * fx;
+  cam.fx = fx; cam.fy = fy; cam.fz = fz; cam.rx = rx; cam.ry = ry; cam.rz = rz; cam.ux = ux; cam.uy = uy; cam.uz = uz;
+}
+let PX = 0, PY = 0, PZ = 0;
+function proj(x, y, z) {
+  const dx = x - cam.x, dy = y - cam.y, dz = z - cam.z;
+  const zc = dx * cam.fx + dy * cam.fy + dz * cam.fz; PZ = zc;
+  if (zc < 0.08) return false;
+  const xc = dx * cam.rx + dy * cam.ry + dz * cam.rz, yc = dx * cam.ux + dy * cam.uy + dz * cam.uz;
+  const k = FOCAL / zc; PX = W / 2 + xc * k; PY = H / 2 - yc * k; return true;
+}
+function toCam(x, y, z) {
+  const dx = x - cam.x, dy = y - cam.y, dz = z - cam.z;
+  return [dx * cam.rx + dy * cam.ry + dz * cam.rz, dx * cam.ux + dy * cam.uy + dz * cam.uz, dx * cam.fx + dy * cam.fy + dz * cam.fz];
+}
+const NZ = 0.2;
+function camToScreen(p) { const k = FOCAL / p[2]; return [W / 2 + p[0] * k, H / 2 - p[1] * k]; }
+function fillPoly3(pts, style) {
+  let c = pts.map(p => toCam(p[0], p[1], p[2])), out = [];
+  for (let i = 0; i < c.length; i++) {
+    const a = c[i], b = c[(i + 1) % c.length], ai = a[2] >= NZ, bi = b[2] >= NZ;
+    if (ai) out.push(a);
+    if (ai !== bi) { const t = (NZ - a[2]) / (b[2] - a[2]); out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, NZ]); }
+  }
+  if (out.length < 3) return;
+  ctx.beginPath();
+  out.forEach((p, i) => { const s = camToScreen(p); i ? ctx.lineTo(s[0], s[1]) : ctx.moveTo(s[0], s[1]); });
+  ctx.closePath(); ctx.fillStyle = style; ctx.fill();
+}
+function line3(ax, ay, az, bx, by, bz) {          // adds a clipped segment to the current path
+  let a = toCam(ax, ay, az), b = toCam(bx, by, bz);
+  if (a[2] < NZ && b[2] < NZ) return;
+  if (a[2] < NZ) { const t = (NZ - a[2]) / (b[2] - a[2]); a = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, NZ]; }
+  else if (b[2] < NZ) { const t = (NZ - b[2]) / (a[2] - b[2]); b = [b[0] + (a[0] - b[0]) * t, b[1] + (a[1] - b[1]) * t, NZ]; }
+  const s = camToScreen(a), e = camToScreen(b);
+  ctx.moveTo(s[0], s[1]); ctx.lineTo(e[0], e[1]);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Mirror-ball facets                                                 */
+/* ------------------------------------------------------------------ */
+const facetData = [];
+{
+  const N = 22, dLat = Math.PI / N;
+  let seed = 7;
+  const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+  const gauss = () => (rnd() + rnd() + rnd() - 1.5) * 1.6;
+  for (let i = 0; i < N; i++) {
+    const lat = -Math.PI / 2 + (i + 0.5) * dLat, cl = Math.cos(lat), sl = Math.sin(lat);
+    const M = Math.max(6, Math.round(TAU * cl / dLat)), dLon = TAU / M;
+    for (let j = 0; j < M; j++) {
+      const lon = (j + (i % 2) * 0.5) * dLon;
+      const cx = Math.cos(lon), sx = Math.sin(lon);
+      let n = [cl * cx, sl, cl * sx];
+      let t1 = [-sx, 0, cx];                          // along longitude
+      let t2 = [-sl * cx, cl, -sl * sx];              // along latitude
+      // tiny manufacturing tilt so facets scatter light individually
+      const jx = gauss() * 0.014, jy = gauss() * 0.014;
+      n = [n[0] + jx * t1[0] + jy * t2[0], n[1] + jx * t1[1] + jy * t2[1], n[2] + jx * t1[2] + jy * t2[2]];
+      let l = Math.hypot(...n); n = n.map(v => v / l);
+      const d1 = t1[0] * n[0] + t1[1] * n[1] + t1[2] * n[2];
+      t1 = t1.map((v, k) => v - d1 * n[k]); l = Math.hypot(...t1); t1 = t1.map(v => v / l);
+      t2 = [n[1] * t1[2] - n[2] * t1[1], n[2] * t1[0] - n[0] * t1[2], n[0] * t1[1] - n[1] * t1[0]];
+      facetData.push({
+        n, t1, t2,
+        p: [cl * cx * BALL.r, sl * BALL.r, cl * sx * BALL.r],
+        h1: BALL.r * cl * dLon * 0.5, h2: BALL.r * dLat * 0.5,
+        rnd: rnd(), tk: 4 + (facetData.length % 5), tp: rnd() * TAU
+      });
+    }
+  }
+}
+const F = facetData.length;
+const mkOri = () => ({ n: new Float32Array(F * 3), t1: new Float32Array(F * 3), t2: new Float32Array(F * 3), p: new Float32Array(F * 3) });
+const baseOri = { n: new Float32Array(F * 3), t1: new Float32Array(F * 3), t2: new Float32Array(F * 3), p: new Float32Array(F * 3) };
+facetData.forEach((f, i) => { for (let k = 0; k < 3; k++) { baseOri.n[i*3+k] = f.n[k]; baseOri.t1[i*3+k] = f.t1[k]; baseOri.t2[i*3+k] = f.t2[k]; baseOri.p[i*3+k] = f.p[k]; } });
+
+function ballAngle(t) { return 2 * TAU * t / DUR + 0.42 * Math.sin(TAU * t / DUR); }   // two turns per loop
+function rotMat(t) {
+  const ay = ballAngle(t), ax = 0.17 + 0.05 * Math.sin(TAU * t / DUR + 0.6), az = 0.07 * Math.cos(TAU * t / DUR);
+  const cy = Math.cos(ay), sy = Math.sin(ay), cx = Math.cos(ax), sx = Math.sin(ax), cz = Math.cos(az), sz = Math.sin(az);
+  // M = Rz * Rx * Ry
+  const Ry = [cy, 0, sy, 0, 1, 0, -sy, 0, cy], Rx = [1, 0, 0, 0, cx, -sx, 0, sx, cx], Rz = [cz, -sz, 0, sz, cz, 0, 0, 0, 1];
+  const mul = (A, B) => { const R = new Array(9); for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) R[r*3+c] = A[r*3]*B[c] + A[r*3+1]*B[3+c] + A[r*3+2]*B[6+c]; return R; };
+  return mul(Rz, mul(Rx, Ry));
+}
+function orient(t, o) {
+  const m = rotMat(t);
+  const rot = (src, dst) => {
+    for (let i = 0; i < F; i++) { const k = i * 3, x = src[k], y = src[k+1], z = src[k+2];
+      dst[k] = m[0]*x + m[1]*y + m[2]*z; dst[k+1] = m[3]*x + m[4]*y + m[5]*z; dst[k+2] = m[6]*x + m[7]*y + m[8]*z; }
+  };
+  rot(baseOri.n, o.n); rot(baseOri.t1, o.t1); rot(baseOri.t2, o.t2); rot(baseOri.p, o.p);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Light animation                                                    */
+/* ------------------------------------------------------------------ */
+const beatPulse = t => 1 + 0.07 * Math.pow(0.5 + 0.5 * Math.sin(TAU * 30 * t / DUR - 1.2), 3);   // 120 BPM
+function lightState(t) {
+  const pulse = beatPulse(t);
+  return LIGHTS.map(L => {
+    const hue = L.hue + L.amp * Math.sin(TAU * L.hk * t / DUR + L.hp);
+    const lvl = (0.62 + 0.38 * Math.sin(TAU * L.lk * t / DUR + L.lp)) * L.gain * pulse;
+    const white = false;
+    const rgb = hsl(hue, L.sat, white ? 0.72 : 0.56);
+    return { hue, lvl, rgb, bucket: white ? WHITE_B : ((Math.round(hue / 5) % NB) + NB) % NB };
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/*  Ray traced wall spots                                              */
+/* ------------------------------------------------------------------ */
+const SPN = F * NL;
+const mkSpots = () => ({ valid: new Uint8Array(SPN), wall: new Int8Array(SPN),
+  cx: new Float32Array(SPN), cy: new Float32Array(SPN), ax: new Float32Array(SPN), ay: new Float32Array(SPN),
+  bx: new Float32Array(SPN), by: new Float32Array(SPN), a: new Float32Array(SPN) });
+const oriA = mkOri(), oriB = mkOri(), oriM = mkOri();
+const spotsA = mkSpots(), spotsB = mkSpots();
+const DELTA = 0.016;                 // angular half-size of the light source
+const bounds = [BOX.x0, BOX.x1, BOX.y0, BOX.y1, BOX.z0, BOX.z1];
+const sxs = new Float64Array(4), sys = new Float64Array(4);
+
+function computeSpots(t, ori, buf) {
+  setCamera(t); orient(t, ori);
+  buf.valid.fill(0);
+  for (let l = 0; l < NL; l++) {
+    const [lx, ly, lz] = LIGHTS[l].pos;
+    for (let f = 0; f < F; f++) {
+      const k = f * 3, idx = f * NL + l;
+      const nx = ori.n[k], ny = ori.n[k+1], nz = ori.n[k+2];
+      const px = BALL.x + ori.p[k], py = BALL.y + ori.p[k+1], pz = BALL.z + ori.p[k+2];
+      let Lx = lx - px, Ly = ly - py, Lz = lz - pz; const dl = Math.hypot(Lx, Ly, Lz); Lx /= dl; Ly /= dl; Lz /= dl;
+      const ndl = nx * Lx + ny * Ly + nz * Lz;
+      if (ndl < 0.05) continue;
+      const Rx = 2 * ndl * nx - Lx, Ry = 2 * ndl * ny - Ly, Rz = 2 * ndl * nz - Lz;
+      // which wall does the reflected ray hit
+      let tmin = 1e9, wall = -1;
+      if (Rx > 1e-6) { const tt = (bounds[1] - px) / Rx; if (tt < tmin) { tmin = tt; wall = 1; } }
+      else if (Rx < -1e-6) { const tt = (bounds[0] - px) / Rx; if (tt < tmin) { tmin = tt; wall = 0; } }
+      if (Ry > 1e-6) { const tt = (bounds[3] - py) / Ry; if (tt < tmin) { tmin = tt; wall = 3; } }
+      else if (Ry < -1e-6) { const tt = (bounds[2] - py) / Ry; if (tt < tmin) { tmin = tt; wall = 2; } }
+      if (Rz > 1e-6) { const tt = (bounds[5] - pz) / Rz; if (tt < tmin) { tmin = tt; wall = 5; } }
+      else if (Rz < -1e-6) { const tt = (bounds[4] - pz) / Rz; if (tt < tmin) { tmin = tt; wall = 4; } }
+      if (wall < 0 || wall === 5) continue;               // wall behind the camera is never seen
+      const axis = wall >> 1, pv = bounds[wall], sgn = (wall & 1) ? 1 : -1;
+      // beam cross-section axes (facet tangents projected perpendicular to R)
+      let t1x = ori.t1[k], t1y = ori.t1[k+1], t1z = ori.t1[k+2], t2x = ori.t2[k], t2y = ori.t2[k+1], t2z = ori.t2[k+2];
+      const h1 = facetData[f].h1, h2 = facetData[f].h2;
+      let d = t1x * Rx + t1y * Ry + t1z * Rz; let ux = t1x - d * Rx, uy = t1y - d * Ry, uz = t1z - d * Rz;
+      let q = Math.hypot(ux, uy, uz) || 1; ux /= q; uy /= q; uz /= q;
+      d = t2x * Rx + t2y * Ry + t2z * Rz; let wx = t2x - d * Rx, wy = t2y - d * Ry, wz = t2z - d * Rz;
+      q = Math.hypot(wx, wy, wz) || 1; wx /= q; wy /= q; wz /= q;
+      let ok = true;
+      for (let c = 0; c < 4 && ok; c++) {
+        const s1 = (c & 1) ? 1 : -1, s2 = (c & 2) ? 1 : -1;
+        const ox = px + s1 * h1 * t1x + s2 * h2 * t2x, oy = py + s1 * h1 * t1y + s2 * h2 * t2y, oz = pz + s1 * h1 * t1z + s2 * h2 * t2z;
+        const dx = Rx + DELTA * (s1 * ux + s2 * wx), dy = Ry + DELTA * (s1 * uy + s2 * wy), dz = Rz + DELTA * (s1 * uz + s2 * wz);
+        const da = axis === 0 ? dx : axis === 1 ? dy : dz, oa = axis === 0 ? ox : axis === 1 ? oy : oz;
+        if (da * sgn < 1e-5) { ok = false; break; }
+        const tt = (pv - oa) / da; if (tt <= 0) { ok = false; break; }
+        if (!proj(ox + dx * tt, oy + dy * tt, oz + dz * tt)) { ok = false; break; }
+        sxs[c] = PX; sys[c] = PY;
+      }
+      if (!ok) continue;
+      const cx = (sxs[0] + sxs[1] + sxs[2] + sxs[3]) * 0.25, cy = (sys[0] + sys[1] + sys[2] + sys[3]) * 0.25;
+      const ax = (sxs[1] + sxs[3] - sxs[0] - sxs[2]) * 0.5, ay = (sys[1] + sys[3] - sys[0] - sys[2]) * 0.5;
+      const bx = (sxs[2] + sxs[3] - sxs[0] - sxs[1]) * 0.5, by = (sys[2] + sys[3] - sys[0] - sys[1]) * 0.5;
+      const area = Math.abs(ax * by - ay * bx);
+      if (area > 3.0e6 || area < 40) continue;
+      if (cx < -700 || cx > W + 700 || cy < -700 || cy > H + 700) continue;
+      const dist = dl + tmin, fall = 1 / (1 + (dist / 9) * (dist / 9));
+      const inc = 0.4 + 0.6 * Math.abs(axis === 0 ? Rx : axis === 1 ? Ry : Rz);
+      buf.valid[idx] = 1; buf.wall[idx] = wall;
+      buf.cx[idx] = cx; buf.cy[idx] = cy; buf.ax[idx] = ax * SPOT_SCALE; buf.ay[idx] = ay * SPOT_SCALE;
+      buf.bx[idx] = bx * SPOT_SCALE; buf.by[idx] = by * SPOT_SCALE;
+      buf.a[idx] = ndl * fall * inc * Math.pow(clamp(9000 / area, 0.25, 1.6), 0.55);
+    }
+  }
+}
+
+function drawSpots(ls, gain) {
+  const A = spotsA, B = spotsB, S = SPOT_S;
+  ctx.globalCompositeOperation = 'lighter';
+  for (let idx = 0; idx < SPN; idx++) {
+    const va = A.valid[idx], vb = B.valid[idx];
+    if (!va && !vb) continue;
+    const st = ls[idx % NL]; if (st.lvl < 0.02) continue;
+    const spr = spotSprites[st.bucket];
+    if (va && vb && A.wall[idx] === B.wall[idx]) {
+      const dxm = B.cx[idx] - A.cx[idx], dym = B.cy[idx] - A.cy[idx], D = Math.hypot(dxm, dym);
+      const size = Math.sqrt(Math.abs(A.ax[idx] * A.by[idx] - A.ay[idx] * A.bx[idx])) + 1;
+      const step = Math.max(6, size * 0.14);
+      const N = D > 3000 ? 1 : clamp(Math.ceil(D / step), 1, 24);
+      const overlap = Math.min(N, size / step);
+      const ratio = clamp(size / (D + size), 0.32, 1);
+      const base = 0.5 * (A.a[idx] + B.a[idx]) * st.lvl * gain;
+      const alpha = Math.min(1, base * ratio * (N > 1 ? 1 / overlap : 1) * (N > 1 ? 1.6 : 1));
+      ctx.globalAlpha = alpha;
+      for (let i = 0; i < N; i++) {
+        const f = (i + 0.5) / N, g = 1 - f;
+        const ax = A.ax[idx] * g + B.ax[idx] * f, ay = A.ay[idx] * g + B.ay[idx] * f;
+        const bx = A.bx[idx] * g + B.bx[idx] * f, by = A.by[idx] * g + B.by[idx] * f;
+        const cx = A.cx[idx] * g + B.cx[idx] * f, cy = A.cy[idx] * g + B.cy[idx] * f;
+        ctx.setTransform(ax / S, ay / S, bx / S, by / S, cx - (ax + bx) * 0.5, cy - (ay + by) * 0.5);
+        ctx.drawImage(spr, 0, 0);
+      }
+    } else {
+      const X = va ? A : B;
+      ctx.globalAlpha = Math.min(1, X.a[idx] * st.lvl * gain * 0.5);
+      const ax = X.ax[idx], ay = X.ay[idx], bx = X.bx[idx], by = X.by[idx];
+      ctx.setTransform(ax / S, ay / S, bx / S, by / S, X.cx[idx] - (ax + bx) * 0.5, X.cy[idx] - (ay + by) * 0.5);
+      ctx.drawImage(spr, 0, 0);
+    }
+  }
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Room                                                               */
+/* ------------------------------------------------------------------ */
+function drawRoom(ls, t) {
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.fillStyle = '#04040a'; ctx.fillRect(0, 0, W, H);
+  const { x0, x1, y0, y1, z0, z1 } = BOX;
+  fillPoly3([[x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0]], '#0a0b19');   // back
+  fillPoly3([[x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0]], '#07081a');   // left
+  fillPoly3([[x1, y0, z0], [x1, y0, z1], [x1, y1, z1], [x1, y1, z0]], '#07081a');   // right
+  fillPoly3([[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]], '#08080f');   // floor
+  fillPoly3([[x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1]], '#05050b');   // ceiling
+
+  // architectural panel seams
+  ctx.lineWidth = 2.2; ctx.strokeStyle = 'rgba(150,160,230,0.06)'; ctx.beginPath();
+  for (let x = x0; x <= x1 + 0.01; x += 1.5) line3(x, y0, z0, x, y1, z0);                 // back slats
+  for (let y = y0 + 1.4; y < y1; y += 1.4) line3(x0, y, z0, x1, y, z0);
+  for (let z = z0; z <= z1; z += 1.5) { line3(x0, y0, z, x0, y1, z); line3(x1, y0, z, x1, y1, z); }   // side slats
+  for (let y = y0 + 1.4; y < y1; y += 1.4) { line3(x0, y, z0, x0, y, z1); line3(x1, y, z0, x1, y, z1); }
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(140,150,255,0.07)'; ctx.lineWidth = 2.6; ctx.beginPath();       // floor tiles
+  for (let x = x0; x <= x1 + 0.01; x += 1.5) line3(x, y0, z0, x, y0, z1);
+  for (let z = z0; z <= z1; z += 1.5) line3(x0, y0, z, x1, y0, z);
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(120,130,220,0.05)'; ctx.beginPath();                             // ceiling grid
+  for (let x = x0; x <= x1 + 0.01; x += 3) line3(x, y1, z0, x, y1, z1);
+  for (let z = z0; z <= z1; z += 3) line3(x0, y1, z, x1, y1, z);
+  ctx.stroke();
+
+  // LED accent strips (colour follows the lights) - additive
+  ctx.globalCompositeOperation = 'lighter'; ctx.lineCap = 'round';
+  const strips = [
+    [[x0, y0 + 0.05, z0, x1, y0 + 0.05, z0], 0], [[x0, y0 + 0.05, z0, x0, y0 + 0.05, z1], 1], [[x1, y0 + 0.05, z0, x1, y0 + 0.05, z1], 0],
+    [[x0, y1 - 0.05, z0, x1, y1 - 0.05, z0], 3], [[x0, y1 - 0.05, z0, x0, y1 - 0.05, z1], 2], [[x1, y1 - 0.05, z0, x1, y1 - 0.05, z1], 4],
+  ];
+  for (const [s, li] of strips) {
+    const c = ls[li].rgb, a = 0.30 * clamp(ls[li].lvl, 0.2, 1.2);
+    ctx.strokeStyle = `rgba(${c[0]*255|0},${c[1]*255|0},${c[2]*255|0},${a})`; ctx.lineWidth = 9;
+    ctx.beginPath(); line3(...s); ctx.stroke();
+  }
+  ctx.lineCap = 'butt';
+}
+
+/* ------------------------------------------------------------------ */
+/*  Ball, beams, glints                                                */
+/* ------------------------------------------------------------------ */
+const glints = [];
+function ballScreen() { proj(BALL.x, BALL.y, BALL.z); const cx = PX, cy = PY, z = PZ; return { cx, cy, r: BALL.r / z * FOCAL * 1.0, z }; }
+
+function drawBeams(ls, bs) {
+  ctx.globalCompositeOperation = 'lighter';
+  for (let l = 0; l < NL; l++) {
+    const L = LIGHTS[l]; if (!L.beam) continue;
+    const st = ls[l];
+    if (!proj(L.pos[0], L.pos[1], L.pos[2])) continue;
+    const sx = PX, sy = PY, depth = PZ;
+    const dx = bs.cx - sx, dy = bs.cy - sy, len = Math.hypot(dx, dy); if (len < 50) continue;
+    const nx = -dy / len, ny = dx / len;
+    const c = st.rgb, col = a => `rgba(${c[0]*255|0},${c[1]*255|0},${c[2]*255|0},${a})`;
+    const wsrc = Math.max(10, 0.35 / depth * FOCAL * 0.5);
+    const layers = [];
+    for (let i = 0; i < 20; i++) layers.push([1.15 - i * 0.05, 0.02]);
+    for (const [wm, al] of layers) {
+      const wb = bs.r * wm, ws = wsrc * wm;
+      const g = ctx.createLinearGradient(sx, sy, bs.cx, bs.cy);
+      const lv = clamp(st.lvl, 0, 1.3) * al;
+      g.addColorStop(0, col(lv * 1.6)); g.addColorStop(0.6, col(lv * 0.8)); g.addColorStop(1, col(lv * 0.4));
+      ctx.fillStyle = g; ctx.beginPath();
+      ctx.moveTo(sx + nx * ws, sy + ny * ws); ctx.lineTo(bs.cx + nx * wb, bs.cy + ny * wb);
+      ctx.lineTo(bs.cx - nx * wb, bs.cy - ny * wb); ctx.lineTo(sx - nx * ws, sy - ny * ws); ctx.closePath(); ctx.fill();
+    }
+  }
+  // fixtures (glow + flare)
+  for (let l = 0; l < NL; l++) {
+    const L = LIGHTS[l], st = ls[l];
+    if (!proj(L.pos[0], L.pos[1], L.pos[2])) continue;
+    if (PX < -600 || PX > W + 600 || PY < -600 || PY > H + 600) continue;
+    const sz = clamp(0.9 / PZ * FOCAL, 60, 900);
+    ctx.globalAlpha = clamp(st.lvl, 0, 1) * 0.9; ctx.drawImage(flareSprites[st.bucket], PX - sz, PY - sz, sz * 2, sz * 2);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawBall(t, ls, bs) {
+  const ori = oriM; orient(t, ori);
+  const Cx = cam.x, Cy = cam.y, Cz = cam.z;
+  glints.length = 0;
+  // hanging rod / cap
+  ctx.globalCompositeOperation = 'source-over';
+  if (proj(BALL.x, BALL.y + BALL.r * 1.0, BALL.z)) {
+    const top = [PX, PY];
+    if (proj(BALL.x, BOX.y1, BALL.z)) {
+      const g = ctx.createLinearGradient(0, PY, 0, top[1]);
+      g.addColorStop(0, 'rgba(90,92,110,0.15)'); g.addColorStop(1, 'rgba(160,165,190,0.85)');
+      ctx.strokeStyle = g; ctx.lineWidth = Math.max(4, 0.045 / PZ * FOCAL);
+      ctx.beginPath(); ctx.moveTo(top[0], top[1]); ctx.lineTo(PX, PY); ctx.stroke();
+    }
+  }
+  // backing sphere (dark grout)
+  ctx.fillStyle = '#07070d'; ctx.beginPath(); ctx.arc(bs.cx, bs.cy, bs.r * 1.005, 0, TAU); ctx.fill();
+
+  const cols = ls.map(s => s.rgb);
+  const SHR = 0.93;
+  for (let f = 0; f < F; f++) {
+    const k = f * 3, fd = facetData[f];
+    const nx = ori.n[k], ny = ori.n[k+1], nz = ori.n[k+2];
+    const px = BALL.x + ori.p[k], py = BALL.y + ori.p[k+1], pz = BALL.z + ori.p[k+2];
+    let Vx = Cx - px, Vy = Cy - py, Vz = Cz - pz; const dv = Math.hypot(Vx, Vy, Vz); Vx /= dv; Vy /= dv; Vz /= dv;
+    const ndv = nx * Vx + ny * Vy + nz * Vz;
+    if (ndv < 0.03) continue;
+    const Rvx = 2 * ndv * nx - Vx, Rvy = 2 * ndv * ny - Vy, Rvz = 2 * ndv * nz - Vz;
+    let r = 0.012, g = 0.014, b = 0.03;
+    for (let l = 0; l < NL; l++) {
+      const L = LIGHTS[l].pos, st = ls[l], c = cols[l];
+      let Lx = L[0] - px, Ly = L[1] - py, Lz = L[2] - pz; const dl = Math.hypot(Lx, Ly, Lz); Lx /= dl; Ly /= dl; Lz /= dl;
+      const ndl = nx * Lx + ny * Ly + nz * Lz;
+      const cosang = Rvx * Lx + Rvy * Ly + Rvz * Lz;
+      const lv = st.lvl;
+      const sheen = Math.max(0, ndl) * 0.26 * lv * (0.25 + 1.2 * fd.rnd);
+      const broad = Math.pow(Math.max(cosang, 0), 14) * 0.45 * lv;
+      const gl = Math.exp(-2 * (1 - cosang) / (0.07 * 0.07)) * lv;         // mirror glint towards the camera
+      const w = sheen + broad;
+      r += c[0] * w + (c[0] * 0.4 + 0.6) * gl * 2.8;
+      g += c[1] * w + (c[1] * 0.4 + 0.6) * gl * 2.8;
+      b += c[2] * w + (c[2] * 0.4 + 0.6) * gl * 2.8;
+      if (gl > 0.30) glints.push({ f, l, gl, px, py, pz });
+    }
+    // facets mirroring the coloured spots on the surrounding walls (slow twinkle)
+    const tw = Math.pow(0.5 + 0.5 * Math.sin(TAU * fd.tk * t / DUR + fd.tp), 5);
+    const lc = cols[f % NL], tl = ls[f % NL].lvl * tw * 0.55;
+    r += lc[0] * tl; g += lc[1] * tl; b += lc[2] * tl;
+    const rim = 0.45 + 0.55 * Math.pow(ndv, 0.55);
+    r *= rim; g *= rim; b *= rim;
+    r = 1 - Math.exp(-r * 1.25); g = 1 - Math.exp(-g * 1.25); b = 1 - Math.exp(-b * 1.25);
+    // facet outline
+    const t1x = ori.t1[k], t1y = ori.t1[k+1], t1z = ori.t1[k+2], t2x = ori.t2[k], t2y = ori.t2[k+1], t2z = ori.t2[k+2];
+    const a1 = fd.h1 * SHR, a2 = fd.h2 * SHR;
+    ctx.beginPath(); let okp = true;
+    for (let c = 0; c < 4; c++) {
+      const s1 = (c === 0 || c === 3) ? -1 : 1, s2 = c < 2 ? -1 : 1;
+      if (!proj(px + s1 * a1 * t1x + s2 * a2 * t2x, py + s1 * a1 * t1y + s2 * a2 * t2y, pz + s1 * a1 * t1z + s2 * a2 * t2z)) { okp = false; break; }
+      c ? ctx.lineTo(PX, PY) : ctx.moveTo(PX, PY);
+    }
+    if (!okp) continue;
+    ctx.closePath();
+    ctx.fillStyle = `rgb(${r * 255 | 0},${g * 255 | 0},${b * 255 | 0})`; ctx.fill();
+  }
+}
+
+function drawGlints(ls) {
+  ctx.globalCompositeOperation = 'lighter';
+  for (const gl of glints) {
+    if (!proj(gl.px, gl.py, gl.pz)) continue;
+    const st = ls[gl.l], s = (180 + 420 * Math.min(1, gl.gl)) * (0.8 + 0.4 * hash(gl.f));
+    ctx.globalAlpha = Math.min(1, gl.gl * 1.1);
+    ctx.drawImage(flareSprites[st.bucket], PX - s, PY - s, s * 2, s * 2);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawHalo(ls, bs) {
+  ctx.globalCompositeOperation = 'lighter';
+  const R = bs.r;
+  const g = ctx.createRadialGradient(bs.cx, bs.cy, R * 0.9, bs.cx, bs.cy, R * 4.4);
+  let r = 0, gg = 0, b = 0, tot = 0;
+  ls.forEach(s => { const w = Math.max(s.lvl, 0); r += s.rgb[0] * w; gg += s.rgb[1] * w; b += s.rgb[2] * w; tot += w; });
+  r /= tot; gg /= tot; b /= tot;
+  const c = a => `rgba(${r*255|0},${gg*255|0},${b*255|0},${a})`;
+  g.addColorStop(0, c(0.12)); g.addColorStop(0.25, c(0.05)); g.addColorStop(1, c(0));
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Dust motes / bokeh                                                 */
+/* ------------------------------------------------------------------ */
+const motes = [];
+for (let i = 0; i < 150; i++) {
+  motes.push({ x: (hash(i * 3.1) - .5) * 15, y: BOX.y0 + 0.8 + hash(i * 5.7) * 8.4, z: -8 + hash(i * 7.3) * 16.5,
+    r: 0.02 + Math.pow(hash(i * 11.9), 3) * 0.20, k: 1 + Math.floor(hash(i * 2.3) * 2), p: hash(i * 13.3) * TAU,
+    tk: 3 + Math.floor(hash(i * 17.7) * 6), sp: hash(i * 19.1) * TAU, c: i % 6, a: 0.05 + hash(i * 23.3) * 0.12 });
+}
+function drawMotes(t) {
+  ctx.globalCompositeOperation = 'lighter';
+  const a = TAU * t / DUR;
+  for (const m of motes) {
+    const x = m.x + 0.55 * Math.sin(a * m.k + m.p), y = m.y + 0.45 * Math.sin(a * m.k + m.p * 1.7), z = m.z + 0.55 * Math.cos(a * m.k + m.p * 0.6);
+    if (!proj(x, y, z) || PZ < 0.9) continue;
+    const s = Math.max(6, m.r / PZ * FOCAL);
+    if (PX < -s || PX > W + s || PY < -s || PY > H + s) continue;
+    const tw = 0.55 + 0.45 * Math.sin(TAU * m.tk * t / DUR + m.sp);
+    ctx.globalAlpha = m.a * tw * (s > 50 ? 0.8 : 1.6);
+    ctx.drawImage(bokehSprites[m.c], PX - s, PY - s, s * 2, s * 2);
+  }
+  ctx.globalAlpha = 1;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Post                                                               */
+/* ------------------------------------------------------------------ */
+function postFX(frame) {
+  ctx.globalCompositeOperation = 'source-over';
+  bA.filter = 'blur(5px)'; bA.globalCompositeOperation = 'copy'; bA.drawImage(canvas, 0, 0, 960, 540); bA.filter = 'none';
+  bB.filter = 'blur(3px)'; bB.globalCompositeOperation = 'copy'; bB.drawImage(bloomA, 0, 0, 240, 135); bB.filter = 'none';
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.globalAlpha = 0.55; ctx.drawImage(bloomA, 0, 0, W, H);
+  ctx.globalAlpha = 0.65; ctx.drawImage(bloomB, 0, 0, W, H);
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.fillStyle = vignette; ctx.fillRect(0, 0, W, H);
+  // film grain
+  ctx.save();
+  ctx.globalCompositeOperation = 'overlay'; ctx.globalAlpha = 0.07;
+  ctx.translate(Math.floor(hash(frame * 1.37) * 512), Math.floor(hash(frame * 2.11) * 512));
+  ctx.fillStyle = grainPattern; ctx.fillRect(-512, -512, W + 1024, H + 1024);
+  ctx.restore();
+}
+
+/* ------------------------------------------------------------------ */
+/*  Frame                                                              */
+/* ------------------------------------------------------------------ */
+const SHUTTER = 1 / 60;            // seconds of motion blur
+function render(t) {
+  t = ((t % DUR) + DUR) % DUR;
+  const ls = lightState(t);
+  // motion-blur endpoints
+  computeSpots(t - SHUTTER / 2, oriA, spotsA);
+  computeSpots(t + SHUTTER / 2, oriB, spotsB);
+  setCamera(t);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  drawRoom(ls, t);
+  const bs = ballScreen();
+  drawSpots(ls, 0.95);
+  drawBeams(ls, bs);
+  drawBall(t, ls, bs);
+  drawHalo(ls, bs);
+  drawGlints(ls);
+  drawMotes(t);
+  postFX(Math.floor(t * 60));
+}
+
+window.DURATION = DUR;
+window.renderAt = t => { render(t); };
+
+/* ------------------------------------------------------------------ */
+/*  Autoplay loop                                                      */
+/* ------------------------------------------------------------------ */
+const qs = new URLSearchParams(location.search);
+if (qs.has('t')) {
+  render(parseFloat(qs.get('t')) || 0);
+} else {
+  let start = null;
+  const tick = now => {
+    if (start === null) start = now;
+    render(((now - start) / 1000) % DUR);
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+})();
+</script>
+</body>
+</html>
