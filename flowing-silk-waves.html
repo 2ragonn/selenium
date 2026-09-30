@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Flowing Silk Fabric Waves</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #0a0102; }
+  #stage { position: fixed; inset: 0; overflow: hidden; }
+  canvas {
+    position: absolute; left: 50%; top: 50%;
+    width: min(100vw, calc(100vh * 16 / 9));
+    height: min(100vh, calc(100vw * 9 / 16));
+    transform: translate(-50%, -50%);
+    display: block;
+  }
+  #msg { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+         color: #d9b26a; font: 20px/1.4 system-ui, sans-serif; text-align: center; padding: 2rem; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="c" width="3840" height="2160"></canvas>
+  <div id="msg">WebGL is required to display this animation.</div>
+</div>
+
+<script id="vs" type="x-shader/x-vertex">
+attribute vec2 a;
+void main(){ gl_Position = vec4(a, 0.0, 1.0); }
+</script>
+
+<script id="fs" type="x-shader/x-fragment">
+precision highp float;
+
+uniform vec2  R;    // resolution in pixels
+uniform float ph;   // loop phase 0..1 (15 s)
+uniform float fr;   // frame index for grain (looping)
+
+const float TAU = 6.28318530718;
+const float SL  = 1.05;   // height -> slope scale
+
+float hash11(float n){ return fract(sin(n * 127.1) * 43758.5453); }
+float hash21(vec2 p){
+  p = fract(p * vec2(123.34, 456.21));
+  p += dot(p, p + 45.32);
+  return fract(p.x * p.y);
+}
+vec2 hash22(vec2 p){
+  float n = hash21(p);
+  return vec2(n, hash21(p + n + 17.0));
+}
+
+// ---------------------------------------------------------------
+// Silk height field. Every temporal term is an INTEGER multiple of
+// the loop phase, so t = 0 and t = 15 s are identical.
+// ---------------------------------------------------------------
+float H(vec2 p){
+  float a = TAU * ph;
+  p *= 1.35;
+
+  // gentle breeze gust envelope travelling across the cloth
+  float gust = 1.0 + 0.20 * sin(a + dot(p, vec2(0.45, 0.30)));
+
+  // slow, low-frequency domain warp: folds bend and drift organically
+  vec2 q = p;
+  q += 0.09 * vec2(sin(0.9 * p.y + a + 1.0), cos(0.7 * p.x - a));
+  q += 0.03 * vec2(cos(2.3 * p.y - 2.0 * a), sin(2.0 * p.x + 2.0 * a + 0.7));
+
+  // slowly varying crest amplitude/phase so folds swell and relax
+  float m1 = sin(dot(q, vec2(-0.9, 0.5)) * 0.8 + a);
+
+  // dominant silk folds: wave vectors clustered around ~60 degrees
+  float h = 0.0;
+  h += 0.58 * sin(dot(q, vec2(1.00, 1.75)) - a + 0.75 * m1);
+  h += 0.36 * sin(dot(q, vec2(1.60, 1.30)) - 2.0 * a + 1.3 + 0.5 * m1);
+  h += 0.34 * sin(dot(q, vec2(0.40, 2.90)) - a + 2.1);
+  // soft pleats: rounded creases that catch the light
+  h += 0.16 * (1.0 - sqrt(pow(sin(dot(q, vec2(1.30, 2.30)) - 2.0 * a + 0.9 * m1 + 0.5), 2.0) + 0.03));
+  h += 0.16 * sin(dot(q, vec2(2.20, 3.60)) - 3.0 * a + 0.4);
+  h += 0.10 * sin(dot(q, vec2(-0.6, 3.40)) + 2.0 * a + 1.7);
+  h += 0.035 * sin(dot(q, vec2(3.4, 6.1)) - 3.0 * a);
+
+  return h * gust;
+}
+
+// drifting golden dust carried by the breeze; all drift is integer cells / loop
+vec3 motes(vec2 p, float a){
+  vec3 acc = vec3(0.0);
+  for (int i = 0; i < 4; i++){
+    float fi = float(i);
+    float sc = (i == 3) ? 2.6 : 6.0 + fi * 6.0;
+    vec2 pp = p * sc;
+    pp.x -= ph * (3.0 + 2.0 * fi);         // integer cell travel -> seamless
+    pp.y -= ph * (1.0 + fi);
+    pp += vec2(fi * 7.31, fi * 3.17);
+    vec2 id = floor(pp);
+    vec2 f  = fract(pp) - 0.5;
+    vec2 r  = hash22(id + fi * 31.0);
+    float present = step(0.86, r.x);
+    vec2 off = (r - 0.5) * 0.24;
+    float w = hash21(id + 9.0) * TAU;
+    off += 0.05 * vec2(sin(a + w), cos(2.0 * a + w));
+    float d = length(f - off);
+    float rad = mix(0.03, 0.075, hash21(id + 3.3));
+    float k = 0.0;
+    float depthFade = 1.0;
+    if (i == 3) {                          // large soft out-of-focus bokeh
+      rad = mix(0.12, 0.2, hash21(id + 3.3));
+      k = smoothstep(rad, rad * 0.55, d) * 0.10;
+      depthFade = 1.0;
+    } else {
+      k = smoothstep(rad, 0.0, d) * 1.4 + smoothstep(rad * 2.6, 0.0, d) * 0.18;
+    }
+    float tw = 0.55 + 0.45 * sin(2.0 * a + w * 3.0);
+    vec3 col = mix(vec3(1.0, 0.58, 0.16), vec3(1.0, 0.84, 0.52), hash21(id + 5.5));
+    acc += present * k * tw * depthFade * col;
+  }
+  return acc;
+}
+
+vec3 aces(vec3 x){
+  return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+}
+
+void main(){
+  float a = TAU * ph;
+  vec2 p = (gl_FragCoord.xy - 0.5 * R) / R.y;
+  p *= 1.12;
+
+  // ---- geometry: normal, curvature, self-shadow --------------------
+  const float e = 0.02;
+  float h0  = H(p);
+  float hx1 = H(p + vec2(e, 0.0));
+  float hx0 = H(p - vec2(e, 0.0));
+  float hy1 = H(p + vec2(0.0, e));
+  float hy0 = H(p - vec2(0.0, e));
+  vec2  g   = vec2(hx1 - hx0, hy1 - hy0) / (2.0 * e) * SL;
+  vec3  N   = normalize(vec3(-g, 1.0));
+  float curv = (hx1 + hx0 + hy1 + hy0 - 4.0 * h0) / (e * e);   // >0 in valleys
+  float ao   = clamp(1.0 - curv * 0.035, 0.30, 1.12);
+
+  // moving key light (very slow orbit) + warm rim light
+  vec3 L1 = normalize(vec3(-0.55 + 0.16 * cos(a), 0.62 + 0.12 * sin(a), 0.72));
+  vec3 L2 = normalize(vec3( 0.78 - 0.10 * sin(a), -0.30 + 0.10 * cos(a), 0.50));
+  vec3 V  = vec3(0.0, 0.0, 1.0);
+
+  // soft self-shadowing toward the key light
+  float ratio = L1.z / length(L1.xy);
+  float d1 = 0.07, d2 = 0.18;
+  float o1 = smoothstep(-0.02, 0.09, SL * (H(p + L1.xy * d1 / length(L1.xy)) - h0) - d1 * ratio);
+  float o2 = smoothstep(-0.02, 0.12, SL * (H(p + L1.xy * d2 / length(L1.xy)) - h0) - d2 * ratio);
+  float sh = 1.0 - 0.55 * max(o1, o2 * 0.8);
+
+  // ---- material ---------------------------------------------------
+  // a golden silk wave sweeps once across the red cloth per loop
+  vec2  dirG = vec2(0.50, 0.86);
+  float u    = (dot(p, dirG) + 0.16 * h0) / 2.1;
+  float band = 0.5 + 0.5 * cos(TAU * (u - ph));
+  float gm   = smoothstep(0.80, 0.99, band);
+
+  vec3 RED  = vec3(0.52, 0.006, 0.022);
+  vec3 GOLD = vec3(0.92, 0.46, 0.070);
+  vec3 albedo = mix(RED, GOLD, gm);
+
+  // fine thread structure (warp + weft), very subtle
+  vec2 tdir = vec2(0.57, -0.82);
+  float thr = 0.5 + 0.5 * sin(dot(p, tdir) * 1750.0 + 4.0 * h0);
+  float thr2 = 0.5 + 0.5 * sin(dot(p, vec2(0.82, 0.57)) * 1350.0);
+  float weave = 0.93 + 0.05 * thr + 0.04 * thr2;
+  albedo *= weave;
+
+  // tangent frame for anisotropic (Kajiya-Kay) silk highlights
+  vec3 T0 = normalize(vec3(-0.86, 0.50, 0.0));   // threads run along the fold crests
+  vec3 Tw = normalize(T0 - N * dot(T0, N));
+  vec3 Tf = normalize(cross(N, Tw));
+
+  vec3 Hv1 = normalize(L1 + V);
+  vec3 Hv2 = normalize(L2 + V);
+  float nl1 = dot(N, L1);
+  float nl2 = dot(N, L2);
+
+  float sinW1 = sqrt(max(1.0 - pow(dot(Tw, Hv1), 2.0), 0.0));
+  float sinF1 = sqrt(max(1.0 - pow(dot(Tf, Hv1), 2.0), 0.0));
+  float sinW2 = sqrt(max(1.0 - pow(dot(Tw, Hv2), 2.0), 0.0));
+
+  float specW = pow(sinW1, 70.0) * smoothstep(0.0, 0.35, nl1);
+  float specF = pow(sinF1, 40.0) * smoothstep(0.0, 0.35, nl1);
+  float specR = pow(sinW2, 50.0) * smoothstep(0.0, 0.35, nl2);
+
+  // environment-style gloss
+  vec3 Rr = reflect(-V, N);
+  float gl1 = pow(max(dot(Rr, L1), 0.0), 28.0);
+  float gl2 = pow(max(dot(Rr, L2), 0.0), 10.0);
+
+  // ---- lighting ----------------------------------------------------
+  float dif1 = pow(clamp((nl1 + 0.15) / 1.15, 0.0, 1.0), 1.4);
+  float dif2 = clamp((nl2 + 0.15) / 1.15, 0.0, 1.0);
+
+  vec3 keyCol = vec3(1.00, 0.86, 0.70) * 1.25;
+  vec3 rimCol = vec3(1.00, 0.45, 0.16) * 0.55;
+  vec3 amb    = vec3(0.030, 0.006, 0.012);
+
+  vec3 col = albedo * (amb + keyCol * dif1 * sh + rimCol * dif2 * 0.65) * ao;
+
+  vec3 specCol = mix(vec3(1.00, 0.62, 0.22), vec3(1.00, 0.86, 0.58), gm);
+  vec3 weftCol = mix(vec3(0.95, 0.10, 0.12), vec3(1.00, 0.55, 0.20), gm);
+  col += specW * specCol * 1.15 * sh * ao;
+  col += specF * weftCol * 0.55 * sh * ao;
+  col += specR * vec3(1.0, 0.45, 0.20) * 0.55 * ao;
+  col += gl1 * specCol * 0.42 * sh;
+  col += gl2 * vec3(1.0, 0.5, 0.25) * 0.20;
+
+  // grazing-angle silk sheen (rose / gold)
+  float fres = pow(1.0 - N.z, 2.6);
+  col += fres * mix(vec3(0.85, 0.10, 0.08), vec3(1.0, 0.62, 0.25), gm) * 0.55 * ao;
+
+  // ---- atmosphere -------------------------------------------------
+  vec2 pv = gl_FragCoord.xy / R - 0.5;
+  float vig = 1.0 - 0.75 * pow(length(pv * vec2(1.0, 1.15)) * 1.32, 2.3);
+  col *= clamp(vig, 0.0, 1.0);
+  col += vec3(0.22, 0.06, 0.02) * exp(-dot(pv - vec2(-0.28, 0.24), pv - vec2(-0.28, 0.24)) * 5.5) * 0.28;
+
+  // gold dust in the breeze (additive, glows through tonemapping)
+  col += motes(p, a) * 0.9;
+
+  // ---- grade -------------------------------------------------------
+  col = aces(col * 0.78);
+  col = pow(col, vec3(1.0 / 2.2));
+  // gentle contrast S-curve
+  col = mix(col, col * col * (3.0 - 2.0 * col), 0.35);
+
+  // fine film grain / dither (frame index loops with the animation)
+  float gr = hash21(gl_FragCoord.xy + fr * 13.37) - 0.5;
+  col += gr * 0.012;
+
+  gl_FragColor = vec4(col, 1.0);
+}
+</script>
+
+<script>
+(function () {
+  var DURATION = 15.0;                 // seconds, seamless loop
+  var FPS_GRAIN = 30.0;
+
+  var canvas = document.getElementById('c');
+  var q = new URLSearchParams(location.search);
+  var resScale = parseFloat(q.get('res')) || 1;          // optional preview scale
+  canvas.width  = Math.round(3840 * resScale);
+  canvas.height = Math.round(2160 * resScale);
+
+  var gl = canvas.getContext('webgl2', { antialias: false, alpha: false, preserveDrawingBuffer: true, powerPreference: 'high-performance' }) ||
+           canvas.getContext('webgl',  { antialias: false, alpha: false, preserveDrawingBuffer: true, powerPreference: 'high-performance' });
+  if (!gl) { document.getElementById('msg').style.display = 'flex'; return; }
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error(gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER,   document.getElementById('vs').textContent));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, document.getElementById('fs').textContent));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) { console.error(gl.getProgramInfoLog(prog)); }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var loc = gl.getAttribLocation(prog, 'a');
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+
+  var uR  = gl.getUniformLocation(prog, 'R');
+  var uPh = gl.getUniformLocation(prog, 'ph');
+  var uFr = gl.getUniformLocation(prog, 'fr');
+  gl.viewport(0, 0, canvas.width, canvas.height);
+
+  // Render the loop at time `sec` (any value; wrapped into 0..15 s)
+  function renderAt(sec) {
+    var t = ((sec % DURATION) + DURATION) % DURATION;
+    gl.uniform2f(uR, canvas.width, canvas.height);
+    gl.uniform1f(uPh, t / DURATION);
+    gl.uniform1f(uFr, Math.floor(t * FPS_GRAIN) % (DURATION * FPS_GRAIN));
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+  window.renderAt = renderAt;          // handy for frame-exact capture tools
+  window.DURATION = DURATION;
+
+  var t0 = null;
+  function frame(now) {
+    if (t0 === null) t0 = now;
+    renderAt((now - t0) / 1000);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
