@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fire Sparks Rising — Glowing Embers in the Dark (4K, 15s loop)</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: #000;
+    overflow: hidden;
+  }
+  canvas {
+    display: block;
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: 100vw;
+    height: 100vh;
+    object-fit: cover;
+    background: #000;
+  }
+</style>
+</head>
+<body>
+<canvas id="c" width="3840" height="2160"></canvas>
+<script>
+(function () {
+  'use strict';
+
+  // ------------------------------------------------------------------
+  //  Fire Sparks Flying Upwards — glowing embers rising in the dark
+  //  3840x2160 · 15 second seamless loop · WebGL2 · HDR bloom pipeline
+  //  Every particle is a pure function of (time mod 15s), so frame 0 and
+  //  frame 15s are identical: the loop is seamless with no warm-up.
+  // ------------------------------------------------------------------
+
+  const W = 3840, H = 2160;
+  const LOOP = 15.0;
+  const PARTICLES = 9000;
+
+  const canvas = document.getElementById('c');
+  const gl = canvas.getContext('webgl2', {
+    antialias: false,
+    alpha: false,
+    depth: false,
+    stencil: false,
+    premultipliedAlpha: false,
+    preserveDrawingBuffer: true,
+    powerPreference: 'high-performance'
+  });
+  if (!gl) { document.body.innerHTML = '<p style="color:#fff;font:20px sans-serif;padding:20px">WebGL2 is required.</p>'; return; }
+
+  const hasFloat = !!gl.getExtension('EXT_color_buffer_float');
+  const HDR_FMT = hasFloat ? gl.RGBA16F : gl.RGBA8;
+  const HDR_TYPE = hasFloat ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE;
+
+  // ----------------------------- shaders ----------------------------
+  const FS_QUAD_VS = `#version 300 es
+  precision highp float;
+  out vec2 vUV;
+  void main(){
+    vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+    vUV = p;
+    gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+  }`;
+
+  // Background: dark void, off-screen fire glow from below, loopable smoke wisps
+  const BG_FS = `#version 300 es
+  precision highp float;
+  in vec2 vUV;
+  out vec4 o;
+  uniform float uTime;
+  uniform vec2 uRes;
+  const float LOOP = ${LOOP.toFixed(1)};
+  const float TAU = 6.283185307179586;
+
+  vec2 hash2(vec2 p){
+    p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
+    return -1.0 + 2.0 * fract(sin(p) * 43758.5453123);
+  }
+  // Periodic gradient noise: tiles with integer period 'per' -> exact temporal loop
+  float pnoise(vec2 p, vec2 per){
+    vec2 i = floor(p), f = fract(p);
+    vec2 u = f*f*f*(f*(f*6.0 - 15.0) + 10.0);
+    float a = dot(hash2(mod(i, per)), f);
+    float b = dot(hash2(mod(i + vec2(1.0, 0.0), per)), f - vec2(1.0, 0.0));
+    float c = dot(hash2(mod(i + vec2(0.0, 1.0), per)), f - vec2(0.0, 1.0));
+    float d = dot(hash2(mod(i + vec2(1.0, 1.0), per)), f - vec2(1.0, 1.0));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+  }
+  float fbm(vec2 p, vec2 per){
+    float v = 0.0, amp = 0.5;
+    for (int i = 0; i < 5; i++){ v += amp * pnoise(p, per); p *= 2.0; per *= 2.0; amp *= 0.5; }
+    return v;
+  }
+
+  void main(){
+    vec2 uv = vUV;
+    float asp = uRes.x / uRes.y;
+    float ph = uTime / LOOP;
+
+    // base: deep black-blue at top, faint warm brown near the bottom
+    vec3 top = vec3(0.0035, 0.0035, 0.008);
+    vec3 bot = vec3(0.030, 0.012, 0.005);
+    vec3 col = mix(bot, top, pow(clamp(uv.y, 0.0, 1.0), 0.75));
+
+    // periodic flicker of the unseen fire below the frame
+    float fl  = 0.5 + 0.5 * pnoise(vec2(ph * 12.0, 0.5), vec2(12.0, 1.0));
+    float fl2 = 0.5 + 0.5 * pnoise(vec2(ph * 29.0 + 3.0, 0.5), vec2(29.0, 1.0));
+    float fl3 = 0.5 + 0.5 * pnoise(vec2(ph * 7.0 + 11.0, 0.5), vec2(7.0, 1.0));
+
+    // rising smoke: scroll a whole noise period per loop + circular time-drift
+    vec2 per = vec2(6.0, 4.0);
+    vec2 sp = vec2(uv.x * asp, uv.y) * 2.0;
+    sp.y -= ph * per.y;
+    sp += 0.30 * vec2(cos(ph * TAU), sin(ph * TAU));
+    float n1 = fbm(sp, per);
+    vec2 sp2 = sp * 2.0 + vec2(n1 * 0.9, n1 * 0.4) + vec2(4.7, 2.3);
+    sp2 += 0.22 * vec2(cos(ph * TAU + 2.0), sin(ph * TAU + 2.0));
+    float n2 = fbm(sp2, per * 2.0);
+    float smoke = smoothstep(-0.05, 0.55, n2 * 0.7 + n1 * 0.5);
+    float smokeMask = smoothstep(1.05, 0.05, uv.y) * smoothstep(-0.05, 0.3, uv.y);
+    smokeMask *= smoothstep(1.35, 0.25, abs(uv.x - 0.5) * 2.0 * asp * 0.55);
+
+    // fire glow from below the frame
+    float gx = exp(-pow((uv.x - 0.5) * 2.3, 2.0));
+    float flick = 0.75 + 0.30 * fl + 0.15 * fl2 + 0.10 * fl3;
+    float glow = exp(-uv.y * 4.8) * gx * flick;
+    float glowWide = exp(-uv.y * 2.2) * exp(-pow((uv.x - 0.5) * 1.4, 2.0)) * (0.8 + 0.2 * fl3);
+    vec3 fireCol = vec3(1.0, 0.40, 0.09);
+    col += fireCol * glow * 0.30;
+    col += vec3(0.9, 0.30, 0.06) * glowWide * 0.05;
+
+    // smoke lit from below in warm orange, cooling to grey higher up
+    vec3 smokeCol = mix(vec3(0.05, 0.045, 0.05), vec3(1.0, 0.42, 0.14), clamp(glow * 2.2, 0.0, 1.0));
+    col += smokeCol * smoke * smokeMask * (0.04 + 0.26 * glow + 0.03 * glowWide);
+
+    o = vec4(col, 1.0);
+  }`;
+
+  // Particles: instanced stretched sprites, analytic motion, deterministic loop
+  const PART_VS = `#version 300 es
+  precision highp float;
+  layout(location = 0) in vec2 aCorner;
+  layout(location = 1) in vec4 aS;   // 4 seeds
+  layout(location = 2) in vec4 aT;   // 3 seeds + kind
+  uniform float uTime;
+  uniform vec2 uRes;
+  out vec2 vUV;
+  out float vRatio;
+  out vec3 vCol;
+  out float vKind;
+  out float vSoft;
+
+  const float LOOP = ${LOOP.toFixed(1)};
+  const float TAU = 6.283185307179586;
+  const float ASP = 16.0 / 9.0;
+
+  float hash11(float p){ p = fract(p * 0.1031); p *= p + 33.33; p *= p + p; return fract(p); }
+
+  float gLife, gH, gX0, gY0, gWind, gAmp, gF1, gF2, gP1, gP2, gSpread;
+
+  // position of this particle s seconds after its birth (world: x in [0,ASP], y in [0,1])
+  vec2 P(float s){
+    float a = s / gLife;
+    // fast launch, easing into a steady buoyant rise
+    float y = gY0 + gH * a * (1.55 - 0.55 * a);
+    float t = gAmp * (0.15 + 1.4 * a) * (
+        sin(gF1 * s + gP1)
+      + 0.55 * sin(gF2 * s + gP2)
+      + 0.30 * sin(gF1 * 2.31 * s + gP2 * 1.7 + 1.3)
+      + 0.18 * sin(gF2 * 3.7 * s + gP1 * 2.1)
+    );
+    float x = gX0 + gWind * s * (0.4 + a) + t + gSpread * a * a;
+    return vec2(x, y);
+  }
+
+  void main(){
+    float kind = aT.w;
+    float r0 = aS.x, r1 = aS.y, r2 = aS.z, r3 = aS.w, r4 = aT.x, r5 = aT.y, r6 = aT.z;
+    float r7  = hash11(r0 * 17.0 + r1 + 0.13);
+    float r8  = hash11(r2 * 31.0 + r3 + 0.71);
+    float r9  = hash11(r4 * 53.0 + r5 + 1.31);
+    float r10 = hash11(r6 * 71.0 + r0 + 2.17);
+    float r11 = hash11(r1 * 91.0 + r6 + 3.03);
+    float r12 = hash11(r3 * 13.0 + r4 + 4.41);
+
+    float z = r6;                                // depth: 0 far ... 1 near camera
+    float persp = mix(0.5, 1.35, z * z);
+
+    float cycles, sizePx, streak, flickF, bright;
+    if (kind < 0.5) {            // fast hot sparks
+      cycles = 5.0 + floor(r7 * 8.0);           // life 3.0s .. 1.25s
+      gH = (0.55 + 0.75 * r8) * persp;
+      sizePx = mix(1.8, 4.5, r9) * persp;
+      streak = 1.0; flickF = 26.0; bright = 2.1;
+    } else if (kind < 1.5) {     // slow glowing embers
+      cycles = 2.0 + floor(r7 * 4.0);           // life 7.5s .. 3s
+      gH = (0.55 + 0.65 * r8) * persp;
+      sizePx = mix(3.5, 8.0, r9) * persp;
+      streak = 0.3; flickF = 8.0; bright = 1.25;
+    } else {                      // near-lens out-of-focus bokeh embers
+      cycles = 2.0 + floor(r7 * 2.0);           // life 7.5s .. 5s
+      gH = (0.45 + 0.55 * r8) * 1.5;
+      sizePx = mix(38.0, 125.0, r9);
+      streak = 0.0; flickF = 3.5; bright = 0.055;
+      z = 1.0;
+    }
+    gLife = LOOP / cycles;
+    float age = fract(uTime / gLife + r2);      // exact loop: cycles is an integer
+    float s = age * gLife;
+    float birth = uTime - s;                    // constant across the particle's life
+
+    gX0 = ASP * 0.5 + (r0 + r1 - 1.0) * ASP * 0.66 * mix(0.75, 1.35, z);
+    gY0 = -0.05 - r3 * 0.14;
+    gWind = (r4 - 0.5) * 0.06 + 0.014;
+    gAmp = (0.012 + 0.05 * r5) * (0.6 + 0.6 * persp);
+    gSpread = (r12 - 0.5) * 0.35 * persp;
+    gF1 = 1.4 + 4.2 * r10;
+    gF2 = gF1 * 1.87 + 0.9;
+    gP1 = r9 * TAU;
+    gP2 = r7 * TAU;
+
+    vec2 p = P(s);
+    const float dt = 0.02;
+    vec2 vel = (p - P(s - dt)) / dt;            // analytic-ish velocity (world units / s)
+
+    // loopable global gust (2 cycles per loop) - sways everything together
+    float gust = sin(TAU * uTime / LOOP * 2.0 + p.y * 2.5 + r5 * 0.7) + 0.5 * sin(TAU * uTime / LOOP * 5.0 + p.y * 4.0);
+    p.x += 0.018 * gust * age * (0.5 + persp * 0.5);
+
+    float speed = length(vel);
+    vec2 dir = speed > 1e-5 ? vel / speed : vec2(0.0, 1.0);
+
+    // motion streak: ~1/60s exposure at 4K, sparks only
+    float lenPx = min(streak * speed * uRes.y * (1.0 / 60.0) * 1.6, 70.0);
+    float soft = (kind < 0.5) ? smoothstep(0.72, 1.0, z) : 0.0;   // near sparks defocus
+    float halfW = sizePx * (1.0 + soft * 2.2);
+    float halfL = halfW + lenPx * 0.5;
+    vRatio = halfL / halfW;
+    vSoft = soft;
+
+    vec2 perp = vec2(-dir.y, dir.x);
+    vec2 offs = dir * (aCorner.x * halfL) + perp * (aCorner.y * halfW);
+    vec2 center = p - dir * (lenPx * 0.5 / uRes.y);   // head of the streak at the particle
+    vec2 ndc = vec2(center.x / ASP * 2.0 - 1.0, center.y * 2.0 - 1.0) + offs * 2.0 / uRes;
+    gl_Position = vec4(ndc, 0.0, 1.0);
+    vUV = aCorner;
+    vKind = kind;
+
+    // flicker, occasional crackling bursts
+    float fl = 0.72 + 0.28 * sin(s * flickF + r8 * TAU) * sin(s * flickF * 0.37 + r9 * TAU);
+    fl *= 0.82 + 0.18 * sin(s * flickF * 2.9 + r10 * TAU);
+    if (r11 > 0.86 && kind < 1.5) fl += 1.6 * pow(max(sin(s * (2.0 + 3.0 * r12) + r7 * TAU), 0.0), 40.0);
+
+    // emission waves: the fire "breathes" - density and brightness follow birth time
+    float bp = birth / LOOP;
+    float wave = 0.5 + 0.5 * sin(TAU * bp * 2.0 + 0.7 * sin(TAU * bp * 5.0 + 1.0) + 0.9);
+    float wave2 = 0.5 + 0.5 * sin(TAU * bp * 7.0 + 2.0);
+    float burst = pow(wave, 1.6) * 0.75 + wave2 * 0.25;
+    float density = (kind < 0.5) ? (0.28 + 0.72 * burst) : 1.0;
+    float visible = (r11 < density) ? 1.0 : 0.0;
+    float waveBright = mix(0.7, 1.35, burst);
+
+    float fadeIn = smoothstep(0.0, 0.03, age);
+    float fadeOut = pow(1.0 - age, 0.75);
+    float coolRate = (kind < 0.5) ? 0.95 : 1.05;
+    float temp = clamp(1.0 - age * coolRate + 0.28 * (fl - 0.72) + 0.15 * r8, 0.0, 1.0);
+
+    vec3 hot  = vec3(1.00, 0.93, 0.78);
+    vec3 warm = vec3(1.00, 0.56, 0.16);
+    vec3 cool = vec3(0.90, 0.22, 0.03);
+    vec3 cold = vec3(0.36, 0.045, 0.0);
+    vec3 col = temp > 0.66 ? mix(warm, hot, (temp - 0.66) / 0.34)
+             : temp > 0.33 ? mix(cool, warm, (temp - 0.33) / 0.33)
+             : mix(cold, cool, temp / 0.33);
+
+    bright *= mix(0.45, 1.0, z);
+    bright *= 1.0 - soft * 0.55;
+    vCol = col * bright * fl * fadeIn * fadeOut * waveBright * visible;
+  }`;
+
+  const PART_FS = `#version 300 es
+  precision highp float;
+  in vec2 vUV;
+  in float vRatio;
+  in vec3 vCol;
+  in float vKind;
+  in float vSoft;
+  out vec4 o;
+  void main(){
+    vec2 q = vec2(vUV.x * vRatio, vUV.y);
+    float ext = vRatio - 1.0;
+    float dx = max(abs(q.x) - ext, 0.0);
+    float d = length(vec2(dx, q.y));
+    float shape;
+    if (vKind < 1.5) {
+      float k = mix(11.0, 3.0, vSoft);
+      float core = exp(-d * d * k);
+      float halo = exp(-d * d * 2.2) * 0.16;
+      float tail = mix(0.30, 1.0, smoothstep(-vRatio, vRatio * 0.35, q.x));
+      shape = (core + halo) * tail * smoothstep(1.0, 0.8, d);
+    } else {
+      float disc = smoothstep(1.0, 0.90, d);
+      float ring = smoothstep(0.5, 1.0, d);
+      shape = disc * (0.5 + 0.5 * ring);
+    }
+    o = vec4(vCol * shape, 1.0);
+  }`;
+
+  // 13-tap downsample (Jimenez / CoD style) with optional soft threshold
+  const DOWN_FS = `#version 300 es
+  precision highp float;
+  in vec2 vUV;
+  out vec4 o;
+  uniform sampler2D uTex;
+  uniform vec2 uTexel;
+  uniform float uThreshold;
+  uniform float uKnee;
+  vec3 tap(vec2 off){ return texture(uTex, vUV + off * uTexel).rgb; }
+  void main(){
+    vec3 a = tap(vec2(-2.0,  2.0)), b = tap(vec2(0.0,  2.0)), c = tap(vec2(2.0,  2.0));
+    vec3 d = tap(vec2(-2.0,  0.0)), e = tap(vec2(0.0,  0.0)), f = tap(vec2(2.0,  0.0));
+    vec3 g = tap(vec2(-2.0, -2.0)), h = tap(vec2(0.0, -2.0)), i = tap(vec2(2.0, -2.0));
+    vec3 j = tap(vec2(-1.0,  1.0)), k = tap(vec2(1.0,  1.0));
+    vec3 l = tap(vec2(-1.0, -1.0)), m = tap(vec2(1.0, -1.0));
+    vec3 col = e * 0.125 + (a + c + g + i) * 0.03125 + (b + d + f + h) * 0.0625 + (j + k + l + m) * 0.125;
+    if (uThreshold > 0.0) {
+      float br = max(col.r, max(col.g, col.b));
+      float sft = clamp(br - uThreshold + uKnee, 0.0, 2.0 * uKnee);
+      sft = sft * sft / (4.0 * uKnee + 1e-4);
+      float contrib = max(sft, br - uThreshold) / max(br, 1e-4);
+      col *= contrib;
+    }
+    o = vec4(col, 1.0);
+  }`;
+
+  // 9-tap tent upsample, accumulated onto the current mip
+  const UP_FS = `#version 300 es
+  precision highp float;
+  in vec2 vUV;
+  out vec4 o;
+  uniform sampler2D uPrev;   // smaller mip (already accumulated)
+  uniform sampler2D uBase;   // same-size downsampled mip
+  uniform vec2 uTexel;
+  uniform float uRadius;
+  vec3 tap(vec2 off){ return texture(uPrev, vUV + off * uTexel * uRadius).rgb; }
+  void main(){
+    vec3 s = tap(vec2(-1.0, 1.0)) + 2.0 * tap(vec2(0.0, 1.0)) + tap(vec2(1.0, 1.0))
+       + 2.0 * tap(vec2(-1.0, 0.0)) + 4.0 * tap(vec2(0.0, 0.0)) + 2.0 * tap(vec2(1.0, 0.0))
+       + tap(vec2(-1.0, -1.0)) + 2.0 * tap(vec2(0.0, -1.0)) + tap(vec2(1.0, -1.0));
+    o = vec4(texture(uBase, vUV).rgb + s / 16.0, 1.0);
+  }`;
+
+  // Composite: HDR scene + bloom -> filmic tonemap, vignette, warm grade, dither
+  const COMP_FS = `#version 300 es
+  precision highp float;
+  in vec2 vUV;
+  out vec4 o;
+  uniform sampler2D uScene;
+  uniform sampler2D uBloom;
+  uniform vec2 uRes;
+  uniform float uBloomStrength;
+  uniform float uExposure;
+  vec3 aces(vec3 x){ return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
+  float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+  void main(){
+    vec3 scene = texture(uScene, vUV).rgb;
+    // subtle chromatic spread of the bloom for a lens-like glow
+    vec2 cs = (vUV - 0.5) * 0.0025;
+    vec3 bloom = vec3(
+      texture(uBloom, vUV + cs).r,
+      texture(uBloom, vUV).g,
+      texture(uBloom, vUV - cs).b);
+    vec3 c = scene + bloom * uBloomStrength;
+    c *= uExposure;
+    // warm grade
+    c = mix(c, c * vec3(1.06, 0.98, 0.90), 0.5);
+    // vignette
+    float asp = uRes.x / uRes.y;
+    float r = length((vUV - 0.5) * vec2(asp, 1.0)) * 0.95;
+    c *= mix(0.45, 1.0, smoothstep(1.25, 0.3, r));
+    c = aces(c);
+    c = pow(c, vec3(1.0 / 2.2));
+    c += (hash12(gl_FragCoord.xy) - 0.5) / 255.0;   // banding-free dark gradients
+    o = vec4(c, 1.0);
+  }`;
+
+  // ----------------------------- GL utils ---------------------------
+  function compile(type, src) {
+    const sh = gl.createShader(type);
+    gl.shaderSource(sh, src);
+    gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+      throw new Error(gl.getShaderInfoLog(sh) + '\n' + src);
+    }
+    return sh;
+  }
+  function program(vs, fs) {
+    const p = gl.createProgram();
+    gl.attachShader(p, compile(gl.VERTEX_SHADER, vs));
+    gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs));
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+    const u = {};
+    const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+    for (let i = 0; i < n; i++) { const info = gl.getActiveUniform(p, i); u[info.name] = gl.getUniformLocation(p, info.name); }
+    return { p, u };
+  }
+  function makeTarget(w, h) {
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, HDR_FMT, w, h, 0, gl.RGBA, HDR_TYPE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    const fbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return { tex, fbo, w, h };
+  }
+
+  const bgProg = program(FS_QUAD_VS, BG_FS);
+  const partProg = program(PART_VS, PART_FS);
+  const downProg = program(FS_QUAD_VS, DOWN_FS);
+  const upProg = program(FS_QUAD_VS, UP_FS);
+  const compProg = program(FS_QUAD_VS, COMP_FS);
+
+  // ----------------------------- targets ----------------------------
+  const scene = makeTarget(W, H);
+  const MIPS = 7;                       // 1920 -> 30 px wide
+  const down = [], up = [];
+  for (let i = 0, w = W >> 1, h = H >> 1; i < MIPS; i++, w = Math.max(1, w >> 1), h = Math.max(1, h >> 1)) {
+    down.push(makeTarget(w, h));
+    if (i < MIPS - 1) up.push(makeTarget(w, h));
+  }
+
+  // ----------------------------- particles --------------------------
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = a + 0x6D2B79F5 | 0;
+      let t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+  const rnd = mulberry32(0x5EED1234);
+  const seedA = new Float32Array(PARTICLES * 4);
+  const seedB = new Float32Array(PARTICLES * 4);
+  const nSparks = Math.floor(PARTICLES * 0.71);
+  const nEmbers = Math.floor(PARTICLES * 0.275);
+  for (let i = 0; i < PARTICLES; i++) {
+    seedA[i * 4 + 0] = rnd(); seedA[i * 4 + 1] = rnd(); seedA[i * 4 + 2] = rnd(); seedA[i * 4 + 3] = rnd();
+    seedB[i * 4 + 0] = rnd(); seedB[i * 4 + 1] = rnd(); seedB[i * 4 + 2] = rnd();
+    seedB[i * 4 + 3] = i < nSparks ? 0 : (i < nSparks + nEmbers ? 1 : 2);
+  }
+
+  const partVAO = gl.createVertexArray();
+  gl.bindVertexArray(partVAO);
+  const cornerBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, cornerBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  const seedABuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, seedABuf);
+  gl.bufferData(gl.ARRAY_BUFFER, seedA, gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(1);
+  gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 0, 0);
+  gl.vertexAttribDivisor(1, 1);
+  const seedBBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, seedBBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, seedB, gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(2);
+  gl.vertexAttribPointer(2, 4, gl.FLOAT, false, 0, 0);
+  gl.vertexAttribDivisor(2, 1);
+  gl.bindVertexArray(null);
+
+  const quadVAO = gl.createVertexArray();
+
+  // ----------------------------- render -----------------------------
+  function bindTex(unit, tex, loc) {
+    gl.activeTexture(gl.TEXTURE0 + unit);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.uniform1i(loc, unit);
+  }
+  function drawQuad() { gl.drawArrays(gl.TRIANGLES, 0, 3); }
+
+  function render(t) {
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.CULL_FACE);
+
+    // 1. background into HDR scene
+    gl.bindFramebuffer(gl.FRAMEBUFFER, scene.fbo);
+    gl.viewport(0, 0, W, H);
+    gl.disable(gl.BLEND);
+    gl.useProgram(bgProg.p);
+    gl.uniform1f(bgProg.u.uTime, t);
+    gl.uniform2f(bgProg.u.uRes, W, H);
+    gl.bindVertexArray(quadVAO);
+    drawQuad();
+
+    // 2. additive sparks & embers
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE);
+    gl.useProgram(partProg.p);
+    gl.uniform1f(partProg.u.uTime, t);
+    gl.uniform2f(partProg.u.uRes, W, H);
+    gl.bindVertexArray(partVAO);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, PARTICLES);
+    gl.disable(gl.BLEND);
+    gl.bindVertexArray(quadVAO);
+
+    // 3. bloom downsample chain
+    gl.useProgram(downProg.p);
+    for (let i = 0; i < MIPS; i++) {
+      const src = i === 0 ? scene : down[i - 1];
+      gl.bindFramebuffer(gl.FRAMEBUFFER, down[i].fbo);
+      gl.viewport(0, 0, down[i].w, down[i].h);
+      bindTex(0, src.tex, downProg.u.uTex);
+      gl.uniform2f(downProg.u.uTexel, 1 / src.w, 1 / src.h);
+      gl.uniform1f(downProg.u.uThreshold, i === 0 ? 0.35 : 0.0);
+      gl.uniform1f(downProg.u.uKnee, 0.3);
+      drawQuad();
+    }
+
+    // 4. bloom upsample / accumulate chain
+    gl.useProgram(upProg.p);
+    for (let i = MIPS - 2; i >= 0; i--) {
+      const prev = i === MIPS - 2 ? down[MIPS - 1] : up[i + 1];
+      gl.bindFramebuffer(gl.FRAMEBUFFER, up[i].fbo);
+      gl.viewport(0, 0, up[i].w, up[i].h);
+      bindTex(0, prev.tex, upProg.u.uPrev);
+      bindTex(1, down[i].tex, upProg.u.uBase);
+      gl.uniform2f(upProg.u.uTexel, 1 / prev.w, 1 / prev.h);
+      gl.uniform1f(upProg.u.uRadius, 1.0);
+      drawQuad();
+    }
+
+    // 5. composite to screen
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, W, H);
+    gl.useProgram(compProg.p);
+    bindTex(0, scene.tex, compProg.u.uScene);
+    bindTex(1, up[0].tex, compProg.u.uBloom);
+    gl.uniform2f(compProg.u.uRes, W, H);
+    gl.uniform1f(compProg.u.uBloomStrength, 0.16);
+    gl.uniform1f(compProg.u.uExposure, 1.0);
+    drawQuad();
+  }
+
+  // ----------------------------- loop -------------------------------
+  let start = null;
+  function frame(ts) {
+    if (start === null) start = ts;
+    const t = ((ts - start) / 1000) % LOOP;
+    render(t);
+    requestAnimationFrame(frame);
+  }
+  // Optional deterministic seek for frame-by-frame renderers: window.seek(seconds)
+  window.seek = function (seconds) { render(((seconds % LOOP) + LOOP) % LOOP); };
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
