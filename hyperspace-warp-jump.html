@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hyperspace Light Speed Jump</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas {
+    display: block;
+    width: min(100vw, calc(100vh * 16 / 9));
+    height: auto;
+    aspect-ratio: 16 / 9;
+    background: #000;
+  }
+</style>
+</head>
+<body>
+<canvas id="c" width="3840" height="2160"></canvas>
+<script>
+/*
+  HYPERSPACE LIGHT-SPEED JUMP  -  3840x2160, 15 s, seamless loop.
+  Everything is a pure function of time t (mod 15 s), so the clip can be
+  rendered frame-by-frame (window.renderAt(t)) or captured in real time.
+  URL options:  ?t=3.5  -> freeze on one frame.
+*/
+(() => {
+'use strict';
+
+const W = 3840, H = 2160, CX = W / 2, CY = H / 2;
+const DUR = 15, TAU = Math.PI * 2;
+const cv  = document.getElementById('c');
+const ctx = cv.getContext('2d', { alpha: false });
+
+/* ---------- helpers ---------- */
+function mulberry32(a) {
+  return () => {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+const clamp  = (x, a = 0, b = 1) => x < a ? a : x > b ? b : x;
+const fract  = x => x - Math.floor(x);
+const sstep  = (a, b, x) => { const t = clamp((x - a) / (b - a)); return t * t * (3 - 2 * t); };
+const mkCanvas = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
+
+/* ---------- warp-speed profile (periodic, never stalls) ----------
+   P(f): integrated travel, P(0)=0, P(1)=1   V(f): instantaneous speed factor */
+const A1 = 0.34, A3 = 0.14;
+const P = f => f - A1 * Math.sin(TAU * f) / TAU - A3 * Math.sin(3 * TAU * f) / (3 * TAU);
+const V = f => 1 - A1 * Math.cos(TAU * f) - A3 * Math.cos(3 * TAU * f);
+
+/* ---------- star-streak sprites ---------- */
+const PALETTE = [
+  [205, 228, 255, 0.40],   // ice white-blue
+  [ 95, 185, 255, 0.22],   // electric cyan-blue
+  [150, 125, 255, 0.13],   // violet
+  [255, 105, 215, 0.07],   // magenta
+  [110, 255, 232, 0.10],   // aqua
+  [255, 196, 140, 0.08],   // warm gold
+];
+function makeStreakSprite(tint) {
+  const w = 512, h = 64, c = mkCanvas(w, h), g = c.getContext('2d');
+  const img = g.createImageData(w, h), d = img.data;
+  for (let y = 0; y < h; y++) {
+    const v = ((y + 0.5) / h) * 2 - 1;
+    const ay = Math.exp(-v * v * 4.2);
+    const core = Math.exp(-v * v * 16);
+    for (let x = 0; x < w; x++) {
+      const t = (x + 0.5) / w;
+      let ax = Math.pow(Math.min(t / 0.94, 1), 2.3);
+      if (t > 0.94) ax *= Math.pow(Math.cos((t - 0.94) / 0.06 * Math.PI / 2), 1.4);
+      const hot = core * sstep(0.45, 0.93, t);
+      const i = (y * w + x) * 4;
+      d[i]     = tint[0] * (1 - hot) + 255 * hot;
+      d[i + 1] = tint[1] * (1 - hot) + 255 * hot;
+      d[i + 2] = tint[2] * (1 - hot) + 255 * hot;
+      d[i + 3] = 255 * ax * ay;
+    }
+  }
+  g.putImageData(img, 0, 0);
+  return c;
+}
+const sprites = PALETTE.map(makeStreakSprite);
+
+function makeGlowSprite(size, stops) {
+  const c = mkCanvas(size, size), g = c.getContext('2d');
+  const gr = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  stops.forEach(s => gr.addColorStop(s[0], s[1]));
+  g.fillStyle = gr; g.fillRect(0, 0, size, size);
+  return c;
+}
+const bokehSprite = makeGlowSprite(256, [
+  [0, 'rgba(255,255,255,0.35)'], [0.55, 'rgba(170,215,255,0.22)'],
+  [0.82, 'rgba(120,180,255,0.30)'], [0.92, 'rgba(90,150,255,0.10)'], [1, 'rgba(60,120,255,0)']]);
+const coreSprite = makeGlowSprite(1024, [
+  [0.00, 'rgba(255,255,255,1)'], [0.03, 'rgba(235,248,255,0.95)'],
+  [0.08, 'rgba(170,220,255,0.65)'], [0.18, 'rgba(70,150,255,0.32)'],
+  [0.38, 'rgba(40,80,230,0.13)'], [0.65, 'rgba(60,30,190,0.045)'], [1, 'rgba(20,10,120,0)']]);
+
+/* anamorphic flare (horizontal) */
+const flareSprite = (() => {
+  const c = mkCanvas(1024, 64), g = c.getContext('2d');
+  const gh = g.createLinearGradient(0, 0, 1024, 0);
+  gh.addColorStop(0, 'rgba(60,140,255,0)'); gh.addColorStop(0.35, 'rgba(120,190,255,0.45)');
+  gh.addColorStop(0.5, 'rgba(255,255,255,1)'); gh.addColorStop(0.65, 'rgba(120,190,255,0.45)');
+  gh.addColorStop(1, 'rgba(60,140,255,0)');
+  g.fillStyle = gh; g.fillRect(0, 0, 1024, 64);
+  g.globalCompositeOperation = 'destination-in';
+  const gv = g.createLinearGradient(0, 0, 0, 64);
+  gv.addColorStop(0, 'rgba(0,0,0,0)'); gv.addColorStop(0.5, 'rgba(0,0,0,1)'); gv.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = gv; g.fillRect(0, 0, 1024, 64);
+  return c;
+})();
+
+/* light-ray burst */
+function makeRays(seed) {
+  const S = 2048, c = mkCanvas(S, S), g = c.getContext('2d'), r = mulberry32(seed);
+  const gr = g.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+  gr.addColorStop(0.02, 'rgba(180,220,255,0)'); gr.addColorStop(0.10, 'rgba(190,225,255,0.9)');
+  gr.addColorStop(0.40, 'rgba(110,160,255,0.35)'); gr.addColorStop(1, 'rgba(80,80,255,0)');
+  g.fillStyle = gr;
+  for (let i = 0; i < 220; i++) {
+    const a = r() * TAU, wd = 0.0015 + Math.pow(r(), 3) * 0.012;
+    const len = S * (0.22 + r() * 0.28);
+    g.globalAlpha = 0.15 + r() * 0.85;
+    g.beginPath(); g.moveTo(S / 2, S / 2);
+    g.lineTo(S / 2 + Math.cos(a - wd) * len, S / 2 + Math.sin(a - wd) * len);
+    g.lineTo(S / 2 + Math.cos(a + wd) * len, S / 2 + Math.sin(a + wd) * len);
+    g.closePath(); g.fill();
+  }
+  return c;
+}
+const rays1 = makeRays(11), rays2 = makeRays(97);
+
+/* ---------- procedural nebula-tunnel textures (log-polar noise) ---------- */
+function makeNoise(seed) {
+  const r = mulberry32(seed), perm = new Uint8Array(512), val = new Float32Array(256);
+  const p = [...Array(256).keys()];
+  for (let i = 255; i > 0; i--) { const j = (r() * (i + 1)) | 0; [p[i], p[j]] = [p[j], p[i]]; }
+  for (let i = 0; i < 512; i++) perm[i] = p[i & 255];
+  for (let i = 0; i < 256; i++) val[i] = r();
+  const fade = t => t * t * t * (t * (t * 6 - 15) + 10);
+  return function n3(x, y, z) {
+    const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z);
+    const xf = x - xi, yf = y - yi, zf = z - zi;
+    const X = xi & 255, Y = yi & 255, Z = zi & 255;
+    const u = fade(xf), v = fade(yf), w = fade(zf);
+    const h = (a, b, c) => val[perm[perm[perm[X + a] + Y + b] + Z + c]];
+    const x00 = h(0,0,0) + (h(1,0,0) - h(0,0,0)) * u, x10 = h(0,1,0) + (h(1,1,0) - h(0,1,0)) * u;
+    const x01 = h(0,0,1) + (h(1,0,1) - h(0,0,1)) * u, x11 = h(0,1,1) + (h(1,1,1) - h(0,1,1)) * u;
+    const y0 = x00 + (x10 - x00) * v, y1 = x01 + (x11 - x01) * v;
+    return y0 + (y1 - y0) * w;
+  };
+}
+const NEB = 768;
+function makeNebula(seed, c0, c1, c2) {
+  const S = NEB, c = mkCanvas(S, S), g = c.getContext('2d');
+  const img = g.createImageData(S, S), d = img.data, n3 = makeNoise(seed);
+  const half = S / 2;
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      const dx = x + 0.5 - half, dy = y + 0.5 - half;
+      const rn = Math.hypot(dx, dy) / half;
+      const i = (y * S + x) * 4;
+      if (rn > 1 || rn < 0.05) { d[i + 3] = 0; continue; }
+      const a = Math.atan2(dy, dx), lr = Math.log(rn);
+      const ca = Math.cos(a) * 3.2, sa = Math.sin(a) * 3.2, zr = lr * 0.95;
+      let amp = 0.5, fq = 1, n = 0, norm = 0;
+      for (let o = 0; o < 5; o++) {
+        n += amp * n3(ca * fq + 13.1 * o, sa * fq + 7.7 * o, zr * fq * 0.8 + 3.3 * o);
+        norm += amp; amp *= 0.52; fq *= 2.05;
+      }
+      n /= norm;
+      let v = clamp((n - 0.36) / 0.42);
+      v = Math.pow(v, 1.5);
+      const mask = sstep(0.06, 0.34, rn) * (1 - sstep(0.72, 1.0, rn));
+      const m = v * mask;
+      // 3-stop colour ramp
+      let rr, gg, bb;
+      if (v < 0.5) { const t = v / 0.5; rr = c0[0] + (c1[0] - c0[0]) * t; gg = c0[1] + (c1[1] - c0[1]) * t; bb = c0[2] + (c1[2] - c0[2]) * t; }
+      else { const t = (v - 0.5) / 0.5; rr = c1[0] + (c2[0] - c1[0]) * t; gg = c1[1] + (c2[1] - c1[1]) * t; bb = c1[2] + (c2[2] - c1[2]) * t; }
+      d[i] = rr; d[i + 1] = gg; d[i + 2] = bb; d[i + 3] = 255 * Math.min(1, m * 1.1);
+    }
+  }
+  g.putImageData(img, 0, 0);
+  return c;
+}
+const nebA = makeNebula(1337, [ 6,  22, 110], [ 30, 135, 255], [185, 240, 255]);   // electric blue / ice
+const nebB = makeNebula(4242, [60,   8, 120], [205,  45, 205], [255, 160, 130]);   // violet / magenta / ember
+
+/* ---------- star field ---------- */
+const ZFAR = 16, ZNEAR = 0.14, ZR = ZFAR - ZNEAR, F = 1100;
+const N = 4200;
+const sAng = new Float32Array(N), sRad = new Float32Array(N), sU = new Float32Array(N),
+      sK = new Uint8Array(N), sSize = new Float32Array(N), sCol = new Uint8Array(N),
+      sBr = new Float32Array(N), sLen = new Float32Array(N), sTw = new Float32Array(N),
+      sTwP = new Float32Array(N), sHero = new Uint8Array(N);
+{
+  const r = mulberry32(20260930);
+  for (let i = 0; i < N; i++) {
+    sAng[i] = r() * TAU;
+    sRad[i] = 0.38 + Math.pow(r(), 1.75) * 3.4;
+    sU[i]   = r();
+    sK[i]   = 2 + ((r() * 5) | 0);
+    sSize[i] = 0.55 + r() * 1.25;
+    let pick = r(), acc = 0, ci = 0;
+    for (; ci < PALETTE.length; ci++) { acc += PALETTE[ci][3]; if (pick <= acc) break; }
+    sCol[i] = Math.min(ci, PALETTE.length - 1);
+    sBr[i]  = 0.30 + Math.pow(r(), 2.2) * 0.75;
+    sLen[i] = 0.55 + r() * 1.0;
+    sTw[i]  = 1 + ((r() * 4) | 0);
+    sTwP[i] = r() * TAU;
+    if (r() < 0.035) { sHero[i] = 1; sSize[i] *= 1.7; sBr[i] = 1.0; sLen[i] *= 1.25; sCol[i] = r() < 0.6 ? 0 : 1; }
+  }
+}
+/* bokeh dust */
+const NB = 70, bAng = [], bRad = [], bU = [], bK = [], bSz = [], bAl = [];
+{
+  const r = mulberry32(777);
+  for (let i = 0; i < NB; i++) {
+    bAng.push(r() * TAU); bRad.push(0.6 + r() * 2.6); bU.push(r());
+    bK.push(2 + ((r() * 2) | 0)); bSz.push(0.05 + r() * 0.14); bAl.push(0.25 + r() * 0.75);
+  }
+}
+/* energy rings (warp gates) */
+const NR = 8, rU = [], rR = [], rC = [], rA0 = [];
+{
+  const r = mulberry32(31337);
+  for (let i = 0; i < NR; i++) {
+    rU.push((i + (r() - 0.5) * 0.4) / NR); rR.push(0.95 + r() * 0.5);
+    rC.push(i % 3 === 2 ? [255, 120, 225] : i % 3 === 1 ? [140, 230, 255] : [120, 170, 255]);
+    rA0.push(r() * TAU);
+  }
+}
+
+/* ---------- bloom chain & post ---------- */
+const L1 = mkCanvas(1920, 1080), L2 = mkCanvas(960, 540), L3 = mkCanvas(480, 270), L4 = mkCanvas(240, 135);
+const g1 = L1.getContext('2d'), g2 = L2.getContext('2d'), g3 = L3.getContext('2d'), g4 = L4.getContext('2d');
+[g1, g2, g3, g4].forEach(g => { g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high'; });
+const noiseTile = (() => {
+  const c = mkCanvas(512, 512), g = c.getContext('2d'), im = g.createImageData(512, 512), r = mulberry32(5);
+  for (let i = 0; i < im.data.length; i += 4) { const v = 96 + r() * 64; im.data[i] = im.data[i+1] = im.data[i+2] = v; im.data[i+3] = 255; }
+  g.putImageData(im, 0, 0); return c;
+})();
+const noisePattern = ctx.createPattern(noiseTile, 'repeat');
+const bgGrad = (() => {
+  const g = ctx.createRadialGradient(CX, CY, 0, CX, CY, 2300);
+  g.addColorStop(0, '#0a1a48'); g.addColorStop(0.25, '#050c2a'); g.addColorStop(0.6, '#02041a'); g.addColorStop(1, '#010109');
+  return g;
+})();
+const vigGrad = (() => {
+  const g = ctx.createRadialGradient(CX, CY, 900, CX, CY, 2500);
+  g.addColorStop(0, 'rgba(0,0,10,0)'); g.addColorStop(0.6, 'rgba(0,0,12,0.38)'); g.addColorStop(1, 'rgba(0,0,8,0.88)');
+  return g;
+})();
+
+/* ---------- renderer ---------- */
+function render(t) {
+  t = ((t % DUR) + DUR) % DUR;
+  const f = t / DUR, Pv = P(f), v = V(f);
+  const vx = 70 * Math.sin(TAU * f + 0.6) + 25 * Math.sin(3 * TAU * f);
+  const vy = 45 * Math.sin(2 * TAU * f) + 20 * Math.sin(TAU * f + 2.0);
+  const roll = 0.09 * Math.sin(TAU * f) + 0.035 * Math.sin(2 * TAU * f + 1.3);
+  const ox = CX + vx, oy = CY + vy;
+
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, W, H);
+  ctx.globalCompositeOperation = 'lighter';
+
+  /* 1) nebula tunnel: three self-similar zoom layers per colour, cross-faded */
+  const wA = 0.5 + 0.5 * Math.cos(TAU * f), wB = 1 - wA;
+  const nebGain = 0.20 + 0.10 * v;
+  for (let i = 0; i < 3; i++) {
+    const p = fract(3 * Pv + i / 3);
+    const s = 3 * Math.pow(4, p);
+    const al = Math.pow(Math.sin(Math.PI * p), 2) * nebGain;
+    for (let k = 0; k < 2; k++) {
+      const tex = k ? nebB : nebA, wt = k ? wB : wA;
+      if (wt < 0.01) continue;
+      const rot = roll * 3 + i * 2.1 + k * 1.7;
+      const cs = Math.cos(rot) * s, sn = Math.sin(rot) * s;
+      ctx.setTransform(cs, sn, -sn, cs, ox * 0.6 + CX * 0.4, oy * 0.6 + CY * 0.4);
+      ctx.globalAlpha = al * wt;
+      ctx.drawImage(tex, -NEB / 2, -NEB / 2);
+    }
+  }
+
+  /* 2) light rays */
+  {
+    const pulse = 0.05 + 0.045 * v;
+    const r1 = roll * 4 + 0.5, s1 = 1.55 + 0.25 * Math.sin(TAU * f);
+    ctx.setTransform(Math.cos(r1) * s1, Math.sin(r1) * s1, -Math.sin(r1) * s1, Math.cos(r1) * s1, ox, oy);
+    ctx.globalAlpha = pulse; ctx.drawImage(rays1, -1024, -1024);
+    const r2 = -roll * 3 + 2.0, s2 = 2.6 + 0.3 * Math.sin(2 * TAU * f);
+    ctx.setTransform(Math.cos(r2) * s2, Math.sin(r2) * s2, -Math.sin(r2) * s2, Math.cos(r2) * s2, ox, oy);
+    ctx.globalAlpha = pulse * 0.7; ctx.drawImage(rays2, -1024, -1024);
+  }
+
+  /* 3) energy rings */
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.lineCap = 'round';
+  for (let i = 0; i < NR; i++) {
+    const ph = fract(rU[i] + Pv);
+    const z = ZFAR - ph * ZR;
+    const sr = rR[i] * F / z;
+    if (sr > 3400 || sr < 5) continue;
+    const fadeIn = clamp((ZFAR - z) / 4.5);
+    const fadeOut = 1 - sstep(1700, 3300, sr);
+    const a = fadeIn * fadeOut * (0.55 + 0.25 * v);
+    if (a < 0.004) continue;
+    const c = rC[i], col = `${c[0]},${c[1]},${c[2]}`;
+    const tube = Math.max(1.6, 0.045 * F / z);
+    const a0 = rA0[i] + roll * 2 + ph * 0.8;
+    const passes = [[tube * 7, 0.07], [tube * 2.6, 0.22], [tube, 0.85]];
+    for (const [lw, pa] of passes) {
+      ctx.lineWidth = lw; ctx.strokeStyle = `rgba(${col},1)`; ctx.globalAlpha = a * pa;
+      ctx.beginPath();
+      for (let s = 0; s < 3; s++) {
+        const st = a0 + s * (TAU / 3);
+        ctx.moveTo(ox + Math.cos(st) * sr, oy + Math.sin(st) * sr);
+        ctx.arc(ox, oy, sr, st, st + TAU / 3 - 0.55);
+      }
+      ctx.stroke();
+    }
+    // inner faint full ring
+    ctx.lineWidth = tube * 0.6; ctx.globalAlpha = a * 0.18;
+    ctx.beginPath(); ctx.arc(ox, oy, sr * 0.985, 0, TAU); ctx.stroke();
+  }
+
+  /* 4) star streaks */
+  const lenBase = 2.0 * v;
+  for (let i = 0; i < N; i++) {
+    const ph = fract(sU[i] + sK[i] * Pv);
+    const z = ZFAR - ph * ZR;
+    const fi = (ZFAR - z) * 0.22;
+    if (fi <= 0.003) continue;
+    const a = sAng[i] + roll, rad = sRad[i];
+    const ca = Math.cos(a) * rad, sa = Math.sin(a) * rad;
+    const s1 = F / z;
+    const hx = ox + ca * s1, hy = oy + sa * s1;
+    const zt = z + sLen[i] * lenBase * (sHero[i] ? 1.4 : 1);
+    const s2 = F / zt;
+    let tx = ox + ca * s2, ty = oy + sa * s2;
+    if ((hx < -300 && tx < -300) || (hx > W + 300 && tx > W + 300) ||
+        (hy < -300 && ty < -300) || (hy > H + 300 && ty > H + 300)) continue;
+    const wd = clamp(sSize[i] * s1 * 0.0085, 1.2, 20) * 2.3;
+    let dx = hx - tx, dy = hy - ty, len = Math.hypot(dx, dy);
+    if (len < 0.5) continue;
+    const minL = wd * 1.6;
+    if (len < minL) { const m = minL / len; dx *= m; dy *= m; tx = hx - dx; ty = hy - dy; len = minL; }
+    const nx = -dy / len * wd, ny = dx / len * wd;
+    const tw = 0.88 + 0.12 * Math.sin(TAU * sTw[i] * f + sTwP[i]);
+    const near = 0.5 + 0.7 * Math.min(1, 1.7 / (z + 0.5));
+    const al = clamp(0.5 * sBr[i] * tw * near * Math.min(1, fi) * (0.75 + 0.3 * v));
+    ctx.setTransform(dx, dy, nx, ny, tx, ty);
+    ctx.globalAlpha = al;
+    ctx.drawImage(sprites[sCol[i]], 0, -0.5, 1, 1);
+    if (sHero[i]) { ctx.globalAlpha = al * 0.6; ctx.drawImage(sprites[0], 0, -0.5, 1, 1); }
+  }
+
+  /* 5) bokeh dust */
+  for (let i = 0; i < NB; i++) {
+    const ph = fract(bU[i] + bK[i] * Pv);
+    const z = ZFAR - ph * ZR;
+    if (z > 9) continue;
+    const a = bAng[i] + roll, s1 = F / z;
+    const x = ox + Math.cos(a) * bRad[i] * s1, y = oy + Math.sin(a) * bRad[i] * s1;
+    const sz = bSz[i] * s1;
+    if (sz > 900 || x < -sz || x > W + sz || y < -sz || y > H + sz) continue;
+    const al = bAl[i] * sstep(9, 6, z) * (1 - sstep(300, 850, sz)) * 0.55;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = al;
+    ctx.drawImage(bokehSprite, x - sz, y - sz, sz * 2, sz * 2);
+  }
+
+  /* 6) vanishing-point core & anamorphic flare */
+  {
+    const pulse = 0.85 + 0.3 * v;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = 0.42;
+    let R = 1200 * pulse; ctx.drawImage(coreSprite, ox - R, oy - R, R * 2, R * 2);
+    ctx.globalAlpha = 0.5;
+    R = 300 * pulse;      ctx.drawImage(coreSprite, ox - R, oy - R, R * 2, R * 2);
+    ctx.globalAlpha = 0.9;
+    R = 75 * (0.85 + 0.35 * v); ctx.drawImage(coreSprite, ox - R, oy - R, R * 2, R * 2);
+    ctx.globalAlpha = clamp(0.16 + 0.22 * v);
+    const fw = 5400 * (0.8 + 0.3 * v), fh = 70 + 40 * v;
+    ctx.drawImage(flareSprite, ox - fw / 2, oy - fh / 2, fw, fh);
+    ctx.globalAlpha = 0.06 * v;
+    ctx.drawImage(flareSprite, ox - fw * 0.3, oy - fh * 2.2, fw * 0.6, fh * 4.4);
+  }
+
+  /* 7) bloom: halve the frame repeatedly, blur, add back */
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  g1.globalCompositeOperation = 'copy'; g1.drawImage(cv, 0, 0, 1920, 1080);
+  g2.globalCompositeOperation = 'copy'; g2.drawImage(L1, 0, 0, 960, 540);
+  g3.globalCompositeOperation = 'copy'; g3.filter = 'blur(1.2px)'; g3.drawImage(L2, 0, 0, 480, 270); g3.filter = 'none';
+  g4.globalCompositeOperation = 'copy'; g4.filter = 'blur(1.2px)'; g4.drawImage(L3, 0, 0, 240, 135); g4.filter = 'none';
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+  const bl = 0.85 + 0.25 * v;
+  ctx.globalAlpha = 0.10 * bl; ctx.drawImage(L2, 0, 0, W, H);
+  ctx.globalAlpha = 0.17 * bl; ctx.drawImage(L3, 0, 0, W, H);
+  ctx.globalAlpha = 0.24 * bl; ctx.drawImage(L4, 0, 0, W, H);
+  // radial smear: slightly enlarged blurred copy about the vanishing point
+  const zs = 1.05 + 0.03 * v;
+  ctx.globalAlpha = 0.10 * bl;
+  ctx.setTransform(zs, 0, 0, zs, ox - ox * zs, oy - oy * zs);
+  ctx.drawImage(L3, 0, 0, W, H);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+  /* 8) grade: vignette + fine dither against banding */
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = vigGrad; ctx.fillRect(0, 0, W, H);
+  const fr = Math.floor(t * 30);
+  const nxo = (fr * 97) % 512, nyo = (fr * 57) % 512;
+  ctx.globalCompositeOperation = 'overlay';
+  ctx.globalAlpha = 0.07;
+  ctx.setTransform(1, 0, 0, 1, -nxo, -nyo);
+  ctx.fillStyle = noisePattern; ctx.fillRect(nxo, nyo, W, H);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = 1;
+}
+
+/* ---------- playback: autoplay + endless loop ---------- */
+window.DURATION = DUR;
+window.renderAt = render;
+const q = new URLSearchParams(location.search);
+if (q.has('t')) {
+  render(parseFloat(q.get('t')) || 0);
+} else {
+  let t0 = null;
+  const tick = ts => {
+    if (t0 === null) t0 = ts;
+    render((ts - t0) / 1000);
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+})();
+</script>
+</body>
+</html>
