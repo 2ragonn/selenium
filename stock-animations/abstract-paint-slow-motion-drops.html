@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Abstract Paint Slow Motion Drops</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
+  #stage { position: absolute; left: 50%; top: 50%; width: 3840px; height: 2160px; transform-origin: 50% 50%; overflow: hidden; background: #000; }
+  canvas { display: block; width: 3840px; height: 2160px; }
+  #err { position: fixed; left: 16px; top: 16px; color: #ff8a8a; font: 14px/1.4 monospace; white-space: pre-wrap; z-index: 9; }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="c" width="3840" height="2160"></canvas></div>
+<div id="err"></div>
+
+<script id="vs" type="x-shader/x-vertex">#version 300 es
+void main(){
+  vec2 v = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+  gl_Position = vec4(v * 2.0 - 1.0, 0.0, 1.0);
+}
+</script>
+
+<!-- ===================================================================== -->
+<!--  PASS 1 : macro liquid paint (fully procedural, pure function of time) -->
+<!-- ===================================================================== -->
+<script id="fs-scene" type="x-shader/x-fragment">#version 300 es
+precision highp float;
+precision highp int;
+
+uniform vec2  uRes;
+uniform float uT;      // seconds, wrapped to [0,15)
+uniform float uHdr;    // HDR storage scale (1.0 for float targets)
+out vec4 fragColor;
+
+#define TAU 6.283185307179586
+#define PI  3.141592653589793
+const float LOOP = 15.0;   // loop length in seconds
+const float TI   = 1.7;    // seconds a drop takes to fall before it hits the paint
+const float STEP = 2.5;    // stagger between the six drops (6 * 2.5 = 15)
+
+// ---- the six paint drops ------------------------------------------------
+const vec2 DC[6] = vec2[6](
+  vec2(-0.62, 0.16), vec2(0.20,-0.14), vec2(-0.04, 0.40),
+  vec2(-0.34,-0.36), vec2(0.86, 0.22), vec2(-0.86,-0.34));
+const float DR[6] = float[6](0.35, 0.40, 0.33, 0.35, 0.34, 0.32);
+const vec3 CA[6] = vec3[6](
+  vec3(0.90,0.02,0.35), vec3(0.00,0.65,0.95), vec3(1.00,0.28,0.02),
+  vec3(0.03,0.85,0.30), vec3(0.28,0.06,0.90), vec3(1.00,0.25,0.25));
+const vec3 CB[6] = vec3[6](
+  vec3(0.30,0.04,0.85), vec3(0.02,0.12,0.75), vec3(1.00,0.60,0.02),
+  vec3(0.00,0.50,0.60), vec3(0.05,0.40,1.00), vec3(1.00,0.65,0.10));
+const vec3 CC[6] = vec3[6](
+  vec3(1.00,0.20,0.60), vec3(0.20,0.95,0.85), vec3(0.80,0.02,0.10),
+  vec3(0.60,0.95,0.10), vec3(0.90,0.10,0.70), vec3(0.10,0.75,0.75));
+
+// ---- hashing / noise ------------------------------------------------------
+float hash12(vec2 p){
+  vec3 p3 = fract(vec3(p.xyx) * .1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+vec2 hash22(vec2 p){
+  vec3 p3 = fract(vec3(p.xyx) * vec3(.1031, .1030, .0973));
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.xx + p3.yz) * p3.zy);
+}
+float gnoise(vec2 p){
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f*f*f*(f*(f*6.0-15.0)+10.0);
+  float a = dot(hash22(i)              *2.0-1.0, f);
+  float b = dot(hash22(i+vec2(1,0))    *2.0-1.0, f-vec2(1,0));
+  float c = dot(hash22(i+vec2(0,1))    *2.0-1.0, f-vec2(0,1));
+  float d = dot(hash22(i+vec2(1,1))    *2.0-1.0, f-vec2(1,1));
+  return mix(mix(a,b,u.x), mix(c,d,u.x), u.y) * 1.25;
+}
+mat2 rot(float a){ float c = cos(a), s = sin(a); return mat2(c,-s,s,c); }
+const mat2 M2 = mat2(0.87758, -0.47942, 0.47942, 0.87758) * 2.03;
+float fbm3(vec2 p){
+  float a = .5, s = 0.;
+  for(int i=0;i<3;i++){ s += a*gnoise(p); p = M2*p + vec2(17.1, 9.2); a *= .5; }
+  return s;
+}
+float fbm4(vec2 p){
+  float a = .5, s = 0.;
+  for(int i=0;i<4;i++){ s += a*gnoise(p); p = M2*p + vec2(17.1, 9.2); a *= .5; }
+  return s;
+}
+
+// ---- drop timeline --------------------------------------------------------
+float ageOf(int j, float t){ return mod(t + STEP*float(j) + 3.0, LOOP); }
+float fadeOf(float a){ return 1.0 - smoothstep(11.2, 14.6, a); }
+float radiusAt(int j, float tau){
+  float x = clamp(tau / 11.0, 0.0, 1.0);
+  float e = 1.0 - pow(1.0 - x, 2.6);
+  return 0.052 + 0.10*(1.0 - exp(-tau*2.2)) + (DR[j] - 0.152)*e;
+}
+
+// paint coverage + thickness of one drop (cheap: no colour)
+void layerShape(int j, float a, vec2 p, float soft,
+                out float cov, out float thick, out float sRel, out float edgeD){
+  cov = 0.0; thick = 0.0; sRel = 2.0; edgeD = -1.0;
+  float tau = a - TI;
+  if(tau <= 0.0) return;
+  vec2 q = p - DC[j];
+  float r = length(q);
+  float R = radiusAt(j, tau);
+  if(r > R*1.55 + 0.15) return;
+  float seed = float(j)*13.7 + 2.0;
+  vec2 dir = q / max(r, 1e-4);
+  float grow = smoothstep(0.1, 2.5, tau);
+  float fing = fbm3(dir*1.7 + seed + vec2(tau*0.04, -tau*0.03))
+             + 0.30*fbm3(dir*4.6 + seed*1.3 + vec2(-tau*0.03, tau*0.05));
+  float edgeR = R*(1.0 + 0.30*fing*grow) + 0.005*gnoise(q*11.0 + seed);
+  float d = edgeR - r;
+  float fade = fadeOf(a);
+  float alive = 1.0;
+  if(fade < 0.999){                       // lace-like dissolve at end of life
+    float hv = clamp(0.5 + 1.15*fbm3(p*3.2 + seed), 0.05, 1.0);
+    float e = 1.0 - fade;
+    alive = smoothstep(e*1.3 - 0.12, e*1.3 + 0.03, hv);
+  }
+  float fin = smoothstep(0.0, 0.3, tau);
+  cov   = smoothstep(-soft, soft, d) * fin * alive;
+  sRel  = r / max(mix(R, edgeR, smoothstep(0.55, 1.0, r/max(edgeR,1e-3))), 1e-3);
+  edgeD = d;
+  float prof = smoothstep(0.0, 0.035 + soft*2.0, d);
+  float bump = 0.006*exp(-pow((d - 0.02)/0.018, 2.0));
+  float sc = clamp(sRel,0.0,1.0);
+  thick = (prof*(0.016 + 0.040*(1.0 - sc*sc)) + bump) * fin * alive * step(0.0, d + 0.02);
+}
+
+// total surface height (paint bodies + crowns + expanding ripples)
+float heightAt(vec2 p, float t, float soft){
+  float H = 0.0;
+  for(int j=0;j<6;j++){
+    float a = ageOf(j, t);
+    float tau = a - TI;
+    if(tau <= 0.0) continue;
+    float fade = fadeOf(a);
+    vec2 q = p - DC[j];
+    float r = length(q);
+    float cov, th, sr, ed;
+    layerShape(j, a, p, soft, cov, th, sr, ed);
+    H += th;
+    if(tau < 1.9 && r < 0.42){                       // crown of the splash
+      float x  = tau / 1.9;
+      float rc = 0.05 + 0.17*(1.0 - (1.0-x)*(1.0-x));
+      float sp = 0.3 + 0.7*pow(0.5 + 0.5*cos(14.0*(atan(q.y,q.x) - float(j)*1.7)), 2.5);
+      float w  = 0.02 + 0.015*x;
+      H += 0.020*sin(PI*x) * exp(-pow((r - rc)/(w*1.4), 2.0)) * sp;
+    }
+    float rf = 0.07 + 0.17*tau;                       // ripples
+    float d  = rf - r;
+    if(d > 0.0){
+      float amp = 0.0030*(1.0 + 2.2*exp(-tau*1.4))*exp(-tau*0.16)*exp(-d*3.2)*fade/(1.0 + r*2.5);
+      H += amp*sin(d*58.0)*smoothstep(0.0, 0.04, d);
+    }
+  }
+  return H;
+}
+
+// pigment colour of a drop: twirled, marbled, veined
+vec3 layerColor(int j, float a, vec2 p){
+  float tau = a - TI;
+  vec2 q = p - DC[j];
+  float R = radiusAt(j, tau);
+  float seed = float(j)*13.7 + 2.0;
+  float sgn = (j - (j/2)*2 == 0) ? 1.0 : -1.0;
+  float swirl = sgn*(2.4 + 1.1*fract(seed*0.37))*(1.0 - exp(-tau*0.33));
+  float rn = length(q)/R;
+  vec2 qs = rot(swirl*exp(-rn*rn*0.8)) * q;
+  float fl = tau*0.018;
+  vec2 a1 = vec2(fbm3(qs*2.6 + seed + vec2(fl, 0.0)), fbm3(qs*2.6 + seed + 5.2 - vec2(0.0, fl)));
+  vec2 a2 = vec2(fbm3(qs*2.6 + 3.0*a1 + vec2(1.7, 9.2) + fl), fbm3(qs*2.6 + 3.0*a1 + vec2(8.3, 2.8) - fl));
+  float f = fbm4(qs*2.6 + 3.4*a2);
+  float s2 = length(qs)/R;
+  float band = f*2.6 + s2*1.1 + a1.x*0.8;
+  float m1 = 0.5 + 0.5*sin(band*3.4);
+  float m2 = 0.5 + 0.5*sin(band*5.6 + 1.3 + f*3.0);
+  vec3 cA = pow(CA[j], vec3(2.2)), cB = pow(CB[j], vec3(2.2)), cC = pow(CC[j], vec3(2.2));
+  vec3 col = mix(cA, cB, smoothstep(0.1, 0.9, m1));
+  col = mix(col, cC, smoothstep(0.55, 1.0, m2)*0.75);
+  float v1 = 1.0 - abs(f*3.4);
+  float v2 = 1.0 - abs(fbm3(qs*3.6 + 2.0*a2 + seed*5.0)*3.4);
+  float dark  = pow(clamp(v1,0.0,1.0), 14.0);
+  float cream = pow(clamp(v2,0.0,1.0), 30.0);
+  col = mix(col, col*0.25, dark*0.5);
+  col = mix(col, vec3(1.0,0.93,0.86)*0.8, cream*0.28);
+  return col;
+}
+
+// ---- lighting -----------------------------------------------------------
+float sdBox(vec2 p, vec2 h){ vec2 d = abs(p) - h; return length(max(d,0.0)) + min(max(d.x,d.y),0.0); }
+float softBox(vec2 p, vec2 c, vec2 h, float ang, float soft){
+  return 1.0 - smoothstep(-soft, soft, sdBox(rot(ang)*(p - c), h));
+}
+// procedural studio: soft boxes seen in the glossy paint
+vec3 studio(vec2 e, float soft){
+  soft += 0.015;
+  vec3 c = vec3(0.012, 0.016, 0.03) * (0.6 + 0.4*e.y) + vec3(0.02,0.03,0.06)*exp(-dot(e,e)*1.4);
+  c += vec3(0.95, 0.97, 1.00) * 2.0 * softBox(e, vec2(-0.20, 0.38), vec2(0.55, 0.08), -0.21, soft);
+  c += vec3(1.00, 0.90, 0.80) * 1.3 * softBox(e, vec2(-0.66, 0.02), vec2(0.05, 0.34), 0.12, soft);
+  c += vec3(0.55, 0.78, 1.10) * 2.2 * softBox(e, vec2( 0.64,-0.02), vec2(0.055,0.52),  0.10, soft);
+  c += vec3(1.00, 0.35, 0.80) * 1.4 * softBox(e, vec2(-0.52,-0.34), vec2(0.30,0.045), 0.15, soft);
+  c += vec3(0.30, 1.00, 0.85) * 0.9 * softBox(e, vec2( 0.25,-0.46), vec2(0.40,0.03), -0.08, soft);
+  return c;
+}
+
+// glossy translucent bead (falling drop / splash droplet / jet)
+vec4 shadeBead(vec2 p, vec2 c, float rad, float blur, vec3 base, float alpha, vec2 uv){
+  vec2 q = p - c;
+  float d = length(q);
+  float a = (1.0 - smoothstep(rad - blur, rad + blur, d)) * alpha;
+  if(a <= 0.002) return vec4(0.0);
+  vec2 qn = q / max(rad + blur*0.5, 1e-4);
+  float rr = min(dot(qn,qn), 1.0);
+  float nz = sqrt(1.0 - rr);
+  vec3 N = normalize(vec3(qn*0.95, nz + 0.05));
+  float thick = pow(nz, 0.7);
+  vec3 body = base*(0.30 + 1.25*thick) + base*base*0.9*pow(1.0 - nz, 2.0);
+  vec3 env = studio(uv*0.6 - N.xy*1.5, blur*4.0);
+  float F = 0.06 + 0.94*pow(1.0 - nz, 3.0);
+  float dfo = 1.0 - 0.55*clamp(blur*22.0, 0.0, 1.0);
+  float hl = pow(max(dot(N, normalize(vec3(-0.42, 0.52, 0.74))), 0.0), 80.0);
+  float hl2 = pow(max(dot(N, normalize(vec3(0.5, -0.45, 0.74))), 0.0), 40.0);
+  vec3 col = body + env*(0.10 + 0.9*F)*dfo + (vec3(1.0,0.97,0.92)*hl*2.2 + vec3(0.6,0.8,1.0)*hl2*0.5)*dfo;
+  return vec4(col, a);
+}
+
+vec3 baseAlbedo(vec2 p, float th){
+  vec2 lp = 0.4*vec2(cos(th), sin(th));
+  float n  = fbm4(p*1.6 + lp + 3.1);
+  float n2 = fbm3(p*3.4 - lp*1.3 + 11.0);
+  vec3 c = mix(vec3(0.003,0.005,0.018), vec3(0.010,0.005,0.034), smoothstep(-0.25, 0.35, n));
+  c = mix(c, vec3(0.0,0.030,0.050), smoothstep(0.1, 0.5, n2)*0.6);
+  return c;
+}
+
+void main(){
+  vec2 uv = (gl_FragCoord.xy - 0.5*uRes) / uRes.y;
+  float t  = uT;
+  float th = TAU*t/LOOP;                                  // loop phase
+
+  // slow periodic macro camera drift + tilt
+  vec2 p0 = rot(0.04*sin(th + 0.7)) * uv;
+  p0 *= 1.0 + 0.05*sin(th);
+  p0 += 0.05*vec2(cos(th), 0.7*sin(th));
+  float dpt = 1.0 + 0.40*(p0.y + 0.5);
+  vec2 p = vec2(p0.x*dpt, p0.y*dpt*1.15 - 0.08);
+
+  // depth of field (rack focus, periodic)
+  float fy = -0.10 + 0.14*sin(th - 0.6);
+  float b  = smoothstep(0.06, 0.62, abs(uv.y - fy + 0.10*uv.x));
+  float soft = 0.0022 + 0.030*b;
+
+  // ---- paint layers (oldest first) ----------------------------------------
+  vec3 albedo = baseAlbedo(p, th);
+  float nOrd = floor((t + 3.0)/STEP);
+  float cover = 0.0;
+  float thickSum = 0.0;
+  for(int k=0;k<6;k++){
+    int j = int(mod(float(5 - k) - nOrd, 6.0) + 0.5);
+    float a = ageOf(j, t);
+    if(a - TI <= 0.0) continue;
+    float cov, thick, sRel, edgeD;
+    layerShape(j, a, p, soft, cov, thick, sRel, edgeD);
+    thickSum += thick;
+    if(cov > 0.002){
+      vec3 lc = layerColor(j, a, p);
+      lc *= 1.0 - 0.6*b*0.5;
+      float edgeW = smoothstep(0.0, 0.07, edgeD);
+      float al = cov * mix(0.40, 1.0, edgeW);
+      float bn = 0.5 + 0.5*gnoise(p*7.0 + float(j)*3.1 + 0.4*vec2(cos(th), sin(th)));
+      vec3 mixedC = mix(lc, albedo, (0.15 + 0.5*bn)*(1.0 - smoothstep(0.0, 0.20, edgeD)));   // pigments bleeding together
+      albedo = mix(albedo, mixedC, al);
+      cover = max(cover, cov);
+    }
+  }
+
+  // ---- surface normal from height field -----------------------------------
+  float eps = 0.0013;
+  float H0 = heightAt(p, t, soft);
+  float Hx = heightAt(p + vec2(eps,0.0), t, soft);
+  float Hy = heightAt(p + vec2(0.0,eps), t, soft);
+  vec2 g = vec2(Hx - H0, Hy - H0) / eps;
+  float Kn = 1.7*(1.0 - 0.6*b);
+  vec3 N = normalize(vec3(-g*Kn, 1.0));
+
+  // ---- shading -------------------------------------------------------------
+  vec3 L = normalize(vec3(-0.45, 0.55, 0.75));
+  float ndl = clamp(dot(N, L), 0.0, 1.0);
+  vec3 col = albedo*(0.62 + 0.55*ndl + 0.30*thickSum*20.0*cover);
+
+  vec2 e = uv*0.6 - g*Kn*1.5;
+  vec3 env = studio(e, b*0.10);
+  float film = H0*38.0 + fbm3(p*2.0)*0.6 + 0.3*sin(th);
+  vec3 irid = 0.5 + 0.5*cos(TAU*(film + vec3(0.0, 0.33, 0.67)));
+  float slope = length(g*Kn);
+  vec3 spec = env * (0.10 + 0.85*slope*slope) * mix(vec3(1.0), irid*1.5, 0.30);
+  col += spec;
+
+  // faint out-of-focus glints riding on the paint surface
+  {
+    vec2 gp = uv*6.0 + 0.5*vec2(cos(th), sin(th));
+    vec2 id = floor(gp), f = fract(gp) - 0.5;
+    vec2 hh = hash22(id + 41.0);
+    float rad = 0.10 + 0.16*hh.x;
+    float disc = smoothstep(rad, rad*0.72, length(f - (hh - 0.5)*0.5));
+    float pul = 0.5 + 0.5*sin(th*float(1 + int(hh.y*3.0)) + hh.x*TAU);
+    vec3 hue = 0.5 + 0.5*cos(TAU*(hh.y + vec3(0.0, 0.33, 0.67)));
+    col += hue*disc*pul*0.05*b*(0.35 + 0.65*(1.0 - cover));
+  }
+
+  // ---- droplets in the air (on top of the surface) ---------------------------
+  for(int j=0;j<6;j++){
+    float a = ageOf(j, t);
+    float tau = a - TI;
+    vec3 cA = pow(CA[j], vec3(2.2));
+    vec3 cB = pow(CB[j], vec3(2.2));
+    vec2 c = DC[j];
+
+    if(a < TI + 0.25){                                        // falling drop
+      float u = clamp(a/TI, 0.0, 1.0);
+      float z = 1.0 - u*u;
+      float alpha = smoothstep(0.0, 0.12, u) * (1.0 - smoothstep(0.0, 0.25, a - TI));
+      vec2 pos = c + (c - vec2(0.0, -0.05))*0.55*z;
+      float rad = 0.056*(1.0 + 1.6*z);
+      float bl = 0.004 + 0.05*z*z + 0.02*b;
+      vec4 s = shadeBead(p, pos, rad, bl, mix(cA, cB, 0.25), alpha, uv);
+      col = mix(col, s.rgb, s.a);
+    }
+
+    if(tau > 0.2 && tau < 4.8){
+      vec2 q = p - c;
+      float r = length(q);
+      if(r < 0.85){
+        float th0 = float(j)*1.7;
+        float sf = (atan(q.y, q.x) - th0)/TAU*14.0;
+        int s0 = int(floor(sf + 0.5));
+        for(int m=-1;m<=1;m++){
+          int s = s0 + m;
+          int sm = int(mod(float(s), 14.0) + 0.5);
+          float h1 = hash12(vec2(float(sm) + 1.0,       float(j)*7.0 + 0.5));
+          float h2 = hash12(vec2(float(sm)*1.7 + 3.0,   float(j)*5.0 + 1.5));
+          float h3 = hash12(vec2(float(sm)*2.3 + 9.0,   float(j)*3.0 + 2.5));
+          float tb = tau - 0.25 - 0.4*h1;
+          float T  = 2.2 + 1.4*h2;
+          float u  = tb/T;
+          if(u <= 0.0 || u >= 1.0) continue;
+          float ba = th0 + float(s)*TAU/14.0 + (h3 - 0.5)*0.08;
+          float rd = 0.10 + (0.12 + 0.26*h3)*u;
+          float z  = 4.0*u*(1.0 - u)*(0.7 + 0.6*h1);
+          vec2 bp  = c + vec2(cos(ba), sin(ba))*rd;
+          bp += bp*0.30*z;
+          float rad = (0.011 + 0.013*h2)*(1.0 + 1.3*z)*(h3 > 0.8 ? 1.7 : 1.0);
+          float bl  = 0.002 + 0.020*z + 0.015*b;
+          float alpha = smoothstep(0.0, 0.06, u)*(1.0 - smoothstep(0.90, 1.0, u));
+          vec4 sb = shadeBead(p, bp, rad, bl, mix(cA, cB, h1), alpha, uv);
+          col = mix(col, sb.rgb, sb.a);
+        }
+        // Worthington jet rising from the crater and collapsing again
+        float tj = tau - 1.05;
+        if(tj > 0.0 && tj < 3.2){
+          float v = tj/3.2;
+          float z = sin(PI*v);
+          vec2 pos = c + c*0.25*z;
+          float rad = 0.010 + 0.032*z;
+          float bl = 0.002 + 0.020*z + 0.012*b;
+          float alpha = smoothstep(0.0, 0.1, v)*(1.0 - smoothstep(0.85, 1.0, v));
+          vec4 sj = shadeBead(p, pos, rad, bl, mix(cA, cB, 0.5), alpha, uv);
+          col = mix(col, sj.rgb, sj.a);
+        }
+      }
+    }
+  }
+
+  fragColor = vec4(col * uHdr, 1.0);
+}
+</script>
+
+<!-- ===================================================================== -->
+<!--  PASS 2 : bloom, lens fringing, grade, vignette, dither                -->
+<!-- ===================================================================== -->
+<script id="fs-post" type="x-shader/x-fragment">#version 300 es
+precision highp float;
+uniform sampler2D uScene;
+uniform vec2  uRes;
+uniform float uInv;
+out vec4 fragColor;
+
+vec3 S(vec2 uv, float lod){ return textureLod(uScene, uv, lod).rgb * uInv; }
+float hash12(vec2 p){
+  vec3 p3 = fract(vec3(p.xyx) * .1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+
+void main(){
+  vec2 uv = gl_FragCoord.xy / uRes;
+  vec2 cc = uv - 0.5;
+  float ca = 0.0009;
+  vec3 c = vec3(S(uv + cc*ca, 0.0).r, S(uv, 0.0).g, S(uv - cc*ca, 0.0).b);
+
+  vec3 bl = vec3(0.0); float ws = 0.0;
+  for(int l=2;l<=7;l++){
+    float lod = float(l);
+    float w = 1.0/(1.0 + float(l-2)*0.55);
+    vec2 px = exp2(lod)/uRes*0.6;
+    bl += w*(S(uv + vec2(px.x,0.0), lod) + S(uv - vec2(px.x,0.0), lod)
+           + S(uv + vec2(0.0,px.y), lod) + S(uv - vec2(0.0,px.y), lod) + 2.0*S(uv, lod))/6.0;
+    ws += w;
+  }
+  bl /= ws;
+  c += bl*0.10 + max(bl - 0.30, 0.0)*0.45;
+
+  // filmic tone map
+  c *= 0.95;
+  c = (c*(2.51*c + 0.03)) / (c*(2.43*c + 0.59) + 0.14);
+  float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+  c = mix(vec3(l), c, 1.22);
+  c = clamp(c, 0.0, 1.0);
+  c = mix(c, c*c*(3.0 - 2.0*c), 0.28);
+
+  float vg = 1.0 - 0.55*dot(cc*vec2(1.0, 1.15), cc*vec2(1.0, 1.15))*1.6;
+  c *= clamp(vg, 0.0, 1.0);
+
+  c = pow(max(c, 0.0), vec3(1.0/2.2));
+  c += (hash12(gl_FragCoord.xy) - 0.5)/255.0;
+  fragColor = vec4(c, 1.0);
+}
+</script>
+
+<script>
+(function(){
+  'use strict';
+  var LOOP = 15.0;
+  var params = new URLSearchParams(location.search);
+  var W = parseInt(params.get('w') || '3840', 10);   // ?w=1280 for a quick low-res preview
+  var H = Math.round(W * 9 / 16);
+  var fixedT = params.has('t') ? parseFloat(params.get('t')) : null;
+
+  var stage  = document.getElementById('stage');
+  var canvas = document.getElementById('c');
+  var errBox = document.getElementById('err');
+  canvas.width = W; canvas.height = H;
+
+  function fit(){
+    var s = Math.min(window.innerWidth / 3840, window.innerHeight / 2160);
+    stage.style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit); fit();
+
+  function fail(m){ errBox.textContent = m; console.error(m); }
+
+  var gl = canvas.getContext('webgl2', { antialias: false, alpha: false, depth: false, stencil: false,
+                                        preserveDrawingBuffer: true, powerPreference: 'high-performance' });
+  if(!gl){ fail('WebGL2 is required to play this animation.'); return; }
+
+  function compile(type, src){
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src.trim());
+    gl.compileShader(s);
+    if(!gl.getShaderParameter(s, gl.COMPILE_STATUS)){ fail(gl.getShaderInfoLog(s)); return null; }
+    return s;
+  }
+  function program(vsId, fsId){
+    var p = gl.createProgram();
+    var v = compile(gl.VERTEX_SHADER,   document.getElementById(vsId).textContent);
+    var f = compile(gl.FRAGMENT_SHADER, document.getElementById(fsId).textContent);
+    if(!v || !f) return null;
+    gl.attachShader(p, v); gl.attachShader(p, f); gl.linkProgram(p);
+    if(!gl.getProgramParameter(p, gl.LINK_STATUS)){ fail(gl.getProgramInfoLog(p)); return null; }
+    return p;
+  }
+  var progScene = program('vs', 'fs-scene');
+  var progPost  = program('vs', 'fs-post');
+  if(!progScene || !progPost) return;
+
+  // HDR render target (half float if possible, else 8-bit with a x0.25 scale)
+  var hdrScale = 1.0;
+  var tex = gl.createTexture();
+  var fbo = gl.createFramebuffer();
+  function makeTarget(internal, fmt, type){
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, internal, W, H, 0, fmt, type, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    return gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+  }
+  var haveFloat = gl.getExtension('EXT_color_buffer_float') || gl.getExtension('EXT_color_buffer_half_float');
+  var ok = haveFloat && makeTarget(gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT);
+  if(!ok){ hdrScale = 0.25; ok = makeTarget(gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE); }
+  if(!ok){ fail('Could not create a render target.'); return; }
+
+  var vao = gl.createVertexArray();
+  gl.bindVertexArray(vao);
+
+  var uS = {
+    res: gl.getUniformLocation(progScene, 'uRes'),
+    t:   gl.getUniformLocation(progScene, 'uT'),
+    hdr: gl.getUniformLocation(progScene, 'uHdr')
+  };
+  var uP = {
+    res:   gl.getUniformLocation(progPost, 'uRes'),
+    inv:   gl.getUniformLocation(progPost, 'uInv'),
+    scene: gl.getUniformLocation(progPost, 'uScene')
+  };
+
+  function render(seconds){
+    var t = ((seconds % LOOP) + LOOP) % LOOP;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.viewport(0, 0, W, H);
+    gl.useProgram(progScene);
+    gl.uniform2f(uS.res, W, H);
+    gl.uniform1f(uS.t, t);
+    gl.uniform1f(uS.hdr, hdrScale);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.generateMipmap(gl.TEXTURE_2D);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, W, H);
+    gl.useProgram(progPost);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.uniform1i(uP.scene, 0);
+    gl.uniform2f(uP.res, W, H);
+    gl.uniform1f(uP.inv, 1.0 / hdrScale);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  // Deterministic hooks for frame-by-frame renderers
+  window.animationDuration = LOOP;
+  window.renderAt = function(seconds){ render(seconds); };
+  window.renderFrame = function(n, fps){ render(n / (fps || 30)); };
+
+  if(fixedT !== null){ render(fixedT); window.__ready = true; return; }
+
+  var start = null;
+  function tick(now){
+    if(start === null) start = now;
+    render((now - start) / 1000);
+    window.__ready = true;
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>
