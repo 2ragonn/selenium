@@ -1,0 +1,879 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Glowing Wireframe Topography</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
+  canvas { display: block; width: 100vw; height: 100vh; object-fit: contain; background: #000; }
+</style>
+</head>
+<body>
+<canvas id="c" width="3840" height="2160"></canvas>
+<script>
+/* ==========================================================================
+   GLOWING WIREFRAME TOPOGRAPHY  -  3840x2160  -  15.000 s  -  seamless loop
+   --------------------------------------------------------------------------
+   * Fully procedural WebGL2 scene (no assets). Autoplays on load.
+   * Every moving element is a function of  phi = (t mod 15) / 15  built only
+     from integer harmonics or from a terrain that is exactly periodic along
+     the flight axis, so frame 0 == frame 450 (@30fps) and the loop is invisible.
+   * Deterministic: output depends only on t, so frame-stepped capture works.
+       ?t=3.2       freeze at 3.2 s (preview / thumbnails)
+       ?scale=0.5   render at a fraction of 4K (debug only)
+       window.renderAt(seconds)  ->  draw one frame at that time
+       window.DURATION           ->  15
+   ========================================================================== */
+(() => {
+'use strict';
+
+const BASE_W = 3840, BASE_H = 2160, DURATION = 15, FPS = 30;
+const TAU = Math.PI * 2;
+const Q = new URLSearchParams(location.search);
+const FIXED_T = Q.has('t') ? parseFloat(Q.get('t')) : null;
+const SCALE = Q.has('scale') ? Math.max(0.05, parseFloat(Q.get('scale'))) : 1;
+const USE_MSAA = Q.get('msaa') !== '0';
+
+const canvas = document.getElementById('c');
+const W = Math.round(BASE_W * SCALE), H = Math.round(BASE_H * SCALE);
+canvas.width = W; canvas.height = H;
+
+const gl = canvas.getContext('webgl2', {
+  antialias: false, alpha: false, depth: false, stencil: false,
+  preserveDrawingBuffer: true, powerPreference: 'high-performance'
+});
+if (!gl) { document.body.style.background = '#000'; throw new Error('WebGL2 is required'); }
+
+const extFloat = gl.getExtension('EXT_color_buffer_float');
+gl.getExtension('EXT_color_buffer_half_float');
+gl.getExtension('OES_texture_float_linear');
+const HDR = !!extFloat;
+const TEX_INT = HDR ? gl.RGBA16F : gl.RGBA8;
+const TEX_TYPE = HDR ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE;
+
+/* ------------------------------------------------------------------ GLSL */
+const HEAD = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+`;
+
+const COMMON = `
+const float TAU = 6.28318530718;
+const float PER = 64.0;                 // terrain period along flight axis (world units)
+
+uint pcg(uint v){
+  uint s = v * 747796405u + 2891336453u;
+  uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
+  return (w >> 22u) ^ w;
+}
+float u01(uint h){ return float(h) * (1.0 / 4294967295.0); }
+
+// periodic (in y) gradient noise
+float hashN(vec2 c, float period){
+  c.y = mod(c.y, period);
+  uvec2 q = uvec2(ivec2(c) + ivec2(8192, 0));
+  return u01(pcg(q.x + pcg(q.y)));
+}
+vec2 grad2(vec2 c, float period){
+  float a = hashN(c, period) * TAU;
+  return vec2(cos(a), sin(a));
+}
+float gnoise(vec2 p, float period){
+  vec2 i = floor(p), f = fract(p);
+  vec2 w = f*f*f*(f*(f*6.0-15.0)+10.0);
+  float a = dot(grad2(i, period), f);
+  float b = dot(grad2(i + vec2(1,0), period), f - vec2(1,0));
+  float c = dot(grad2(i + vec2(0,1), period), f - vec2(0,1));
+  float d = dot(grad2(i + vec2(1,1), period), f - vec2(1,1));
+  return mix(mix(a,b,w.x), mix(c,d,w.x), w.y) * 1.45;
+}
+
+float valleyC(float v){
+  float k = TAU * v / PER;
+  return 10.0 * sin(k) + 3.5 * sin(2.0 * k + 1.3);
+}
+
+float terrain(float u, float v, float dist, float phi){
+  float dx  = u - valleyC(v);
+  float adx = abs(dx);
+  float wall = smoothstep(9.0, 62.0, adx);
+  float farM = smoothstep(55.0, 170.0, adx);
+  float ph = TAU * phi;
+
+  float ridge = 0.0, norm = 0.0, a = 1.0;
+  for (int o = 0; o < 7; o++){
+    float fo  = exp2(float(o));
+    float lam = 64.0 / fo;
+    float fade = 1.0 - smoothstep(lam * 30.0, lam * 70.0, dist);
+    vec2 drift = vec2(cos(ph + float(o) * 1.3), sin(ph + float(o) * 1.3)) * 0.9 / lam;
+    float n = gnoise(vec2(u, v) / lam + drift, fo);
+    float r = 1.0 - abs(n);
+    r = o < 3 ? r * r : mix(r * r, n * 0.5 + 0.5, 0.65);   // sharp crests, soft fine detail
+    ridge += a * fade * r;
+    norm  += a * fade;
+    a *= 0.46;
+  }
+  ridge /= norm;
+  float m = pow(clamp((ridge - 0.26) / 0.62, 0.0, 1.0), 1.25);
+
+  float roll = 2.4 * gnoise(vec2(u, v) / 16.0 + vec2(cos(ph), sin(ph)) * 0.06, 4.0);
+  float amp  = 8.0 + 30.0 * wall + 14.0 * farM;
+  float h = roll * (1.0 - wall) + m * amp * smoothstep(2.0, 24.0, adx);
+  // distant massif that closes the far end of the valley
+  h += smoothstep(150.0, 235.0, dist) * 30.0 * (0.55 + 0.45 * m);
+  return h;
+}
+`;
+
+const SKY_COMMON = `
+vec3 skyBase(vec3 rd, float phi){
+  float y = rd.y;
+  float az = atan(rd.x, -rd.z);
+  vec3 zen = vec3(0.003, 0.006, 0.024);
+  vec3 mid = vec3(0.020, 0.014, 0.085);
+  vec3 col = mix(mid, zen, smoothstep(0.0, 0.75, y));
+  float g1 = exp(-abs(y - 0.012) * 16.0);
+  float g2 = exp(-max(y, 0.0) * 3.2);
+  float hue = 0.5 + 0.5 * sin(az * 1.7 + 0.5);
+  vec3 c1 = mix(vec3(0.03, 0.80, 1.00), vec3(1.00, 0.16, 0.62), hue);
+  vec3 c2 = mix(vec3(0.16, 0.22, 1.00), vec3(0.62, 0.14, 0.95), hue);
+  col += c1 * g1 * 0.34 + c2 * g2 * 0.085;
+  col *= mix(0.35, 1.0, smoothstep(-0.30, 0.0, y));
+  return col;
+}
+`;
+
+/* ---- terrain ----------------------------------------------------------- */
+const TERRAIN_VS = HEAD + COMMON + `
+uniform mat4 uVP;
+uniform float uPhi, uCamX, uValleyOff, uNear, uFar, uCamY;
+uniform int uNX, uNZ;
+out vec3 vW;
+out vec2 vUV;
+out float vH;
+out float vD;
+void main(){
+  int nxp = uNX + 1;
+  int ix = gl_VertexID % nxp;
+  int iz = gl_VertexID / nxp;
+  float s = float(iz) / float(uNZ);
+  float t = float(ix) / float(uNX);
+  float d = uNear + (uFar - uNear) * pow(s, 1.75);
+  float xw = uCamX + (t * 2.0 - 1.0) * (d * 1.55 + 34.0);
+  float u = xw + uValleyOff;
+  float v = d + PER * uPhi;
+  float h = terrain(u, v, d, uPhi);
+  vec3 w = vec3(xw, h, -d);
+  vW = w; vUV = vec2(u, v); vH = h;
+  vD = length(w - vec3(uCamX, uCamY, 0.0));
+  gl_Position = uVP * vec4(w, 1.0);
+}`;
+
+const TERRAIN_FS = HEAD + COMMON + SKY_COMMON + `
+in vec3 vW;
+in vec2 vUV;
+in float vH;
+in float vD;
+uniform float uPhi;
+uniform vec3 uCam;
+out vec4 fragColor;
+
+float line(float c, float px){
+  float w = fwidth(c);
+  float d = abs(fract(c - 0.5) - 0.5) / max(w, 1e-6);
+  float l = clamp(px + 0.5 - d, 0.0, 1.0);
+  return l * (1.0 - smoothstep(0.20, 0.58, w));
+}
+vec3 pal(float t){
+  vec3 a = vec3(0.00, 0.78, 1.00);
+  vec3 b = vec3(0.22, 0.38, 1.00);
+  vec3 c = vec3(0.72, 0.20, 1.00);
+  vec3 d = vec3(1.00, 0.16, 0.58);
+  vec3 e = vec3(1.00, 0.62, 0.36);
+  vec3 col = mix(a, b, smoothstep(0.00, 0.30, t));
+  col = mix(col, c, smoothstep(0.26, 0.55, t));
+  col = mix(col, d, smoothstep(0.50, 0.80, t));
+  col = mix(col, e, smoothstep(0.80, 1.00, t));
+  return col;
+}
+
+void main(){
+  float u = vUV.x, v = vUV.y;
+  vec3 rd = normalize(vW - uCam);
+  float hn = clamp(vH / 62.0, 0.0, 1.0);
+  vec3 lc = pal(hn);
+
+  vec3 n = normalize(cross(dFdx(vW), dFdy(vW)));
+  if (n.y < 0.0) n = -n;
+  float diff = max(dot(n, normalize(vec3(-0.30, 0.55, -0.78))), 0.0);
+  float rim = pow(1.0 - clamp(dot(n, -rd), 0.0, 1.0), 3.0);
+
+  vec3 fill = vec3(0.0025, 0.0045, 0.016)
+            + lc * (0.010 + 0.060 * diff) * (0.35 + hn * 1.2)
+            + lc * 0.020 * rim * (0.3 + hn);
+
+  // ---- wireframe layers -------------------------------------------------
+  float gMin = max(line(u / 2.0, 0.85), line(v / 2.0, 0.85));
+  float gMaj = max(line(u / 8.0, 1.5),  line(v / 8.0, 1.5));
+  float cMin = line(vH / 1.6, 0.8);
+  float cMaj = line(vH / 8.0, 1.5);
+
+  // glowing nodes on major lattice crossings
+  vec2 lo = (fract(vec2(u, v) / 8.0 + 0.5) - 0.5) * 8.0;
+  float upx = max(fwidth(u), fwidth(v));
+  float node = exp(-pow(length(lo) / (upx * 3.4 + 1e-5), 2.0)) * (1.0 - smoothstep(0.18, 0.5, upx));
+
+  vec3 gridCol = mix(vec3(0.02, 0.62, 1.00), lc, 0.30);
+
+  // ---- scan pulses (two per loop) ------------------------------------------
+  float r = length(vW.xz - uCam.xz);
+  float ph = fract(2.0 * uPhi);
+  float dd = ph * 300.0 - r;
+  float pulse = dd > 0.0 ? exp(-dd / 15.0) : exp(dd / 1.5);
+  pulse *= smoothstep(0.0, 0.06, ph) * (1.0 - smoothstep(0.55, 0.92, ph));
+
+  // ---- luminous data stream along the valley floor --------------------------
+  float dxs = u - valleyC(v);
+  float core = exp(-pow(abs(dxs) / 0.50, 2.0));
+  float halo = exp(-pow(abs(dxs) / 3.6, 2.0));
+  float flow = smoothstep(0.55, 1.0, fract(v / 8.0 - 5.0 * uPhi + abs(dxs) * 0.30));
+  vec3 streamCol = vec3(0.20, 0.95, 1.00);
+
+  float boost = 1.0 + 4.5 * pulse;
+  vec3 lines = gridCol * (gMin * 0.16 + gMaj * 0.50)
+             + lc * (cMin * 0.62 + cMaj * 1.90)
+             + mix(lc, vec3(1.0), 0.55) * node * 2.6;
+  lines *= boost;
+  lines = mix(lines, lines * vec3(0.6, 1.0, 1.0) + vec3(0.5, 0.9, 1.0) * (gMaj + cMaj) * pulse, clamp(pulse, 0.0, 1.0) * 0.6);
+
+  vec3 stream = streamCol * (core * (0.9 + 3.0 * flow) + halo * 0.16 * (0.5 + flow));
+
+  // glowing high peaks
+  vec3 peak = vec3(1.0, 0.55, 0.35) * smoothstep(0.78, 1.0, hn) * (0.05 + 0.6 * (cMin + cMaj));
+
+  float fogT = 1.0 - exp(-pow(vD / 190.0, 1.5));
+  float keep = pow(1.0 - fogT, 1.4);
+  vec3 col = fill + (lines + stream + peak) * keep + lc * 0.10 * pulse * keep;
+  col = mix(col, skyBase(rd, uPhi) * 0.92, fogT);
+
+  fragColor = vec4(col, 1.0);
+}`;
+
+/* ---- sky ---------------------------------------------------------------- */
+const FULL_VS = HEAD + `
+out vec2 vUv;
+void main(){
+  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+  vUv = p;
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+const SKY_FS = HEAD + COMMON + SKY_COMMON + `
+in vec2 vUv;
+uniform vec3 uRight, uUp, uFwd;
+uniform float uTanH, uAspect, uPhi;
+out vec4 fragColor;
+
+float h21(vec2 p){
+  uvec2 q = uvec2(ivec2(floor(p)) + ivec2(8192));
+  return u01(pcg(q.x + pcg(q.y)));
+}
+float vnoise(vec2 p){
+  vec2 i = floor(p), f = fract(p);
+  f = f*f*(3.0-2.0*f);
+  return mix(mix(h21(i), h21(i+vec2(1,0)), f.x), mix(h21(i+vec2(0,1)), h21(i+vec2(1,1)), f.x), f.y);
+}
+float fbm(vec2 p){
+  float s = 0.0, a = 0.5;
+  for (int i = 0; i < 5; i++){ s += a * vnoise(p); p = p * 2.03 + 17.1; a *= 0.5; }
+  return s;
+}
+float h31(vec3 p){
+  uvec3 q = uvec3(ivec3(floor(p)) + ivec3(8192));
+  return u01(pcg(q.x + pcg(q.y + pcg(q.z))));
+}
+float vnoise3(vec3 p){
+  vec3 i = floor(p), f = fract(p);
+  f = f*f*(3.0-2.0*f);
+  float a = mix(mix(h31(i), h31(i+vec3(1,0,0)), f.x), mix(h31(i+vec3(0,1,0)), h31(i+vec3(1,1,0)), f.x), f.y);
+  float b = mix(mix(h31(i+vec3(0,0,1)), h31(i+vec3(1,0,1)), f.x), mix(h31(i+vec3(0,1,1)), h31(i+vec3(1,1,1)), f.x), f.y);
+  return mix(a, b, f.z);
+}
+float fbm3(vec3 p){
+  float s = 0.0, a = 0.5;
+  for (int i = 0; i < 4; i++){ s += a * vnoise3(p); p = p * 2.07 + 3.7; a *= 0.5; }
+  return s;
+}
+
+vec3 stars(vec3 rd, float phi){
+  vec3 acc = vec3(0.0);
+  for (int l = 0; l < 3; l++){
+    float sc = l == 0 ? 150.0 : (l == 1 ? 340.0 : 620.0);
+    float rad = l == 0 ? 0.20 : (l == 1 ? 0.28 : 0.36);
+    float prob = l == 0 ? 0.045 : 0.06;
+    vec3 p = rd * sc;
+    vec3 c = floor(p);
+    vec3 f = p - c;
+    uint hh = pcg(uint(c.x + 4096.0) + pcg(uint(c.y + 4096.0) + pcg(uint(c.z + 4096.0) + uint(l) * 977u)));
+    if (u01(hh) < prob){
+      vec3 off = vec3(u01(pcg(hh ^ 0x68E31DA4u)), u01(pcg(hh ^ 0xB5297A4Du)), u01(pcg(hh ^ 0x1B56C4E9u)));
+      float d = length(f - (0.2 + 0.6 * off));
+      float k = float(1 + int(pcg(hh ^ 0x7F4A7C15u) % 4u));
+      float tw = 0.68 + 0.32 * sin(TAU * (k * phi + u01(pcg(hh ^ 0x3C6EF372u))));
+      float b = smoothstep(rad, 0.0, d) * tw * (0.4 + 1.6 * u01(pcg(hh ^ 0xA54FF53Au)));
+      float tint = u01(pcg(hh ^ 0x510E527Fu));
+      vec3 sc3 = mix(vec3(0.55, 0.80, 1.0), vec3(1.0, 0.72, 0.92), tint);
+      acc += sc3 * b * (l == 0 ? 1.4 : 0.9);
+    }
+  }
+  return acc;
+}
+
+void main(){
+  vec2 ndc = vUv * 2.0 - 1.0;
+  vec3 rd = normalize(uFwd + ndc.x * uAspect * uTanH * uRight + ndc.y * uTanH * uUp);
+  float ph = TAU * uPhi;
+  float y = rd.y;
+  float az = atan(rd.x, -rd.z);
+  vec3 col = skyBase(rd, uPhi);
+
+  // ---- aurora curtains ------------------------------------------------------
+  vec2 lp = vec2(cos(ph), sin(ph));
+  for (int k = 0; k < 2; k++){
+    float fk = float(k);
+    float base = 0.20 + 0.16 * fk + 0.045 * sin(az * 3.0 + fk * 2.0 + ph);
+    float band = exp(-pow((y - base) / (0.075 + 0.02 * fk), 2.0));
+    float cur = fbm(vec2(az * 9.0 + fk * 5.0, y * 5.0) + lp * 0.8);
+    float rays = pow(fbm(vec2(az * 55.0 + fk * 9.0, y * 2.0) + lp * 1.3), 2.2);
+    float m = band * smoothstep(0.30, 0.75, cur) * (0.35 + 1.4 * rays);
+    vec3 ac = mix(vec3(0.05, 0.95, 0.85), vec3(0.80, 0.18, 1.00), clamp(0.5 + 0.5 * sin(az * 2.0 + fk * 1.7 + 0.8) + (y - 0.2) * 1.5, 0.0, 1.0));
+    col += ac * m * 0.20;
+  }
+
+  // ---- stars ----------------------------------------------------------------
+  col += stars(rd, uPhi) * smoothstep(0.015, 0.28, y);
+
+  // ---- contour-line planet ---------------------------------------------------
+  vec3 pd = normalize(vec3(0.26, 0.185, -1.0));
+  vec3 b1 = normalize(cross(pd, vec3(0.0, 1.0, 0.0)));
+  vec3 b2 = cross(b1, pd);
+  float R = 0.092;
+  vec2 q = vec2(dot(rd, b1), dot(rd, b2)) / R;
+  float rr = length(q);
+  float facing = dot(rd, pd);
+  if (facing > 0.0){
+    // outer halo
+    float halo = exp(-max(rr - 1.0, 0.0) * 2.6);
+    col += vec3(0.30, 0.20, 1.00) * halo * 0.16 * smoothstep(2.6, 0.9, rr);
+    col += vec3(1.00, 0.20, 0.60) * exp(-max(rr - 1.0, 0.0) * 7.0) * 0.14;
+
+    // rings (back half, hidden by the globe)
+    float ca = cos(-0.42), sa = sin(-0.42);
+    vec2 rq = vec2(ca * q.x - sa * q.y, sa * q.x + ca * q.y);
+    float ring1 = abs(length(vec2(rq.x / 2.25, rq.y / 0.62)) - 1.0);
+    float ring2 = abs(length(vec2(rq.x / 1.75, rq.y / 0.47)) - 1.0);
+    float th = atan(rq.y / 0.62, rq.x / 2.25);
+    float dash = smoothstep(0.35, 0.55, fract(th / TAU * 36.0 - 3.0 * uPhi));
+    float w1 = fwidth(ring1) * 1.4 + 1e-5;
+    float w2 = fwidth(ring2) * 1.4 + 1e-5;
+    float r1 = (1.0 - smoothstep(0.0, w1, ring1)) * (0.35 + 0.65 * dash);
+    float r2 = (1.0 - smoothstep(0.0, w2, ring2)) * 0.55;
+    float front = step(rq.y, 0.0);
+    float hidden = step(rr, 1.0) * (1.0 - front);
+    col += vec3(0.35, 0.95, 1.0) * r1 * 1.3 * (1.0 - hidden);
+    col += vec3(1.00, 0.35, 0.80) * r2 * 1.0 * (1.0 - hidden);
+
+    if (rr < 1.0){
+      vec3 nrm = vec3(q, sqrt(max(1.0 - rr * rr, 0.0)));
+      float cr = cos(ph), sr = sin(ph);
+      vec3 pr = vec3(cr * nrm.x + sr * nrm.z, nrm.y, -sr * nrm.x + cr * nrm.z);
+      float hh = fbm3(pr * 2.6 + 5.0);
+      float cl = hh * 11.0;
+      float wl = fwidth(cl) + 1e-4;
+      float cline = 1.0 - smoothstep(0.0, wl * 1.5, abs(fract(cl - 0.5) - 0.5));
+      float cmaj = 1.0 - smoothstep(0.0, wl * 1.8, abs(fract(cl / 4.0 - 0.5) - 0.5) * 4.0);
+      float lat = 1.0 - smoothstep(0.0, fwidth(pr.y * 9.0) * 1.3 + 1e-4, abs(fract(pr.y * 9.0 - 0.5) - 0.5));
+      float lit = clamp(dot(nrm, normalize(vec3(-0.65, 0.30, 0.70))) * 0.5 + 0.5, 0.0, 1.0);
+      float fres = pow(1.0 - nrm.z, 2.2);
+      vec3 body = vec3(0.010, 0.014, 0.05) + vec3(0.06, 0.05, 0.22) * lit * lit;
+      vec3 cc = mix(vec3(0.15, 0.85, 1.0), vec3(1.0, 0.25, 0.75), smoothstep(0.35, 0.75, hh));
+      body += cc * (cline * 0.55 + cmaj * 0.9) * (0.35 + 0.9 * lit);
+      body += vec3(0.20, 0.40, 1.0) * lat * 0.10;
+      body += vec3(0.6, 0.35, 1.0) * fres * 0.75;
+      col = body;
+      // near side of the ring in front of the globe
+      col += vec3(0.35, 0.95, 1.0) * r1 * front * 1.3 + vec3(1.0, 0.35, 0.8) * r2 * front;
+    }
+  }
+
+  fragColor = vec4(col, 1.0);
+}`;
+
+/* ---- floating data motes ------------------------------------------------ */
+const PART_VS = HEAD + COMMON + `
+uniform mat4 uVP;
+uniform float uPhi, uCamX, uValleyOff, uFar, uPointScale;
+uniform int uNP;
+out vec3 vCol;
+void main(){
+  int i = gl_VertexID % uNP;
+  int k = gl_VertexID / uNP;
+  uint s0 = pcg(uint(i) * 2654435761u + 12345u);
+  uint s1 = pcg(s0), s2 = pcg(s1), s3 = pcg(s2), s4 = pcg(s3), s5 = pcg(s4);
+  float r1 = u01(s0), r2 = u01(s1), r3 = u01(s2), r4 = u01(s3), r5 = u01(s4), r6 = u01(s5);
+
+  float v  = r1 * PER + float(k) * PER;
+  float zd = v - PER * uPhi;
+  float u  = (r2 * 2.0 - 1.0) * 95.0;
+  gl_PointSize = 0.0;
+  if (zd < 2.0 || zd > uFar){ gl_Position = vec4(2.0, 2.0, 2.0, 1.0); vCol = vec3(0.0); return; }
+
+  float hb = terrain(u, v, zd, uPhi);
+  float cyc = float(1 + int(r4 * 2.0));
+  float rise = fract(r3 + uPhi * cyc);
+  float ph6 = TAU * (uPhi * float(1 + int(r6 * 2.0)) + r5);
+  float y = hb + 0.7 + rise * mix(7.0, 30.0, r5);
+  float xw = u - uValleyOff + 1.1 * sin(ph6);
+  float zw = -zd + 0.9 * cos(ph6);
+  vec4 clip = uVP * vec4(xw, y, zw, 1.0);
+  gl_Position = clip;
+
+  float size = mix(0.045, 0.19, r6 * r6);
+  gl_PointSize = clamp(uPointScale * size / max(clip.w, 0.1), 1.6, 22.0);
+
+  float tw = 0.62 + 0.38 * sin(TAU * (uPhi * float(2 + int(r2 * 3.0)) + r1 * 9.0));
+  float fadeIn  = smoothstep(2.0, 10.0, zd);
+  float fadeOut = 1.0 - smoothstep(uFar * 0.45, uFar * 0.9, zd);
+  float life = sin(3.14159265 * rise);
+  vec3 c = r5 < 0.5 ? mix(vec3(0.15, 0.85, 1.0), vec3(0.75, 1.0, 1.0), r6)
+                    : mix(vec3(1.0, 0.25, 0.75), vec3(1.0, 0.75, 0.9), r6);
+  vCol = c * tw * fadeIn * fadeOut * life * (0.8 + 2.2 * r6);
+}`;
+
+const PART_FS = HEAD + `
+in vec3 vCol;
+out vec4 fragColor;
+void main(){
+  float d = length(gl_PointCoord - 0.5) * 2.0;
+  float a = exp(-d * d * 5.0) * (1.0 - smoothstep(0.75, 1.0, d));
+  fragColor = vec4(vCol * a, 1.0);
+}`;
+
+/* ---- bloom / post ------------------------------------------------------- */
+const DOWN_FS = HEAD + `
+in vec2 vUv;
+uniform sampler2D uTex;
+uniform vec2 uTexel;
+uniform float uThresh;   // >0 => first pass with soft threshold
+out vec4 fragColor;
+vec3 S(vec2 o){ return texture(uTex, vUv + o * uTexel).rgb; }
+void main(){
+  // 13-tap dual filter (Jimenez)
+  vec3 a = S(vec2(-2,-2)), b = S(vec2(0,-2)), c = S(vec2(2,-2));
+  vec3 d = S(vec2(-1,-1)), e = S(vec2(1,-1));
+  vec3 f = S(vec2(-2,0)),  g = S(vec2(0,0)),  h = S(vec2(2,0));
+  vec3 i = S(vec2(-1,1)),  j = S(vec2(1,1));
+  vec3 k = S(vec2(-2,2)),  l = S(vec2(0,2)),  m = S(vec2(2,2));
+  vec3 col = (d+e+i+j) * 0.125 + (a+b+f+g) * 0.03125 + (b+c+g+h) * 0.03125 + (f+g+k+l) * 0.03125 + (g+h+l+m) * 0.03125;
+  if (uThresh > 0.0){
+    float br = max(col.r, max(col.g, col.b));
+    float knee = uThresh * 0.6;
+    float soft = clamp(br - uThresh + knee, 0.0, 2.0 * knee);
+    soft = soft * soft / (4.0 * knee + 1e-5);
+    col *= max(soft, br - uThresh) / max(br, 1e-4);
+  }
+  fragColor = vec4(col, 1.0);
+}`;
+
+const UP_FS = HEAD + `
+in vec2 vUv;
+uniform sampler2D uTex;
+uniform vec2 uTexel;
+uniform float uWeight;
+out vec4 fragColor;
+void main(){
+  vec3 s = vec3(0.0);
+  s += texture(uTex, vUv + uTexel * vec2(-1,-1)).rgb * 1.0;
+  s += texture(uTex, vUv + uTexel * vec2( 0,-1)).rgb * 2.0;
+  s += texture(uTex, vUv + uTexel * vec2( 1,-1)).rgb * 1.0;
+  s += texture(uTex, vUv + uTexel * vec2(-1, 0)).rgb * 2.0;
+  s += texture(uTex, vUv).rgb * 4.0;
+  s += texture(uTex, vUv + uTexel * vec2( 1, 0)).rgb * 2.0;
+  s += texture(uTex, vUv + uTexel * vec2(-1, 1)).rgb * 1.0;
+  s += texture(uTex, vUv + uTexel * vec2( 0, 1)).rgb * 2.0;
+  s += texture(uTex, vUv + uTexel * vec2( 1, 1)).rgb * 1.0;
+  fragColor = vec4(s / 16.0 * uWeight, 1.0);
+}`;
+
+const STREAK_FS = HEAD + `
+in vec2 vUv;
+uniform sampler2D uTex;
+uniform vec2 uTexel;
+out vec4 fragColor;
+void main(){
+  vec3 s = vec3(0.0); float ws = 0.0;
+  for (int i = -14; i <= 14; i++){
+    float x = float(i);
+    float w = exp(-x * x / 60.0);
+    s += texture(uTex, vUv + vec2(x * 4.0, 0.0) * uTexel).rgb * w;
+    ws += w;
+  }
+  fragColor = vec4(s / ws, 1.0);
+}`;
+
+const COMP_FS = HEAD + `
+in vec2 vUv;
+uniform sampler2D uScene, uBloom, uStreak;
+uniform float uPhi, uFrame;
+uniform vec2 uRes;
+out vec4 fragColor;
+
+vec3 aces(vec3 x){
+  const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
+  return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+float hash12(vec2 p){
+  uvec2 q = uvec2(p) ;
+  return float((q.x * 1664525u + q.y * 1013904223u + q.x * q.y * 22695477u) * 747796405u >> 8) / 16777215.0;
+}
+void main(){
+  vec2 c = vUv - 0.5;
+  float r2 = dot(c, c);
+  // subtle chromatic aberration
+  vec2 ca = c * (0.0011 + 0.0060 * r2);
+  vec3 scene;
+  scene.r = texture(uScene, vUv + ca).r;
+  scene.g = texture(uScene, vUv).g;
+  scene.b = texture(uScene, vUv - ca).b;
+
+  vec3 bloom  = texture(uBloom, vUv).rgb;
+  vec3 streak = texture(uStreak, vUv).rgb;
+  vec3 col = scene + bloom * 0.95 + streak * vec3(0.28, 0.45, 0.85) * 0.55;
+
+  // vignette
+  col *= 1.0 - 0.55 * smoothstep(0.10, 0.85, r2 * 1.9);
+
+  col *= 1.05;
+  col = aces(col);
+  col = pow(col, vec3(0.94));
+  // gentle grade: cool shadows, protect the neon saturation
+  float l = dot(col, vec3(0.2126, 0.7152, 0.0722));
+  col = mix(vec3(l), col, 1.10);
+  col += vec3(0.002, 0.003, 0.010) * (1.0 - l);
+
+  // triangular dither (kills banding in the dark gradients after encoding)
+  vec2 px = floor(vUv * uRes);
+  float n1 = hash12(px + uFrame * 17.0);
+  float n2 = hash12(px.yx + uFrame * 31.0 + 91.0);
+  col += (n1 + n2 - 1.0) * (1.25 / 255.0);
+  fragColor = vec4(col, 1.0);
+}`;
+
+/* ------------------------------------------------------------- GL helpers */
+function compile(type, src, name){
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)){
+    const log = gl.getShaderInfoLog(s);
+    console.error('Shader error in ' + name + '\n' + log);
+    throw new Error('Shader compile failed: ' + name + '\n' + log);
+  }
+  return s;
+}
+function program(vs, fs, name){
+  const p = gl.createProgram();
+  gl.attachShader(p, compile(gl.VERTEX_SHADER, vs, name + '.vs'));
+  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs, name + '.fs'));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error('Link failed ' + name + '\n' + gl.getProgramInfoLog(p));
+  const u = {};
+  const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++){
+    const info = gl.getActiveUniform(p, i);
+    u[info.name] = gl.getUniformLocation(p, info.name);
+  }
+  return { p, u };
+}
+function texture(w, h){
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texImage2D(gl.TEXTURE_2D, 0, TEX_INT, w, h, 0, gl.RGBA, TEX_TYPE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return t;
+}
+function fboWith(tex){
+  const f = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, f);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+  return f;
+}
+
+/* ---------------------------------------------------------------- matrices */
+function perspective(fovy, aspect, n, f){
+  const t = 1 / Math.tan(fovy / 2), nf = 1 / (n - f);
+  return new Float32Array([t / aspect,0,0,0, 0,t,0,0, 0,0,(f + n) * nf,-1, 0,0,2 * f * n * nf,0]);
+}
+const sub = (a, b) => [a[0]-b[0], a[1]-b[1], a[2]-b[2]];
+const cross = (a, b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+const norm = (a) => { const l = Math.hypot(a[0], a[1], a[2]); return [a[0]/l, a[1]/l, a[2]/l]; };
+const dot = (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+function lookAt(eye, tgt, up){
+  const f = norm(sub(tgt, eye));
+  const r = norm(cross(f, up));
+  const u = cross(r, f);
+  const m = new Float32Array([
+    r[0], u[0], -f[0], 0,
+    r[1], u[1], -f[1], 0,
+    r[2], u[2], -f[2], 0,
+    -dot(r, eye), -dot(u, eye), dot(f, eye), 1]);
+  return { m, r, u, f };
+}
+function mul(a, b){
+  const o = new Float32Array(16);
+  for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++){
+    let s = 0;
+    for (let k = 0; k < 4; k++) s += a[k * 4 + r] * b[c * 4 + k];
+    o[c * 4 + r] = s;
+  }
+  return o;
+}
+
+/* --------------------------------------------------------------- resources */
+const progTerrain = program(TERRAIN_VS, TERRAIN_FS, 'terrain');
+const progSky     = program(FULL_VS, SKY_FS, 'sky');
+const progPart    = program(PART_VS, PART_FS, 'particles');
+const progDown    = program(FULL_VS, DOWN_FS, 'down');
+const progUp      = program(FULL_VS, UP_FS, 'up');
+const progStreak  = program(FULL_VS, STREAK_FS, 'streak');
+const progComp    = program(FULL_VS, COMP_FS, 'composite');
+
+const vaoEmpty = gl.createVertexArray();
+
+// terrain grid (indices only; vertices are generated from gl_VertexID)
+const NX = 520, NZ = 620;
+const NEAR = 1.5, FAR = 250;
+const vaoTerrain = gl.createVertexArray();
+gl.bindVertexArray(vaoTerrain);
+const idx = new Uint32Array(NX * NZ * 6);
+{
+  let k = 0;
+  for (let z = 0; z < NZ; z++) for (let x = 0; x < NX; x++){
+    const a = z * (NX + 1) + x, b = a + 1, c = a + NX + 1, d = c + 1;
+    idx[k++] = a; idx[k++] = c; idx[k++] = b;
+    idx[k++] = b; idx[k++] = c; idx[k++] = d;
+  }
+}
+const ibo = gl.createBuffer();
+gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
+gl.bindVertexArray(null);
+const TERRAIN_INDEX_COUNT = idx.length;
+
+const NP = 2600, NCOPY = 4;
+
+// scene targets
+const sceneTex = texture(W, H);
+const sceneFbo = fboWith(sceneTex);
+let msaaFbo = null;
+if (USE_MSAA){
+  try {
+    const samples = Math.min(4, gl.getParameter(gl.MAX_SAMPLES));
+    const rbC = gl.createRenderbuffer();
+    gl.bindRenderbuffer(gl.RENDERBUFFER, rbC);
+    gl.renderbufferStorageMultisample(gl.RENDERBUFFER, samples, TEX_INT, W, H);
+    const rbD = gl.createRenderbuffer();
+    gl.bindRenderbuffer(gl.RENDERBUFFER, rbD);
+    gl.renderbufferStorageMultisample(gl.RENDERBUFFER, samples, gl.DEPTH_COMPONENT24, W, H);
+    const f = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, f);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, rbC);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, rbD);
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE) msaaFbo = f;
+  } catch (e) { msaaFbo = null; }
+}
+let depthRb = null, plainFbo = null;
+if (!msaaFbo){
+  plainFbo = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, plainFbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, sceneTex, 0);
+  depthRb = gl.createRenderbuffer();
+  gl.bindRenderbuffer(gl.RENDERBUFFER, depthRb);
+  gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, W, H);
+  gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, depthRb);
+}
+
+// bloom mip chain (1/2 ... 1/64)
+const LEVELS = 6;
+const mips = [];
+for (let i = 0; i < LEVELS; i++){
+  const w = Math.max(2, Math.floor(W / Math.pow(2, i + 1)));
+  const h = Math.max(2, Math.floor(H / Math.pow(2, i + 1)));
+  const t = texture(w, h);
+  mips.push({ w, h, tex: t, fbo: fboWith(t) });
+}
+const streakSrc = 2;
+const streakTex = texture(mips[streakSrc].w, mips[streakSrc].h);
+const streakFbo = fboWith(streakTex);
+
+/* ------------------------------------------------------------------ render */
+const PER_JS = 64;
+const valleyC = (v) => { const k = TAU * v / PER_JS; return 10 * Math.sin(k) + 3.5 * Math.sin(2 * k + 1.3); };
+
+function fullscreen(){
+  gl.bindVertexArray(vaoEmpty);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+function render(tSeconds){
+  const t = ((tSeconds % DURATION) + DURATION) % DURATION;
+  const phi = t / DURATION;
+  const w = TAU * phi;
+  const frame = Math.floor(t * FPS + 1e-4) % (DURATION * FPS);
+
+  // camera path (all harmonics are integers -> closes exactly)
+  const camX = 2.4 * Math.sin(w + 0.4);
+  const camY = 25.0 + 2.4 * Math.sin(w + 1.1) + 0.8 * Math.sin(2 * w + 0.3);
+  const eye = [camX, camY, 0];
+  const tgt = [camX + 9 * Math.sin(w + 2.0), camY - 9.5 + 1.6 * Math.sin(2 * w + 0.5), -100];
+  const roll = 0.030 * Math.sin(w + 2.2);
+  const up = [Math.sin(roll), Math.cos(roll), 0];
+  const fovy = 46 * Math.PI / 180;
+  const aspect = W / H;
+  const view = lookAt(eye, tgt, up);
+  const proj = perspective(fovy, aspect, 0.8, 500);
+  const vp = mul(proj, view.m);
+  const valleyOff = valleyC(PER_JS * phi);
+  const tanH = Math.tan(fovy / 2);
+
+  gl.viewport(0, 0, W, H);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, msaaFbo || plainFbo);
+  gl.clearColor(0, 0, 0, 1);
+  gl.depthMask(true);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+  // -- sky
+  gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND); gl.disable(gl.CULL_FACE);
+  gl.useProgram(progSky.p);
+  gl.uniform3fv(progSky.u.uRight, view.r);
+  gl.uniform3fv(progSky.u.uUp, view.u);
+  gl.uniform3fv(progSky.u.uFwd, view.f);
+  gl.uniform1f(progSky.u.uTanH, tanH);
+  gl.uniform1f(progSky.u.uAspect, aspect);
+  gl.uniform1f(progSky.u.uPhi, phi);
+  fullscreen();
+
+  // -- terrain
+  gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL);
+  gl.useProgram(progTerrain.p);
+  gl.uniformMatrix4fv(progTerrain.u.uVP, false, vp);
+  gl.uniform1f(progTerrain.u.uPhi, phi);
+  gl.uniform1f(progTerrain.u.uCamX, camX);
+  gl.uniform1f(progTerrain.u.uCamY, camY);
+  gl.uniform1f(progTerrain.u.uValleyOff, valleyOff);
+  gl.uniform1f(progTerrain.u.uNear, NEAR);
+  gl.uniform1f(progTerrain.u.uFar, FAR);
+  gl.uniform1i(progTerrain.u.uNX, NX);
+  gl.uniform1i(progTerrain.u.uNZ, NZ);
+  gl.uniform3f(progTerrain.u.uCam, eye[0], eye[1], eye[2]);
+  gl.bindVertexArray(vaoTerrain);
+  gl.drawElements(gl.TRIANGLES, TERRAIN_INDEX_COUNT, gl.UNSIGNED_INT, 0);
+
+  // -- motes
+  gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+  gl.depthMask(false);
+  gl.useProgram(progPart.p);
+  gl.uniformMatrix4fv(progPart.u.uVP, false, vp);
+  gl.uniform1f(progPart.u.uPhi, phi);
+  gl.uniform1f(progPart.u.uCamX, camX);
+  gl.uniform1f(progPart.u.uValleyOff, valleyOff);
+  gl.uniform1f(progPart.u.uFar, 190);
+  gl.uniform1f(progPart.u.uPointScale, H / (2 * tanH));
+  gl.uniform1i(progPart.u.uNP, NP);
+  gl.bindVertexArray(vaoEmpty);
+  gl.drawArrays(gl.POINTS, 0, NP * NCOPY);
+  gl.depthMask(true);
+  gl.disable(gl.BLEND); gl.disable(gl.DEPTH_TEST);
+
+  // -- resolve MSAA
+  if (msaaFbo){
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, msaaFbo);
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, sceneFbo);
+    gl.blitFramebuffer(0, 0, W, H, 0, 0, W, H, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+  }
+
+  // -- bloom: down chain
+  gl.useProgram(progDown.p);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.uniform1i(progDown.u.uTex, 0);
+  for (let i = 0; i < LEVELS; i++){
+    const src = i === 0 ? { tex: sceneTex, w: W, h: H } : mips[i - 1];
+    const dst = mips[i];
+    gl.bindFramebuffer(gl.FRAMEBUFFER, dst.fbo);
+    gl.viewport(0, 0, dst.w, dst.h);
+    gl.bindTexture(gl.TEXTURE_2D, src.tex);
+    gl.uniform2f(progDown.u.uTexel, 1 / src.w, 1 / src.h);
+    gl.uniform1f(progDown.u.uThresh, i === 0 ? 0.55 : 0.0);
+    fullscreen();
+  }
+  // -- anamorphic streak from a mid mip
+  gl.useProgram(progStreak.p);
+  gl.uniform1i(progStreak.u.uTex, 0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, streakFbo);
+  gl.viewport(0, 0, mips[streakSrc].w, mips[streakSrc].h);
+  gl.bindTexture(gl.TEXTURE_2D, mips[streakSrc].tex);
+  gl.uniform2f(progStreak.u.uTexel, 1 / mips[streakSrc].w, 1 / mips[streakSrc].h);
+  fullscreen();
+  // -- bloom: up chain (additive tent)
+  gl.useProgram(progUp.p);
+  gl.uniform1i(progUp.u.uTex, 0);
+  gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+  for (let i = LEVELS - 1; i > 0; i--){
+    const src = mips[i], dst = mips[i - 1];
+    gl.bindFramebuffer(gl.FRAMEBUFFER, dst.fbo);
+    gl.viewport(0, 0, dst.w, dst.h);
+    gl.bindTexture(gl.TEXTURE_2D, src.tex);
+    gl.uniform2f(progUp.u.uTexel, 1 / src.w, 1 / src.h);
+    gl.uniform1f(progUp.u.uWeight, 0.78);
+    fullscreen();
+  }
+  gl.disable(gl.BLEND);
+
+  // -- composite to screen
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, W, H);
+  gl.useProgram(progComp.p);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, sceneTex);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, mips[0].tex);
+  gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, streakTex);
+  gl.uniform1i(progComp.u.uScene, 0);
+  gl.uniform1i(progComp.u.uBloom, 1);
+  gl.uniform1i(progComp.u.uStreak, 2);
+  gl.uniform1f(progComp.u.uPhi, phi);
+  gl.uniform1f(progComp.u.uFrame, frame);
+  gl.uniform2f(progComp.u.uRes, W, H);
+  fullscreen();
+  gl.activeTexture(gl.TEXTURE0);
+}
+
+window.DURATION = DURATION;
+window.renderAt = render;
+
+let t0 = null;
+function loop(now){
+  if (t0 === null) t0 = now;
+  const t = FIXED_T !== null ? FIXED_T : ((now - t0) / 1000) % DURATION;
+  render(t);
+  if (FIXED_T === null) requestAnimationFrame(loop);
+  else { window.__rendered = true; }
+}
+requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
