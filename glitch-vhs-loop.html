@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=3840, height=2160">
+<title>Glitch Art VHS Distortions - Analog TV Static and Digital Glitch Loop (3840x2160, 15s)</title>
+<style>
+  html, body { margin: 0; padding: 0; width: 3840px; height: 2160px; overflow: hidden; background: #000; }
+  canvas { display: block; position: absolute; left: 0; top: 0; width: 3840px; height: 2160px; }
+</style>
+</head>
+<body>
+<canvas id="c" width="3840" height="2160"></canvas>
+
+<script id="vs" type="x-shader/x-vertex">
+attribute vec2 a_pos;
+void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }
+</script>
+
+<script id="fs" type="x-shader/x-fragment">
+precision highp float;
+uniform vec2  u_res;
+uniform float u_time;   /* 0.0 .. 15.0, wraps -> seamless loop */
+
+const float T   = 15.0;
+const float TAU = 6.28318530718;
+const float PI  = 3.14159265359;
+
+/* ---------- hashing / noise ---------- */
+float h11(float p){ p = fract(p*0.1031); p *= p + 33.33; p *= p + p; return fract(p); }
+float h12(vec2 p){ vec3 p3 = fract(vec3(p.xyx)*0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y)*p3.z); }
+vec2  h22(vec2 p){ vec3 p3 = fract(vec3(p.xyx)*vec3(0.1031,0.1030,0.0973)); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.xx + p3.yz)*p3.zy); }
+float h13(vec3 p3){ p3 = fract(p3*0.1031); p3 += dot(p3, p3.zyx + 31.32); return fract((p3.x + p3.y)*p3.z); }
+
+float n2(vec2 p){
+  vec2 i = floor(p), f = fract(p);
+  f = f*f*(3.0 - 2.0*f);
+  return mix(mix(h12(i), h12(i + vec2(1.0,0.0)), f.x),
+             mix(h12(i + vec2(0.0,1.0)), h12(i + vec2(1.0,1.0)), f.x), f.y);
+}
+float fbm(vec2 p){
+  float a = 0.5, s = 0.0;
+  for (int i = 0; i < 4; i++){ s += a*n2(p); p = p*2.03 + vec2(17.1, 9.3); a *= 0.5; }
+  return s;
+}
+
+/* time chunk helpers: k*15 is always an integer -> perfectly periodic over the 15 s loop */
+float tk(float k){ return floor(u_time*k); }
+float rk(float k, float s){ return h11(tk(k) + s*7.31 + 0.5); }
+
+/* ---------- palette ---------- */
+vec3 neon(float t){
+  t = fract(t)*4.0;
+  vec3 c0 = vec3(0.05,0.90,1.00), c1 = vec3(1.00,0.12,0.70), c2 = vec3(0.50,0.25,1.00), c3 = vec3(1.00,0.85,0.15);
+  vec3 c = mix(c0, c1, clamp(t,       0.0, 1.0));
+  c      = mix(c,  c2, clamp(t - 1.0, 0.0, 1.0));
+  c      = mix(c,  c3, clamp(t - 2.0, 0.0, 1.0));
+  c      = mix(c,  c0, clamp(t - 3.0, 0.0, 1.0));
+  return c;
+}
+vec3 colorbars(float x){
+  float i = floor(x*7.0);
+  vec3 c = vec3(1.0);
+  if (i == 1.0) c = vec3(1.0,1.0,0.0); else if (i == 2.0) c = vec3(0.0,1.0,1.0); else if (i == 3.0) c = vec3(0.0,1.0,0.0);
+  else if (i == 4.0) c = vec3(1.0,0.0,1.0); else if (i == 5.0) c = vec3(1.0,0.0,0.0); else if (i == 6.0) c = vec3(0.0,0.0,1.0);
+  return c*0.9;
+}
+
+/* ---------- the underlying "broadcast" picture ---------- */
+vec3 scene(vec2 uv){
+  float ph = u_time/T;
+  vec2 lp = vec2(cos(TAU*ph), sin(TAU*ph));      /* circular walk through noise space -> loops */
+  float asp = u_res.x/u_res.y;
+  vec2 p = (uv - 0.5)*vec2(asp, 1.0);
+  vec3 col = vec3(0.015, 0.012, 0.035);
+
+  /* flowing neon nebula */
+  float f1 = fbm(vec2(p.x*0.8 - p.y*0.5, p.y*1.3) + lp*0.9);
+  float f2 = fbm(p*2.0 + lp.yx*1.2 + 3.7);
+  col += neon(f1*1.3 + ph) * (0.10 + 0.55*pow(f2, 2.2));
+
+  /* faint diagonal slats */
+  float slat = step(0.55, fract((p.x*0.7 + p.y)*9.0 + ph*3.0));
+  col *= 0.92 + 0.08*slat;
+
+  /* oscilloscope waveforms */
+  vec3 wcol = vec3(0.0);
+  for (int i = 0; i < 3; i++){
+    float fi = float(i);
+    float k = fi + 1.0;
+    float env = 0.5 + 0.5*n2(vec2(uv.x*3.0 + fi*5.3, fi*2.1) + lp*1.1);
+    float yw = 0.5 + (fi - 1.0)*0.24
+             + 0.14*env*sin(TAU*(uv.x*(1.0 + fi*1.5) + ph*k))
+             + 0.05*sin(TAU*(uv.x*7.0 - ph*(k + 2.0)));
+    float d = abs(uv.y - yw);
+    float line = 0.0025/(d + 0.0025);
+    wcol += neon(fi*0.3 + ph + 0.15) * line * 0.6;
+  }
+  col += wcol;
+
+  /* rotating dial rings */
+  float r = length(p);
+  float a = atan(p.y, p.x)/TAU;
+  float ring1 = smoothstep(0.010, 0.0, abs(r - 0.42)) * step(0.5,  fract(a*36.0 + ph*2.0));
+  float ring2 = smoothstep(0.005, 0.0, abs(r - 0.31)) * step(0.35, fract(a*8.0  - ph));
+  float ring3 = smoothstep(0.028, 0.0, abs(r - 0.56)) * step(0.82, fract(a*3.0  + ph));
+  float ring4 = smoothstep(0.003, 0.0, abs(r - 0.21));
+  col += vec3(0.05,0.9,1.0)*ring1*0.9 + vec3(1.0,0.12,0.7)*ring2 + vec3(1.0,0.85,0.15)*ring3*0.55 + vec3(0.8)*ring4*0.4;
+  col += neon(ph + 0.5) * 0.02/(r*r*8.0 + 0.03);
+
+  /* drifting light orbs on closed Lissajous paths */
+  for (int i = 0; i < 4; i++){
+    float fi = float(i);
+    float kx = fi + 1.0, ky = 4.0 - fi;
+    vec2 c = vec2(sin(TAU*(ph*kx + fi*0.21))*0.72, cos(TAU*(ph*ky + fi*0.37))*0.42);
+    float d = length(p - c);
+    col += neon(fi*0.25 + ph) * 0.006/(d*d + 0.006) * 0.8;
+  }
+  return col;
+}
+
+void main(){
+  vec2 fc = gl_FragCoord.xy;
+  vec2 uv = fc/u_res;
+  float ph = u_time/T;
+  vec2 lp = vec2(cos(TAU*ph), sin(TAU*ph));
+
+  /* ---------- glitch intensity timeline ---------- */
+  float macro = 0.35 + 0.65*(0.5 + 0.5*sin(TAU*ph*2.0 - 1.3));
+  float burst = step(0.5, rk(4.0, 1.0)) * (0.4 + 0.6*rk(4.0, 2.0));
+  float micro = step(0.75, rk(12.0, 3.0));
+  float g = clamp(0.05 + burst*macro + micro*0.45, 0.0, 1.4);
+
+  /* ---------- VHS tracking band ---------- */
+  float bpos = fract(ph*2.0 + 0.3);
+  float dw = abs(uv.y - bpos); dw = min(dw, 1.0 - dw);
+  float tb  = smoothstep(0.09,  0.0, dw);
+  float tbc = smoothstep(0.018, 0.0, dw);
+
+  vec2 duv = uv;
+  float tn = n2(vec2(uv.y*70.0, 0.0) + lp*3.0);
+  duv.x += tb*tb*(tn - 0.5)*0.22 + tbc*(h12(vec2(floor(uv.y*400.0), tk(60.0))) - 0.5)*0.12;
+
+  /* horizontal slab tearing */
+  float slabN = 6.0 + 18.0*rk(4.0, 4.0);
+  float slab = floor(uv.y*slabN);
+  float sh = h12(vec2(slab, tk(4.0) + 3.0));
+  float slabOn = step(0.7, sh) * step(0.3, g);
+  duv.x += slabOn * (h12(vec2(slab, tk(4.0) + 9.0)) - 0.5) * 0.4 * g;
+
+  /* fine line jitter + analog wobble */
+  float row = floor(uv.y*240.0);
+  duv.x += (h12(vec2(row, tk(30.0))) - 0.5) * 0.006 * (0.25 + g*2.0);
+  duv.x += sin(uv.y*24.0 + TAU*ph*4.0) * 0.002 * (0.5 + g);
+
+  /* head-switching noise at bottom of frame */
+  float hs = smoothstep(0.04, 0.0, uv.y);
+  duv.x += hs*hs*((n2(vec2(uv.y*220.0, 0.0) + lp*4.0) - 0.5)*0.5 + 0.07);
+
+  /* vertical roll (lost sync) */
+  float rollOn = step(0.88, rk(4.0, 5.0));
+  duv.y = fract(duv.y + rollOn*fract(u_time*1.6));
+
+  /* digital block displacement */
+  float bs = 5.0 + 26.0*rk(8.0, 7.0);
+  vec2 bsz = vec2(bs*1.78, bs);
+  vec2 bid = floor(duv*bsz);
+  float bh = h12(bid + tk(12.0)*0.37 + 1.7);
+  float blockOn = step(0.95 - g*0.1, bh) * step(0.25, g);
+  vec2 bo = (h22(bid + tk(12.0) + 4.2) - 0.5) * 0.3 * blockOn;
+  duv += bo;
+
+  /* ---------- chromatic aberration (RGB split) ---------- */
+  float ca = 0.0012 + g*0.010 + tb*0.012 + blockOn*0.02;
+  vec2 cav = vec2(ca, ca*0.2);
+  vec3 col;
+  col.r = scene(fract(duv + cav)).r;
+  col.g = scene(fract(duv)).g;
+  col.b = scene(fract(duv - cav)).b;
+
+  /* ---------- VHS chroma bleed (soft color, sharp luma) ---------- */
+  float bw = 0.004 + g*0.006;
+  vec3 bl = (scene(fract(duv + vec2(bw, 0.0))) + scene(fract(duv - vec2(bw, 0.0))))*0.5;
+  float Y  = dot(col, vec3(0.299, 0.587, 0.114));
+  float Yb = dot(bl,  vec3(0.299, 0.587, 0.114));
+  col = mix(col, Y + (bl - Yb)*1.2, 0.55);
+
+  /* ghost echo */
+  col += scene(fract(duv + vec2(0.035 + g*0.03, 0.002))) * (0.08 + g*0.12);
+
+  /* ---------- digital block color mutation ---------- */
+  float bm = h12(bid + 9.1 + tk(12.0));
+  vec3 inv = 1.0 - col;
+  vec3 swp = col.gbr;
+  vec3 pst = floor(col*3.0)/3.0 * neon(bm) * 1.4;
+  vec3 bcol = bm < 0.33 ? inv : (bm < 0.66 ? swp : pst);
+  col = mix(col, bcol, blockOn);
+
+  /* SMPTE color bar intrusions */
+  float cbOn = step(0.92, sh) * step(0.6, g);
+  col = mix(col, colorbars(fract(uv.x + rk(4.0, 11.0))), cbOn);
+
+  /* tape dropouts (white streaks) */
+  float dr = floor(uv.y*540.0);
+  float dOn  = step(0.99 - g*0.02, h12(vec2(dr, tk(30.0) + 2.0)));
+  float dx   = h12(vec2(dr, tk(30.0) + 5.0));
+  float dLen = 0.02 + 0.18*h12(vec2(dr, tk(30.0) + 8.0));
+  float dash = dOn * step(dx, uv.x) * step(uv.x, dx + dLen);
+  col = mix(col, vec3(1.0), dash*0.9);
+
+  /* ---------- analog static ---------- */
+  float sn  = h13(vec3(fc, tk(60.0)));
+  float sn2 = h13(vec3(floor(fc/vec2(4.0, 2.0)), tk(60.0) + 7.0));
+  float snow = step(0.965, rk(30.0, 8.0));
+  float sAmt = 0.06 + tb*0.5 + tbc*0.3 + hs*0.5 + g*0.10 + snow*0.8;
+  vec3 stat = vec3(mix(sn, sn2, 0.5));
+  stat = mix(stat, stat*neon(sn2 + ph), 0.25);
+  col = mix(col, stat, clamp(sAmt, 0.0, 0.95));
+
+  /* full-frame invert flicker */
+  float invF = step(0.975, rk(30.0, 9.0));
+  col = mix(col, 1.0 - col, invF);
+
+  /* scanlines, luma flicker, vignette */
+  col *= 0.86 + 0.14*sin(fc.y*TAU/4.0);
+  col *= 0.95 + 0.05*rk(60.0, 10.0);
+  vec2 vq = (uv - 0.5)*vec2(1.1, 1.0);
+  col *= 1.0 - 0.3*pow(dot(vq, vq)*1.6, 1.6);
+
+  col = pow(clamp(col, 0.0, 1.0), vec3(0.92));
+  gl_FragColor = vec4(col, 1.0);
+}
+</script>
+
+<script>
+(function(){
+  var DURATION = 15.0;
+  var canvas = document.getElementById('c');
+  var opts = { antialias: false, alpha: false, preserveDrawingBuffer: true, powerPreference: 'high-performance' };
+  var gl = canvas.getContext('webgl2', opts) || canvas.getContext('webgl', opts) || canvas.getContext('experimental-webgl', opts);
+  if (!gl) { document.body.style.background = '#111'; return; }
+
+  function compile(type, src){
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { console.error(gl.getShaderInfoLog(s)); }
+    return s;
+  }
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER,   document.getElementById('vs').textContent));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, document.getElementById('fs').textContent));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) { console.error(gl.getProgramInfoLog(prog)); }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+  var loc = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+
+  var uRes  = gl.getUniformLocation(prog, 'u_res');
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.uniform2f(uRes, canvas.width, canvas.height);
+
+  var start = null;
+  function frame(now){
+    if (start === null) start = now;
+    var t = ((now - start) / 1000.0) % DURATION;
+    gl.uniform1f(uTime, t);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
