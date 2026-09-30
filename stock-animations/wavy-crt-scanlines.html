@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Wavy Distorted Scanlines</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
+  #stage { position: fixed; left: 50%; top: 50%; width: 3840px; height: 2160px; display: block;
+           transform-origin: 50% 50%; transform: translate(-50%, -50%); background: #000; }
+  #err { position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+         color: #7fe9ff; font: 24px/1.4 system-ui, sans-serif; text-align: center; }
+</style>
+</head>
+<body>
+<canvas id="stage" width="3840" height="2160"></canvas>
+<div id="err">WebGL2 is required to play this animation.</div>
+
+<script id="vs" type="x-shader/x-vertex">#version 300 es
+void main() {
+  vec2 v = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+  gl_Position = vec4(v * 2.0 - 1.0, 0.0, 1.0);
+}
+</script>
+
+<!-- ============================ SCENE: wavy raster ============================ -->
+<script id="fs-scene" type="x-shader/x-fragment">#version 300 es
+precision highp float;
+uniform vec2  uRes;
+uniform float uT;            // loop position 0..1  (15 s)
+out vec4 fragColor;
+#define TAU 6.28318530718
+
+float hash12(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * .1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+float vnoise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f * f * f * (f * (f * 6. - 15.) + 10.);
+  float a = hash12(i), b = hash12(i + vec2(1, 0)), c = hash12(i + vec2(0, 1)), d = hash12(i + vec2(1, 1));
+  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+float fbm(vec2 p) {
+  float s = 0., a = .5;
+  mat2 m = mat2(1.6, 1.2, -1.2, 1.6);
+  for (int i = 0; i < 5; i++) { s += a * vnoise(p); p = m * p; a *= .5; }
+  return s;
+}
+
+// electric violet -> hot magenta -> cyan -> ice (kept saturated, no grey mid-tones)
+vec3 pal(float x) {
+  x = clamp(x, 0., 1.);
+  vec3 c0 = vec3(0.260, 0.100, 1.000);
+  vec3 c1 = vec3(1.000, 0.090, 0.560);
+  vec3 c2 = vec3(0.000, 0.720, 1.000);
+  vec3 c3 = vec3(0.120, 0.960, 1.000);
+  vec3 c = mix(c0, c1, smoothstep(0.00, 0.34, x));
+  c = mix(c, c2, smoothstep(0.34, 0.68, x));
+  c = mix(c, c3, smoothstep(0.68, 1.00, x));
+  return c;
+}
+
+// vertical displacement of the raster as a function of position and loop phase
+float waveY(vec2 p, float th, float env, float envN) {
+  return env * ( .120 * sin(p.x * 1.5 + p.y * 0.9 + th * 2.)
+               + .050 * sin(p.x * 4.1 - th * 3. + .8)
+               + .018 * sin(p.x * 9.3 + p.y * 3.0 + th * 5.) )
+         + .12 * (envN - .5);
+}
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / uRes;
+  vec2 p = (uv - .5) * vec2(uRes.x / uRes.y, 1.) * 2.;     // y: -1..1
+  float th = uT * TAU;
+
+  // gentle tube curvature: scanlines bow toward the edges
+  vec2 c = uv * 2. - 1.;
+  p *= 1. + .055 * dot(c, c);
+
+  // ---------- wavy vertical displacement (the scanlines themselves ripple) ----------
+  float env  = .78 + .22 * sin(th + 1.0);
+  float envN = fbm(p * .55 + 1.3 * vec2(cos(th), sin(th)) + 9.);
+  float wy = waveY(p, th, env, envN);
+  float slope = (waveY(p + vec2(.02, 0.), th, env, envN) - wy) / .02;   // crest / trough shading
+  vec2 q = vec2(p.x, p.y + wy);
+
+  // ---------- rolling distortion bar (3 passes / loop, moving down) ----------
+  float yc = 1.55 - 3.1 * fract(uT * 3.);
+  float g  = exp(-pow((q.y - yc) / .21, 2.));
+
+  // ---------- horizontal wobble + per-line tearing inside the bar ----------
+  float wx = .022 * sin(q.y * 7. + th * 3.) + .012 * sin(q.y * 17. - th * 4. + 2.)
+           + .05 * (fbm(vec2(q.y * 2.2, 3.) + 1.1 * vec2(sin(th), cos(th))) - .5);
+  wx += g * .075 * sin(q.y * 60. + th * 9.);
+
+  // scanline coordinate: 150 lines / unit, scrolls 150 lines per loop -> seamless
+  float N  = 150.;
+  float lc = q.y * N + 150. * uT;
+  float lineId = floor(lc);
+  float jit = (hash12(vec2(lineId, 7.)) - .5) * g * .14;
+  float sx = p.x + wx + jit;
+  vec2  s  = vec2(sx, q.y);
+
+  // ---------- the light being drawn by the beam ----------
+  vec2 cir1 = vec2(cos(th), sin(th));
+  vec2 cir2 = vec2(cos(2. * th + 1.), sin(2. * th + 1.));
+  float n1 = fbm(s * .9 + .8 * cir1);
+  float n2 = fbm(s * 1.7 + 2.2 * vec2(n1, 1. - n1) + .6 * cir2 + 5.);
+  float ridge = pow(1. - abs(2. * n2 - 1.), 5.);
+  float x = .5 + .5 * sin(TAU * (n1 * .8 + s.x * .07 + s.y * .11) + th);
+
+  float pool = .12 + 1.3 * smoothstep(.32, .74, n1);
+  vec3 img = (pal(x) * (.02 + .24 * pow(n2, 2.6)) + pal(x + .12) * ridge * .26) * pool;
+
+  // ---------- scanline structure ----------
+  float lineCos = .5 + .5 * cos(TAU * lc);
+  float core    = pow(lineCos, 9.);
+  float body    = pow(lineCos, 2.4);
+  float lineMod = .02 + .98 * body;
+  lineMod *= 1. + .07 * sin(lineId * 1.7 + th * 15.);          // per-line shimmer
+
+  // broad luminance bands rolling down (4 bands, 2 loops)
+  float bands   = .5 + .5 * cos(TAU * (q.y * .95 + 2. * uT));
+  float bandMod = .72 + .55 * pow(bands, 3.);
+  float shade   = clamp(1. + 1.25 * slope, .25, 2.4);          // silk-like light on the ripples
+
+  vec3 col = img * lineMod * bandMod * shade;
+
+  // self-luminous scanline cores (these become the soft glow)
+  float emitMask = .12 + 1.0 * smoothstep(.30, .80, n1);
+  col += core * pal(clamp(x + .22, 0., 1.)) * emitMask * shade * 1.05;
+
+  // roll bar: hot glow, lines brighten and tint cyan
+  col += pal(.72) * g * (.10 + 1.0 * lineCos) * 1.15;
+  col += pal(.55) * exp(-pow((q.y - yc) / .60, 2.)) * .10 * (.4 + .6 * lineCos);
+
+  // ambient phosphor haze
+  col += pal(.42) * .018 * exp(-dot(p, p) * .35);
+
+  fragColor = vec4(max(col, 0.), 1.);
+}
+</script>
+
+<!-- ============================ BLOOM: downsample ============================ -->
+<script id="fs-down" type="x-shader/x-fragment">#version 300 es
+precision highp float;
+uniform sampler2D uSrc;
+uniform vec2 uTexel;
+uniform float uPre;
+out vec4 fragColor;
+void main() {
+  vec2 uv = gl_FragCoord.xy * (uTexel * 2.);
+  #define T(o) texture(uSrc, uv + uTexel * vec2(o)).rgb
+  vec3 A = T(vec2(-2, 2)),  B = T(vec2(0, 2)),  C = T(vec2(2, 2));
+  vec3 D = T(vec2(-2, 0)),  E = T(vec2(0, 0)),  F = T(vec2(2, 0));
+  vec3 G = T(vec2(-2,-2)),  H = T(vec2(0,-2)),  I = T(vec2(2,-2));
+  vec3 J = T(vec2(-1, 1)),  K = T(vec2(1, 1)),  L = T(vec2(-1,-1)), M = T(vec2(1,-1));
+  vec3 r = E * .125 + (A + C + G + I) * .03125 + (B + D + F + H) * .0625 + (J + K + L + M) * .125;
+  if (uPre > .5) {
+    float br = max(max(r.r, r.g), r.b);
+    r *= max(br - .50, 0.) / max(br, 1e-4);
+  }
+  fragColor = vec4(r, 1.);
+}
+</script>
+
+<!-- ============================ BLOOM: upsample (tent) ============================ -->
+<script id="fs-up" type="x-shader/x-fragment">#version 300 es
+precision highp float;
+uniform sampler2D uSrc;
+uniform vec2 uTexel;     // 1 / source size
+uniform vec2 uDstRes;
+uniform float uGain;
+out vec4 fragColor;
+void main() {
+  vec2 uv = gl_FragCoord.xy / uDstRes;
+  vec3 r  = texture(uSrc, uv + uTexel * vec2(-1,  1)).rgb
+          + texture(uSrc, uv + uTexel * vec2( 1,  1)).rgb
+          + texture(uSrc, uv + uTexel * vec2(-1, -1)).rgb
+          + texture(uSrc, uv + uTexel * vec2( 1, -1)).rgb;
+  r += 2. * (texture(uSrc, uv + uTexel * vec2(0, 1)).rgb + texture(uSrc, uv + uTexel * vec2(0, -1)).rgb
+           + texture(uSrc, uv + uTexel * vec2(1, 0)).rgb + texture(uSrc, uv + uTexel * vec2(-1, 0)).rgb);
+  r += 4. * texture(uSrc, uv).rgb;
+  fragColor = vec4(r / 16. * uGain, 1.);
+}
+</script>
+
+<!-- ============================ COMPOSITE ============================ -->
+<script id="fs-comp" type="x-shader/x-fragment">#version 300 es
+precision highp float;
+uniform sampler2D uScene, uBloom;
+uniform vec2  uRes;
+uniform float uT, uFrame;
+out vec4 fragColor;
+#define TAU 6.28318530718
+float hash12(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * .1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+vec3 aces(vec3 x) { return clamp((x * (2.51 * x + .03)) / (x * (2.43 * x + .59) + .14), 0., 1.); }
+void main() {
+  vec2 uv = gl_FragCoord.xy / uRes;
+  vec2 d = uv - .5;
+  float ca = .018 * dot(d, d);
+  vec2 su = .5 + d * .975;                                     // slight overscan hides edge taps
+  vec3 sc = vec3(texture(uScene, su + d * ca).r,
+                 texture(uScene, su).g,
+                 texture(uScene, su - d * ca).b);
+  vec3 bl = texture(uBloom, su).rgb;
+
+  vec3 col = sc + bl * 1.2;
+  col *= 1. + .018 * sin(uT * TAU * 30.);                      // faint 2 Hz phosphor flicker
+
+  float len = length(d * vec2(1.1, 1.5));
+  col *= 1. - .72 * smoothstep(.35, 1., len);                  // vignette
+
+  col = aces(col * 1.15);
+  col = mix(vec3(dot(col, vec3(.2126, .7152, .0722))), col, 1.35);   // richer neon saturation
+  col = mix(col, col * col * (3. - 2. * col), .45);              // contrast S-curve
+  col = pow(col, vec3(1. / 2.2));
+
+  float n = hash12(gl_FragCoord.xy + uFrame * vec2(17.3, 9.1));
+  col += (n - .5) * (2.2 / 255.);                              // dither + fine grain
+  fragColor = vec4(col, 1.);
+}
+</script>
+
+<script>
+(() => {
+  const W = 3840, H = 2160, DUR = 15000, FPS = 24;
+  const canvas = document.getElementById('stage');
+  const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, depth: false,
+                                           preserveDrawingBuffer: true, powerPreference: 'high-performance' });
+  if (!gl) { document.getElementById('err').style.display = 'flex'; return; }
+
+  // fit the 3840x2160 stage into any window (1:1 when the window is 3840x2160)
+  const fit = () => {
+    const s = Math.min(innerWidth / W, innerHeight / H);
+    canvas.style.transform = `translate(-50%, -50%) scale(${s})`;
+  };
+  addEventListener('resize', fit); fit();
+
+  const src = id => document.getElementById(id).textContent.trim();
+  const compile = (type, code) => {
+    const s = gl.createShader(type); gl.shaderSource(s, code); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+    return s;
+  };
+  const vs = compile(gl.VERTEX_SHADER, src('vs'));
+  const program = fsId => {
+    const p = gl.createProgram();
+    gl.attachShader(p, vs); gl.attachShader(p, compile(gl.FRAGMENT_SHADER, src(fsId)));
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+    const u = {};
+    const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+    for (let i = 0; i < n; i++) { const nm = gl.getActiveUniform(p, i).name; u[nm] = gl.getUniformLocation(p, nm); }
+    return { p, u };
+  };
+  const P = { scene: program('fs-scene'), down: program('fs-down'), up: program('fs-up'), comp: program('fs-comp') };
+
+  const hdr = gl.getExtension('EXT_color_buffer_float') || gl.getExtension('EXT_color_buffer_half_float');
+  gl.getExtension('OES_texture_float_linear');
+  const fmt = hdr ? { i: gl.RGBA16F, t: gl.HALF_FLOAT } : { i: gl.RGBA8, t: gl.UNSIGNED_BYTE };
+
+  const target = (w, h) => {
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, fmt.i, w, h, 0, gl.RGBA, fmt.t, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    const fbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    return { tex, fbo, w, h };
+  };
+
+  const sceneRT = target(W, H);
+  const LEVELS = 7;
+  const mips = [];
+  for (let i = 0; i < LEVELS; i++) mips.push(target(Math.max(1, W >> (i + 1)), Math.max(1, H >> (i + 1))));
+
+  gl.bindVertexArray(gl.createVertexArray());
+  const bindTex = (unit, t) => { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t.tex); };
+  const draw = (rt, w, h) => {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, rt ? rt.fbo : null);
+    gl.viewport(0, 0, w, h);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  };
+
+  // t in [0,1): position inside the 15 s loop. Every time-dependent term in the shaders is
+  // periodic in t (integer multiples of 2*pi), so frame 359 flows straight into frame 0.
+  const render = t => {
+    gl.disable(gl.BLEND);
+    gl.useProgram(P.scene.p);
+    gl.uniform2f(P.scene.u.uRes, W, H);
+    gl.uniform1f(P.scene.u.uT, t);
+    draw(sceneRT, W, H);
+
+    gl.useProgram(P.down.p);
+    gl.uniform1i(P.down.u.uSrc, 0);
+    for (let i = 0; i < LEVELS; i++) {
+      const s = i ? mips[i - 1] : sceneRT, d = mips[i];
+      bindTex(0, s);
+      gl.uniform2f(P.down.u.uTexel, 1 / s.w, 1 / s.h);
+      gl.uniform1f(P.down.u.uPre, i === 0 ? 1 : 0);
+      // gl_FragCoord * texel * 2 maps destination pixels onto source uv
+      draw(d, d.w, d.h);
+    }
+
+    gl.useProgram(P.up.p);
+    gl.uniform1i(P.up.u.uSrc, 0);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+    for (let i = LEVELS - 1; i > 0; i--) {
+      const s = mips[i], d = mips[i - 1];
+      bindTex(0, s);
+      gl.uniform2f(P.up.u.uTexel, 1 / s.w, 1 / s.h);
+      gl.uniform2f(P.up.u.uDstRes, d.w, d.h);
+      gl.uniform1f(P.up.u.uGain, .82);
+      draw(d, d.w, d.h);
+    }
+    gl.disable(gl.BLEND);
+
+    gl.useProgram(P.comp.p);
+    bindTex(0, sceneRT); bindTex(1, mips[0]);
+    gl.uniform1i(P.comp.u.uScene, 0); gl.uniform1i(P.comp.u.uBloom, 1);
+    gl.uniform2f(P.comp.u.uRes, W, H);
+    gl.uniform1f(P.comp.u.uT, t);
+    gl.uniform1f(P.comp.u.uFrame, Math.floor(t * (DUR / 1000) * FPS) % (DUR / 1000 * FPS));
+    draw(null, W, H);
+  };
+
+  // hooks for frame-accurate offline capture:  window.renderAt(seconds)
+  window.renderAt = sec => render((((sec * 1000) % DUR) + DUR) % DUR / DUR);
+  window.LOOP_SECONDS = DUR / 1000;
+
+  const fixed = new URLSearchParams(location.search).get('t');
+  if (fixed !== null) { window.renderAt(parseFloat(fixed)); return; }
+
+  let t0 = null;
+  const tick = now => {
+    if (t0 === null) t0 = now;
+    render(((now - t0) % DUR) / DUR);
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>
