@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Binary Code Matrix Rain – 4K Seamless Loop</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; }
+  /* Native size is 3840x2160. Scales down (never crops) in smaller windows, 1:1 in a 4K viewport. */
+  canvas {
+    display: block; flex: none; background: #000;
+    width: min(100vw, calc(100vh * 16 / 9));
+    height: min(100vh, calc(100vw * 9 / 16));
+  }
+</style>
+</head>
+<body>
+<canvas id="stage" width="3840" height="2160"></canvas>
+<script>
+(() => {
+'use strict';
+
+/* ════════════════════════════════════════════════════════════════════
+   BINARY CODE MATRIX RAIN  ·  3840x2160  ·  15 s  ·  seamless loop
+   Everything is a pure function of time t (0..15). All periodic parts
+   use integer cycles per 15 s, so frame(15) == frame(0) exactly.
+   ════════════════════════════════════════════════════════════════════ */
+
+const W = 3840, H = 2160, DUR = 15, TAU = Math.PI * 2;
+const canvas = document.getElementById('stage');
+const ctx = canvas.getContext('2d', { alpha: false });
+
+/* ───────────── helpers ───────────── */
+function rng(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function hash3(a, b, c) {
+  let h = Math.imul(a | 0, 0x27d4eb2d) ^ Math.imul(b | 0, 0x165667b1) ^ Math.imul(c | 0, 0x9e3779b1);
+  h = Math.imul(h ^ (h >>> 15), 0x85ebca6b);
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+  return (h ^ (h >>> 16)) >>> 0;
+}
+const mod = (n, m) => ((n % m) + m) % m;
+const frac = (x) => x - Math.floor(x);
+const mk = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
+const FILTER_OK = 'filter' in CanvasRenderingContext2D.prototype;
+
+/* ───────────── palettes (brightness -> colour) ───────────── */
+const PAL = {
+  teal:    { stops: [[0,[0,9,9]],  [0.2,[0,46,44]],  [0.5,[6,120,104]],  [0.8,[30,196,166]],  [1,[120,240,214]]],              head: [190,255,240] },
+  emerald: { stops: [[0,[0,10,6]], [0.14,[0,54,28]], [0.4,[0,148,70]],   [0.7,[14,230,112]],  [0.9,[108,255,176]], [1,[196,255,226]]], head: [238,255,247] },
+  mint:    { stops: [[0,[0,10,9]], [0.14,[0,50,42]], [0.4,[0,142,106]],  [0.7,[18,224,166]],  [0.9,[118,255,212]], [1,[200,255,240]]], head: [234,255,251] },
+  lime:    { stops: [[0,[4,10,2]], [0.14,[16,56,10]],[0.4,[56,158,24]],  [0.7,[128,234,58]],  [0.9,[198,255,128]], [1,[228,255,190]]], head: [236,255,216] }
+};
+function ramp(stops, b) {
+  for (let i = 1; i < stops.length; i++) {
+    if (b <= stops[i][0]) {
+      const [b0, c0] = stops[i - 1], [b1, c1] = stops[i], k = (b - b0) / (b1 - b0);
+      return [0, 1, 2].map(j => Math.round(c0[j] + (c1[j] - c0[j]) * k));
+    }
+  }
+  return stops[stops.length - 1][1];
+}
+
+/* ───────────── depth layers ───────────── */
+const LAYERS = [
+  { id: 'far',    s: 26,  seed: 11, soft: 1.0, keep: 0.55, glow: 6,  glowA: 0.45, N: 16, rate: 2, decay: 1.4,
+    variants: ['teal'], weights: [1], streams: [1, 4], trail: [10, 26], skip: 0.2, gap: 6, speed: [230, 520], emptyCol: 0.04,
+    ambient: { p: 0.22, lo: 0.05, hi: 0.11 }, ring: 0.28, flash: 0, zoom: 0.010, sway: 14, swayPh: 0.0, alpha: 0.9 },
+
+  { id: 'mid',    s: 44,  seed: 23, soft: 0.6, keep: 0.75, glow: 10, glowA: 0.55, N: 22, rate: 3, decay: 1.4,
+    variants: ['emerald', 'mint'], weights: [0.75, 0.25], streams: [1, 3], trail: [14, 34], skip: 0.3, gap: 8, speed: [320, 760], emptyCol: 0.06,
+    ambient: { p: 0.18, lo: 0.05, hi: 0.11 }, ring: 0.3, flash: 0.22, zoom: 0.018, sway: 26, swayPh: 1.0, alpha: 0.95 },
+
+  { id: 'hero',   s: 64,  seed: 37, soft: 0, glow: 16, glowA: 0.6, N: 28, rate: 4, decay: 1.55,
+    variants: ['emerald', 'mint', 'lime'], weights: [0.7, 0.2, 0.1], streams: [1, 2], trail: [16, 32], skip: 0.28, gap: 10, speed: [520, 1200], emptyCol: 0.08,
+    ambient: { p: 0.12, lo: 0.05, hi: 0.10 }, ring: 0.8, flash: 0.3, zoom: 0.030, sway: 40, swayPh: 2.2, alpha: 1.0 },
+
+  { id: 'near',   s: 150, seed: 51, soft: 15,  keep: 0, rep: 2, glow: 26, glowA: 0.45, N: 16, rate: 2, decay: 1.2,
+    variants: ['emerald'], weights: [1], streams: [1, 1], trail: [5, 11], skip: 0.45, gap: 8, speed: [1100, 2000], emptyCol: 0.35,
+    ambient: null, ring: 0, flash: 0, zoom: 0.070, sway: 100, swayPh: 3.5, alpha: 0.55 },
+
+  { id: 'front',  s: 340, seed: 67, soft: 26, keep: 0, rep: 3, glow: 40, glowA: 0.4, N: 12, rate: 1, decay: 1.1,
+    variants: ['mint'], weights: [1], streams: [1, 1], trail: [3, 5], skip: 0.55, gap: 6, speed: [1800, 3200], emptyCol: 0.5,
+    ambient: null, ring: 0, flash: 0, zoom: 0.130, sway: 210, swayPh: 5.0, alpha: 0.32 }
+];
+
+/* ───────────── vector glyphs: geometric mono-line 0 / 1 ───────────── */
+function glyphPath(g, glyph, x, y, s) {
+  g.beginPath();
+  if (glyph === 0) {
+    const r = s * 0.22, h = s * 0.16;
+    g.moveTo(x - r, y - h);
+    g.arc(x, y - h, r, Math.PI, 0, false);
+    g.lineTo(x + r, y + h);
+    g.arc(x, y + h, r, 0, Math.PI, false);
+    g.closePath();
+  } else {
+    const t = y - s * 0.38, b = y + s * 0.38;
+    g.moveTo(x - s * 0.20, t + s * 0.16);
+    g.lineTo(x + s * 0.04, t);
+    g.lineTo(x + s * 0.04, b);
+    g.moveTo(x - s * 0.17, b);
+    g.lineTo(x + s * 0.25, b);
+  }
+}
+
+/* Pre-render every glyph at every brightness level, with glow baked in. */
+function paint(cfg, glyph, pal, b, head) {
+  const S = head ? cfg.SH : cfg.S, s = cfg.s, cv = mk(S, S), g = cv.getContext('2d');
+  g.lineCap = 'round'; g.lineJoin = 'round';
+  const cx = S / 2, cy = S / 2, OFF = S + 512;
+  const c = head ? pal.head : ramp(pal.stops, b);
+  const gc = ramp(pal.stops, 0.72);
+  const rgba = (col, a) => `rgba(${col[0]},${col[1]},${col[2]},${a})`;
+  const lw = s * 0.105;
+  // shadow-only pass: shape is drawn off-canvas, its blurred shadow lands in place
+  const halo = (blur, color, width, reps) => {
+    g.save();
+    g.shadowColor = color; g.shadowBlur = blur; g.shadowOffsetX = OFF; g.shadowOffsetY = 0;
+    g.strokeStyle = '#000'; g.lineWidth = width;
+    for (let i = 0; i < reps; i++) { glyphPath(g, glyph, cx - OFF, cy, s); g.stroke(); }
+    g.restore();
+  };
+  if (cfg.soft > 0) halo(cfg.soft * 2, rgba(c, 1), lw * (cfg.soft > 5 ? 1.35 : 1), cfg.rep || 1);
+  if (head) {
+    halo(cfg.glow * 2.4, rgba(gc, Math.min(1, cfg.glowA * 0.95)), lw * 1.2, 1);
+    halo(cfg.glow * 1.0, rgba([170, 255, 210], Math.min(1, cfg.glowA * 1.4)), lw, 1);
+  } else {
+    halo(cfg.glow, rgba(c, cfg.glowA * Math.pow(b, 0.85)), lw, 1);
+  }
+  if (cfg.soft <= 3) {
+    g.globalAlpha = cfg.soft > 0 ? cfg.keep : 1;
+    g.strokeStyle = rgba(c, 1); g.lineWidth = head ? lw * 1.08 : lw;
+    glyphPath(g, glyph, cx, cy, s); g.stroke();
+  }
+  return cv;
+}
+
+function buildSprites(cfg) {
+  const ext = Math.max(cfg.glow, cfg.soft * 2), body = Math.ceil(cfg.s * 0.9);
+  cfg.S  = body + (Math.ceil(1.7 * ext) + 2) * 2;     // brightness-level sprites
+  cfg.SH = body + (Math.ceil(3.6 * ext) + 2) * 2;     // head sprites carry a wider halo
+  return cfg.variants.map(v => {
+    const pal = PAL[v], lv = [[], []];
+    for (let gl = 0; gl < 2; gl++)
+      for (let i = 0; i < cfg.N; i++) lv[gl].push(paint(cfg, gl, pal, (i + 0.5) / cfg.N, false));
+    return { lv, head: [paint(cfg, 0, pal, 1, true), paint(cfg, 1, pal, 1, true)] };
+  });
+}
+
+/* ───────────── build layers (streams, per-cell data) ───────────── */
+function buildLayer(cfg) {
+  const L = { cfg, cw: cfg.s * 0.78, ch: cfg.s * 1.12, seed: cfg.seed * 101 };
+  L.nC = Math.ceil(W / L.cw) + 4;
+  L.nR = Math.ceil(H / L.ch) + 4;
+  L.x0 = (W - L.nC * L.cw) / 2;
+  L.y0 = (H - L.nR * L.ch) / 2;
+  L.sprites = buildSprites(cfg);
+  const R = rng(cfg.seed * 7919 + 13), n = L.nC * L.nR;
+  L.ph = new Float32Array(n); L.rn = new Float32Array(n);
+  L.amb = new Float32Array(n); L.tw = new Uint8Array(n); L.twPh = new Float32Array(n);
+  L.jx = new Float32Array(L.nC);
+  for (let c = 0; c < L.nC; c++) L.jx[c] = (R() - 0.5) * L.cw * 0.12;
+  for (let i = 0; i < n; i++) {
+    L.ph[i] = R(); L.rn[i] = R();
+    if (cfg.ambient && R() < cfg.ambient.p) {
+      L.amb[i] = cfg.ambient.lo + (cfg.ambient.hi - cfg.ambient.lo) * R();
+      L.tw[i] = 1 + Math.floor(R() * 3); L.twPh[i] = R() * TAU;
+    }
+  }
+  L.streams = [];
+  const maxT = cfg.trail[1];
+  for (let c = 0; c < L.nC; c++) {
+    if (R() < cfg.emptyCol) continue;
+    const ns = cfg.streams[0] + Math.floor(R() * (cfg.streams[1] - cfg.streams[0] + 1));
+    for (let j = 0; j < ns; j++) {
+      const minL = L.nR + maxT + 3 + R() * cfg.gap;                 // rows in one cycle (>= screen + trail)
+      const v = cfg.speed[0] + (cfg.speed[1] - cfg.speed[0]) * R(); // px/s target
+      const k = Math.max(1, Math.floor(DUR * v / (L.ch * minL)));   // whole passes per loop => seamless
+      const Lrows = Math.max(minL, DUR * v / (L.ch * k));
+      const passes = [];
+      for (let q = 0; q < k; q++)
+        passes.push({ trail: cfg.trail[0] + (maxT - cfg.trail[0]) * R(), amp: 0.72 + 0.28 * R(), skip: R() < cfg.skip });
+      let w = R(), vi = 0; while (vi < cfg.weights.length - 1 && w > cfg.weights[vi]) { w -= cfg.weights[vi]; vi++; }
+      L.streams.push({ c, p: R(), k, L: Lrows, passes, v: vi });
+    }
+  }
+  return L;
+}
+
+/* ───────────── travelling data-pulse ring ───────────── */
+let R1 = 0, R2 = 0, A1 = 0, A2 = 0, W1 = 1, W2 = 1;
+const RCX = W * 0.5, RCY = H * 0.5;
+function setRing(t) {
+  const q = frac(t / 7.5 + 0.10), q2 = Math.max(0, q - 0.06);
+  const fade = (x) => Math.pow(1 - x, 0.7) * Math.sin(Math.min(1, x * 10) * Math.PI / 2);
+  R1 = q * 2700;  W1 = 55 + 95 * q;   A1 = 0.62 * fade(q);
+  R2 = q2 * 2700; W2 = 40 + 70 * q2;  A2 = 0.26 * fade(q2);
+}
+function ringBoost(x, y) {
+  const dx = x - RCX, dy = y - RCY, d = Math.sqrt(dx * dx + dy * dy);
+  let v = 0, e = (d - R1) / W1;
+  if (e > -3 && e < 3) v += A1 * Math.exp(-e * e);
+  e = (d - R2) / W2;
+  if (e > -3 && e < 3) v += A2 * Math.exp(-e * e);
+  return v;
+}
+
+/* ───────────── draw one cell ───────────── */
+function putCell(L, V, i, x, y, b, t, head) {
+  const cfg = L.cfg, N = cfg.N;
+  const rate = head ? 15 : cfg.rate, NT = rate * DUR;
+  const tk = t * rate + L.ph[i], ti = Math.floor(tk);
+  const tm = mod(ti, NT);
+  const g = hash3(L.seed, i, tm) & 1;
+  if (head) {
+    const sp = V.head[g], h = cfg.SH * 0.5;
+    ctx.drawImage(sp, x - h, y - h);
+    return;
+  }
+  if (cfg.flash && b > 0.12) {
+    const gp = hash3(L.seed, i, mod(ti - 1, NT)) & 1;
+    if (g !== gp) b += cfg.flash * Math.exp(-(tk - ti) * 6);
+  }
+  let lv = (b * N) | 0;
+  if (lv < 1 && b < 0.03) return;
+  if (lv >= N) lv = N - 1;
+  const h = cfg.S * 0.5;
+  ctx.drawImage(V.lv[g][lv], x - h, y - h);
+}
+
+function renderLayer(L, t) {
+  const cfg = L.cfg, { nC, nR, cw, ch, x0, y0 } = L;
+  const zoom = 1 + cfg.zoom * (0.5 - 0.5 * Math.cos(TAU * t / DUR));
+  const sway = cfg.sway * Math.sin(TAU * t / DUR + cfg.swayPh);
+  ctx.setTransform(zoom, 0, 0, zoom, W * 0.5 * (1 - zoom) + sway, H * 0.5 * (1 - zoom));
+  ctx.globalAlpha = cfg.alpha;
+  const V0 = L.sprites[0];
+
+  // hidden data grid + pulse reveal
+  if (cfg.ambient || cfg.ring > 0) {
+    for (let c = 0; c < nC; c++) {
+      const x = x0 + (c + 0.5) * cw + L.jx[c];
+      for (let r = 0; r < nR; r++) {
+        const i = c * nR + r, y = y0 + (r + 0.5) * ch;
+        let b = 0;
+        const a = L.amb[i];
+        if (a > 0) b = a * (0.55 + 0.45 * Math.sin(TAU * L.tw[i] * t / DUR + L.twPh[i]));
+        if (cfg.ring > 0) b += ringBoost(x, y) * cfg.ring * (0.55 + 0.45 * L.rn[i]);
+        if (b < 0.03) continue;
+        putCell(L, V0, i, x, y, Math.min(b, 1), t, false);
+      }
+    }
+  }
+
+  // falling streams
+  for (const st of L.streams) {
+    const u = st.p + st.k * t / DUR, n = Math.floor(u);
+    const pass = st.passes[mod(n, st.k)];
+    if (pass.skip) continue;
+    const head = (u - n) * st.L - 1, hr = Math.floor(head);
+    const rEnd = Math.max(0, Math.ceil(head - pass.trail)), rStart = Math.min(hr, nR - 1);
+    if (rStart < rEnd) continue;
+    const x = x0 + (st.c + 0.5) * cw + L.jx[st.c], V = L.sprites[st.v];
+    for (let r = rStart; r >= rEnd; r--) {
+      const i = st.c * nR + r, y = y0 + (r + 0.5) * ch;
+      const rb = cfg.ring > 0 ? ringBoost(x, y) * cfg.ring : 0;
+      if (r === hr) { putCell(L, V, i, x, y, 1, t, true); continue; }
+      const d = head - r;
+      let b = Math.pow(1 - d / pass.trail, cfg.decay) * pass.amp * (0.8 + 0.2 * L.rn[i]) + rb * 0.35;
+      putCell(L, V, i, x, y, b > 1 ? 1 : b, t, false);
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+/* ───────────── atmosphere: background, fog, light shafts (soft => drawn at 1/4 res) ───────────── */
+const ATM = (() => { const c = mk(W / 4, H / 4), g = c.getContext('2d'); g.imageSmoothingEnabled = true; return { c, g }; })();
+const BG = ATM.g.createLinearGradient(0, 0, 0, H);
+BG.addColorStop(0, 'rgb(0,3,5)'); BG.addColorStop(0.55, 'rgb(1,8,9)'); BG.addColorStop(1, 'rgb(0,11,9)');
+const FOG = [
+  { x: W * 0.28, y: H * 0.42, r: 1700, ax: 260, ay: 140, m: 1, tw: 2, ph: 0.4, c: '0,140,86', a: 0.10 },
+  { x: W * 0.72, y: H * 0.58, r: 1600, ax: 300, ay: 160, m: 1, tw: 1, ph: 2.1, c: '0,96,120', a: 0.085 },
+  { x: W * 0.50, y: H * 0.95, r: 1900, ax: 400, ay: 60,  m: 2, tw: 2, ph: 4.0, c: '10,150,70', a: 0.09 },
+  { x: W * 0.50, y: H * 0.10, r: 1500, ax: 500, ay: 60,  m: 1, tw: 3, ph: 5.3, c: '0,70,90',  a: 0.05 }
+];
+const SHAFT = ATM.g.createLinearGradient(-1, 0, 1, 0);
+SHAFT.addColorStop(0, 'rgba(60,255,170,0)'); SHAFT.addColorStop(0.5, 'rgba(60,255,170,1)'); SHAFT.addColorStop(1, 'rgba(60,255,170,0)');
+const SHAFTS = [
+  { x: W * 0.22, w: 520, ang: -0.20, a: 0.045, m: 1, ph: 0.3, ax: 160 },
+  { x: W * 0.55, w: 760, ang: -0.16, a: 0.035, m: 2, ph: 2.4, ax: 120 },
+  { x: W * 0.84, w: 460, ang: -0.22, a: 0.05,  m: 1, ph: 4.6, ax: 200 }
+];
+function drawAtmosphere(t) {
+  const a = TAU * t / DUR, g = ATM.g;
+  g.setTransform(0.25, 0, 0, 0.25, 0, 0);
+  g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
+  g.fillStyle = BG; g.fillRect(0, 0, W, H);
+  g.globalCompositeOperation = 'lighter';
+  for (const f of FOG) {
+    const x = f.x + f.ax * Math.sin(a * f.m + f.ph), y = f.y + f.ay * Math.cos(a * f.m + f.ph);
+    const gr = g.createRadialGradient(x, y, 0, x, y, f.r);
+    const al = f.a * (0.75 + 0.25 * Math.sin(a * f.tw + f.ph));
+    gr.addColorStop(0, `rgba(${f.c},${al})`); gr.addColorStop(0.5, `rgba(${f.c},${al * 0.32})`); gr.addColorStop(1, `rgba(${f.c},0)`);
+    g.fillStyle = gr; g.fillRect(0, 0, W, H);
+  }
+  for (const s of SHAFTS) {
+    g.save();
+    g.translate(s.x + s.ax * Math.sin(a * s.m + s.ph), H * 0.5);
+    g.rotate(s.ang); g.scale(s.w * 0.5, 1);
+    g.globalAlpha = s.a * (0.6 + 0.4 * Math.sin(a * (s.m + 1) + s.ph));
+    g.fillStyle = SHAFT; g.fillRect(-1, -H * 1.3, 2, H * 2.6);
+    g.restore();
+  }
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalCompositeOperation = 'copy'; ctx.globalAlpha = 1;
+  ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'low';
+  ctx.drawImage(ATM.c, 0, 0, W, H);
+}
+
+/* ───────────── floating bokeh motes + speed streaks ───────────── */
+function moteSprite(col, rim) {
+  const c = mk(128, 128), g = c.getContext('2d');
+  const gr = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  const f = (a) => `rgba(${col},${a})`;
+  if (rim) { gr.addColorStop(0, f(0.30)); gr.addColorStop(0.70, f(0.42)); gr.addColorStop(0.86, f(0.85)); gr.addColorStop(1, f(0)); }
+  else     { gr.addColorStop(0, f(0.55)); gr.addColorStop(0.45, f(0.28)); gr.addColorStop(1, f(0)); }
+  g.fillStyle = gr; g.fillRect(0, 0, 128, 128);
+  return c;
+}
+const MOTE_SPR = [
+  [moteSprite('70,255,160', true),  moteSprite('70,255,160', false)],
+  [moteSprite('60,235,210', true),  moteSprite('60,235,210', false)],
+  [moteSprite('160,255,110', true), moteSprite('160,255,110', false)]
+];
+const MOTES = (() => {
+  const R = rng(4242), a = [];
+  for (let i = 0; i < 72; i++) {
+    const r = 6 + R() * R() * 64;
+    a.push({ x: R() * W, y: R() * H, r, ax: 20 + R() * 110, ay: 20 + R() * 110, ph: R() * TAU, ph2: R() * TAU,
+             m: 1 + Math.floor(R() * 2), tw: 1 + Math.floor(R() * 3), a: 0.10 + R() * 0.28, col: Math.floor(R() * 3), soft: r > 28 ? 1 : 0 });
+  }
+  return a;
+})();
+function drawMotes(t) {
+  const a = TAU * t / DUR;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalCompositeOperation = 'lighter';
+  for (const m of MOTES) {
+    const x = m.x + m.ax * Math.sin(a * m.m + m.ph), y = m.y + m.ay * Math.sin(a * m.m + m.ph2);
+    ctx.globalAlpha = m.a * (0.45 + 0.55 * Math.sin(a * m.tw + m.ph));
+    const d = m.r * 2;
+    ctx.drawImage(MOTE_SPR[m.col][m.soft], x - m.r, y - m.r, d, d);
+  }
+  ctx.globalAlpha = 1;
+}
+
+const STREAK_SPR = (() => {
+  const w = 16, h = 256, c = mk(w, h), g = c.getContext('2d'), id = g.createImageData(w, h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const v = Math.pow(y / (h - 1), 2.4), hx = Math.exp(-Math.pow((x - 7.5) / 3.2, 2));
+    const tip = y > h - 6 ? (h - 1 - y) / 6 : 1;
+    const i = (y * w + x) * 4, a = v * hx * tip;
+    id.data[i] = 190 + 55 * v; id.data[i + 1] = 255; id.data[i + 2] = 225; id.data[i + 3] = Math.round(255 * a);
+  }
+  g.putImageData(id, 0, 0);
+  return c;
+})();
+const STREAKS = (() => {
+  const R = rng(777), a = [];
+  for (let i = 0; i < 46; i++)
+    a.push({ x: R() * W, len: 220 + R() * 760, w: 3 + R() * 7, m: 4 + Math.floor(R() * 6), p: R(), a: 0.10 + R() * 0.28 });
+  return a;
+})();
+function drawStreaks(t) {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalCompositeOperation = 'lighter';
+  for (const s of STREAKS) {
+    const y = frac(s.p + s.m * t / DUR) * (H + s.len) - s.len;
+    ctx.globalAlpha = s.a;
+    ctx.drawImage(STREAK_SPR, s.x - s.w * 0.5, y, s.w, s.len);
+  }
+  ctx.globalAlpha = 1;
+}
+
+/* ───────────── post: multi-scale bloom, anamorphic streak, vignette, grain ───────────── */
+const mkc = (w, h) => { const c = mk(w, h), g = c.getContext('2d'); g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'low'; return { c, g, w, h }; };
+const B1 = mkc(1920, 1080), B2 = mkc(960, 540), B3 = mkc(480, 270), B4 = mkc(240, 135);
+const G2 = mkc(960, 540), G3 = mkc(480, 270), G4 = mkc(240, 135);
+const S1 = mkc(240, 270), S2 = mkc(120, 270), S3 = mkc(60, 270), S4 = mkc(30, 270), SG = mkc(30, 270);
+function down(dst, src) { dst.g.globalCompositeOperation = 'copy'; dst.g.drawImage(src.c || src, 0, 0, dst.w, dst.h); }
+function blurInto(dst, src, px) {
+  dst.g.globalCompositeOperation = 'copy';
+  if (FILTER_OK) dst.g.filter = `blur(${px}px)`;
+  dst.g.drawImage(src.c, 0, 0, dst.w, dst.h);
+  if (FILTER_OK) dst.g.filter = 'none';
+}
+function bloom() {
+  down(B1, canvas);
+  B1.g.globalCompositeOperation = 'multiply'; B1.g.drawImage(B1.c, 0, 0);   // soft threshold: only highlights bloom
+  down(B2, B1); down(B3, B2); down(B4, B3);
+  blurInto(G2, B2, 2.5); blurInto(G3, B3, 3); blurInto(G4, B4, 3.5);
+  down(S1, B3); down(S2, S1); down(S3, S2); down(S4, S3); blurInto(SG, S4, 1.2);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'low';
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.globalAlpha = 0.80; ctx.drawImage(G2.c, 0, 0, W, H);
+  ctx.globalAlpha = 0.55; ctx.drawImage(G3.c, 0, 0, W, H);
+  ctx.globalAlpha = 0.45; ctx.drawImage(G4.c, 0, 0, W, H);
+  ctx.globalAlpha = 0.40; ctx.drawImage(SG.c, 0, 0, W, H);
+  ctx.globalAlpha = 1;
+}
+
+const VIGNETTE = ctx.createRadialGradient(W / 2, H / 2, H * 0.28, W / 2, H / 2, W * 0.60);
+VIGNETTE.addColorStop(0, 'rgba(0,0,0,0)'); VIGNETTE.addColorStop(0.55, 'rgba(0,0,0,0.30)'); VIGNETTE.addColorStop(1, 'rgba(0,0,0,0.86)');
+
+const NS = 512;
+const GRAIN = (() => {
+  const c = mk(NS, NS), g = c.getContext('2d'), id = g.createImageData(NS, NS), R = rng(99);
+  for (let i = 0; i < NS * NS; i++) {
+    const v = Math.pow(R(), 2.2) * 255;
+    id.data[i * 4] = v * 0.75; id.data[i * 4 + 1] = v; id.data[i * 4 + 2] = v * 0.85; id.data[i * 4 + 3] = 255;
+  }
+  g.putImageData(id, 0, 0);
+  return ctx.createPattern(c, 'repeat');
+})();
+function finish(t) {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+  ctx.fillStyle = VIGNETTE; ctx.fillRect(0, 0, W, H);
+  const f = mod(Math.floor(t * 30), 450);
+  const ox = hash3(f, 1, 7) % NS, oy = hash3(f, 2, 9) % NS;
+  ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = 0.055;
+  ctx.setTransform(2, 0, 0, 2, -ox, -oy);
+  ctx.fillStyle = GRAIN; ctx.fillRect(ox / 2, oy / 2, W / 2 + 1, H / 2 + 1);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+}
+
+/* ───────────── frame ───────────── */
+const built = LAYERS.map(buildLayer);
+function render(t) {
+  drawAtmosphere(t);
+  setRing(t);
+  ctx.globalCompositeOperation = 'lighter';
+  renderLayer(built[0], t);          // far   – tiny, soft, teal
+  renderLayer(built[1], t);          // mid   – small, slightly soft
+  drawMotes(t);                      // floating bokeh
+  ctx.globalCompositeOperation = 'lighter';
+  renderLayer(built[2], t);          // hero  – sharp focus plane
+  drawStreaks(t);                    // fast light streaks
+  ctx.globalCompositeOperation = 'lighter';
+  renderLayer(built[3], t);          // near  – defocused
+  renderLayer(built[4], t);          // front – heavily defocused
+  bloom();
+  finish(t);
+}
+
+/* ───────────── playback: autoplay, endless loop ───────────── */
+let t0 = null, playing = true;
+function tick() {
+  if (!playing) return;
+  const now = performance.now();
+  if (t0 === null) t0 = now;
+  render(((now - t0) / 1000) % DUR);
+  requestAnimationFrame(tick);
+}
+render(0);
+requestAnimationFrame(tick);
+
+// Hooks for frame-accurate offline rendering (optional)
+window.MatrixRain = {
+  duration: DUR, width: W, height: H,
+  renderFrame: (t) => render(mod(t, DUR)),   // draw the frame at time t (seconds), wraps at 15 s
+  renderRaw: (t) => render(t),                // no wrapping (used to verify the loop is exact)
+  stop: () => { playing = false; },
+  play: () => { if (!playing) { playing = true; t0 = null; requestAnimationFrame(tick); } }
+};
+})();
+</script>
+</body>
+</html>
