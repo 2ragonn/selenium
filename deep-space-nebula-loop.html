@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=3840, initial-scale=1">
+<title>Deep Space Nebula Galaxy — Seamless 15s Loop (3840x2160)</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: #000; overflow: hidden;
+  }
+  #c {
+    position: fixed; left: 0; top: 0;
+    width: 3840px; height: 2160px;
+    transform-origin: 0 0;
+    display: block; background: #000;
+  }
+  #err {
+    position: fixed; left: 24px; top: 24px; color: #9ab; font: 20px/1.4 system-ui, sans-serif;
+    display: none; white-space: pre-wrap;
+  }
+</style>
+</head>
+<body>
+<canvas id="c" width="3840" height="2160"></canvas>
+<div id="err"></div>
+<script>
+(function () {
+  'use strict';
+
+  // ------------------------------------------------------------------
+  // Deep Space Nebula Galaxy — seamless 15 s loop, 3840x2160
+  //   * 4D simplex noise sampled on a circle in (z,w) => perfectly periodic
+  //     "boiling" cosmic dust, no cross-fade seams.
+  //   * Three parallax nebula layers (emission gas, amber filaments,
+  //     absorbing dust lanes), lit by hero stars.
+  //   * ~25k procedural stars w/ periodic scintillation, 8 hero stars with
+  //     JWST-style 6+2 diffraction spikes, one distant spiral galaxy.
+  //   * HDR pipeline: half-float buffers, dual-band bloom, ACES tonemap,
+  //     micro chromatic aberration, film grain + dither.
+  // ------------------------------------------------------------------
+
+  const W = 3840, H = 2160;
+  const DURATION = 15.0;                    // seconds, exact loop period
+  const DRIFT_AMP = 0.022;                  // camera drift radius (frame-height units)
+
+  // Hero stars: x, y (frame-height units, y up), brightness, colour temp (0 blue .. 1 orange)
+  const HERO = [
+    [-0.18,  0.06, 1.00, 0.15],
+    [ 0.22, -0.05, 0.55, 0.55],
+    [ 0.05,  0.19, 0.45, 0.10],
+    [ 0.44, -0.23, 0.50, 0.40],
+    [-0.70,  0.12, 0.22, 0.85],
+    [ 0.72,  0.06, 0.18, 0.05],
+    [-0.33, -0.14, 0.30, 0.45],
+    [-0.52, -0.39, 0.14, 0.30]
+  ];
+  const HERO_PAR = 0.9;                     // parallax factor of hero stars
+  // Which hero stars illuminate the gas: index, intensity, inverse radius^2
+  const LIGHTS = [[0, 1.0, 45.0], [1, 0.6, 70.0], [2, 0.5, 80.0]];
+
+  const canvas = document.getElementById('c');
+  const errBox = document.getElementById('err');
+  canvas.width = W; canvas.height = H;
+
+  function fit() {
+    const s = Math.min(window.innerWidth / W, window.innerHeight / H);
+    const tx = (window.innerWidth - W * s) * 0.5, ty = (window.innerHeight - H * s) * 0.5;
+    canvas.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + s + ')';
+  }
+  fit();
+  window.addEventListener('resize', fit);
+
+  const gl = canvas.getContext('webgl2', {
+    alpha: false, antialias: false, depth: false, stencil: false,
+    premultipliedAlpha: false, preserveDrawingBuffer: true,
+    powerPreference: 'high-performance', desynchronized: false
+  });
+  if (!gl) { errBox.style.display = 'block'; errBox.textContent = 'WebGL2 is required.'; return; }
+
+  const hasFloat = !!gl.getExtension('EXT_color_buffer_float');
+  const HDR_FMT = hasFloat ? gl.RGBA16F : gl.RGBA8;
+  const PACK = hasFloat ? 1.0 : 1.0 / 8.0;
+  const UNPACK = 1.0 / PACK;
+
+  // ---------------------------------------------------------------- shaders
+  const VS = `#version 300 es
+  out vec2 vUV;
+  void main() {
+    vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+    vUV = p;
+    gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+  }`;
+
+  const HEADER = `#version 300 es
+  precision highp float;
+  precision highp int;
+  in vec2 vUV;
+  out vec4 fragColor;
+  uniform vec2  uRes;
+  uniform float uTheta;   // 2*pi*t/T
+  uniform float uTime;
+  uniform vec2  uDrift;
+  uniform float uPack;
+  uniform float uUnpack;
+  #define PIX (1.0/2160.0)
+  #define TAU 6.28318530718
+
+  float hash12(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+  }
+  vec4 hash42(vec2 p) {
+    vec4 p4 = fract(vec4(p.xyxy) * vec4(0.1031, 0.1030, 0.0973, 0.1099));
+    p4 += dot(p4, p4.wzxy + 33.33);
+    return fract((p4.xxyz + p4.yzzw) * p4.zywx);
+  }
+  `;
+
+  // 4D simplex noise (Ashima Arts / Stefan Gustavson, MIT)
+  const NOISE4D = `
+  vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+  float mod289(float x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+  vec4 permute(vec4 x) { return mod289(((x * 34.0) + 1.0) * x); }
+  float permute(float x) { return mod289(((x * 34.0) + 1.0) * x); }
+  vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
+  float taylorInvSqrt(float r) { return 1.79284291400159 - 0.85373472095314 * r; }
+  vec4 grad4(float j, vec4 ip) {
+    const vec4 ones = vec4(1.0, 1.0, 1.0, -1.0);
+    vec4 p, s;
+    p.xyz = floor(fract(vec3(j) * ip.xyz) * 7.0) * ip.z - 1.0;
+    p.w = 1.5 - dot(abs(p.xyz), ones.xyz);
+    s = vec4(lessThan(p, vec4(0.0)));
+    p.xyz = p.xyz + (s.xyz * 2.0 - 1.0) * s.www;
+    return p;
+  }
+  #define F4 0.309016994374947451
+  float snoise(vec4 v) {
+    const vec4 C = vec4(0.138196601125011, 0.276393202250021, 0.414589803375032, -0.447213595499958);
+    vec4 i  = floor(v + dot(v, vec4(F4)));
+    vec4 x0 = v - i + dot(i, C.xxxx);
+    vec4 i0;
+    vec3 isX  = step(x0.yzw, x0.xxx);
+    vec3 isYZ = step(x0.zww, x0.yyz);
+    i0.x = isX.x + isX.y + isX.z;
+    i0.yzw = 1.0 - isX;
+    i0.y += isYZ.x + isYZ.y;
+    i0.zw += 1.0 - isYZ.xy;
+    i0.z += isYZ.z;
+    i0.w += 1.0 - isYZ.z;
+    vec4 i3 = clamp(i0, 0.0, 1.0);
+    vec4 i2 = clamp(i0 - 1.0, 0.0, 1.0);
+    vec4 i1 = clamp(i0 - 2.0, 0.0, 1.0);
+    vec4 x1 = x0 - i1 + C.xxxx;
+    vec4 x2 = x0 - i2 + C.yyyy;
+    vec4 x3 = x0 - i3 + C.zzzz;
+    vec4 x4 = x0 + C.wwww;
+    i = mod289(i);
+    float j0 = permute(permute(permute(permute(i.w) + i.z) + i.y) + i.x);
+    vec4 j1 = permute(permute(permute(permute(
+              i.w + vec4(i1.w, i2.w, i3.w, 1.0))
+            + i.z + vec4(i1.z, i2.z, i3.z, 1.0))
+            + i.y + vec4(i1.y, i2.y, i3.y, 1.0))
+            + i.x + vec4(i1.x, i2.x, i3.x, 1.0));
+    vec4 ip = vec4(1.0 / 294.0, 1.0 / 49.0, 1.0 / 7.0, 0.0);
+    vec4 p0 = grad4(j0,   ip);
+    vec4 p1 = grad4(j1.x, ip);
+    vec4 p2 = grad4(j1.y, ip);
+    vec4 p3 = grad4(j1.z, ip);
+    vec4 p4 = grad4(j1.w, ip);
+    vec4 norm = taylorInvSqrt(vec4(dot(p0, p0), dot(p1, p1), dot(p2, p2), dot(p3, p3)));
+    p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;
+    p4 *= taylorInvSqrt(dot(p4, p4));
+    vec3 m0 = max(0.6 - vec3(dot(x0, x0), dot(x1, x1), dot(x2, x2)), 0.0);
+    vec2 m1 = max(0.6 - vec2(dot(x3, x3), dot(x4, x4)), 0.0);
+    m0 = m0 * m0; m1 = m1 * m1;
+    return 49.0 * (dot(m0 * m0, vec3(dot(p0, x0), dot(p1, x1), dot(p2, x2)))
+                 + dot(m1 * m1, vec2(dot(p3, x3), dot(p4, x4))));
+  }
+
+  const mat2 ROT = mat2(0.8, 0.6, -0.6, 0.8);
+
+  // Periodic FBM: (x,y) spatial, (z,w) on a circle => seamless in time.
+  float fbm(vec2 p, vec2 tc, int oct) {
+    float a = 0.5, s = 0.0, n = 0.0;
+    vec4 q = vec4(p, tc);
+    for (int i = 0; i < 8; i++) {
+      if (i >= oct) break;
+      s += a * snoise(q);
+      n += a;
+      q = vec4(ROT * q.xy * 2.02, q.zw * 1.5 + 7.3);
+      a *= 0.5;
+    }
+    return s / n;
+  }
+  // Ridged multifractal: bright filaments / cirrus strands.
+  float ridged(vec2 p, vec2 tc, int oct) {
+    float a = 0.5, s = 0.0, n = 0.0, w = 1.0;
+    vec4 q = vec4(p, tc);
+    for (int i = 0; i < 8; i++) {
+      if (i >= oct) break;
+      float v = 1.0 - abs(snoise(q));
+      v = v * v * w;
+      w = clamp(v * 2.0, 0.0, 1.0);
+      s += a * v;
+      n += a;
+      q = vec4(ROT * q.xy * 2.1, q.zw * 1.5 + 3.1);
+      a *= 0.55;
+    }
+    return s / n;
+  }
+  `;
+
+  // Hero star table shared between passes (generated from JS).
+  const HERO_GLSL = `
+  const int NHERO = ${HERO.length};
+  const vec4 HS[${HERO.length}] = vec4[${HERO.length}](
+    ${HERO.map(h => `vec4(${h.map(v => v.toFixed(3)).join(', ')})`).join(',\n    ')}
+  );
+  vec3 starColor(float t) {
+    vec3 blue = vec3(0.60, 0.72, 1.00), white = vec3(1.00, 0.97, 0.92);
+    vec3 warm = vec3(1.00, 0.85, 0.62), orange = vec3(1.00, 0.60, 0.36);
+    return t < 0.33 ? mix(blue, white, t / 0.33)
+         : t < 0.66 ? mix(white, warm, (t - 0.33) / 0.33)
+         : mix(warm, orange, (t - 0.66) / 0.34);
+  }
+  `;
+
+  // -------------------------------------------------------- nebula (half res)
+  const FS_NEBULA = HEADER + NOISE4D + `
+  uniform vec4 uLights[${LIGHTS.length}];
+
+  const vec3 TEAL   = vec3(0.06, 0.55, 0.88);
+  const vec3 ROSE   = vec3(0.95, 0.22, 0.55);
+  const vec3 AMBER  = vec3(1.00, 0.50, 0.14);
+  const vec3 INDIGO = vec3(0.20, 0.14, 0.60);
+  const vec3 DEEP   = vec3(0.06, 0.11, 0.32);
+
+  float shapeMask(vec2 p, vec2 tc) {
+    float dl = p.y - (0.38 * p.x - 0.02);
+    float band = exp(-dl * dl / (2.0 * 0.21 * 0.21));
+    float big = fbm(p * 0.75 + vec2(4.2, 1.3), tc * 0.12, 3);
+    return clamp(band * (0.80 + 0.50 * big) + 0.20 * big + 0.03, 0.0, 1.0);
+  }
+  float lightAt(vec2 p) {
+    float l = 0.0;
+    for (int i = 0; i < ${LIGHTS.length}; i++) {
+      vec2 d = p - uLights[i].xy;
+      l += uLights[i].z / (1.0 + dot(d, d) * uLights[i].w);
+    }
+    return l;
+  }
+
+  void main() {
+    vec2 fc = vUV * uRes;
+    vec2 p = (fc - 0.5 * uRes) / uRes.y;
+    vec2 tc0 = vec2(cos(uTheta), sin(uTheta));
+    float lit = lightAt(p);
+    float shape = shapeMask(p + uDrift, tc0 * 0.02 + vec2(9.0, 4.0));
+
+    // deep background + faint far haze
+    vec3 col = vec3(0.0045, 0.0060, 0.0140);
+    {
+      vec2 pl = p + uDrift * 0.5;
+      float haze = fbm(pl * 0.9 + vec2(13.1, 7.7), tc0 * 0.02, 3);
+      col += DEEP * 0.10 * smoothstep(-0.5, 0.9, haze);
+    }
+    float trans = 1.0;
+
+    // ---- far layer: soft indigo / teal glow
+    {
+      vec2 pl = p + uDrift * 0.65;
+      vec2 tc = tc0 * 0.025 + vec2(31.0, 17.0);
+      vec2 q = pl * 0.95 + vec2(2.3, 6.1);
+      vec2 w = vec2(fbm(q + vec2(1.7, 9.2), tc, 3), fbm(q + vec2(8.3, 2.8), tc + 2.0, 3));
+      vec2 q2 = q + 0.6 * w;
+      float dens = fbm(q2, tc, 4);
+      float hue = fbm(q * 0.5 + 11.0, tc * 0.5, 2) + 0.5 * pl.y + 0.3 * pl.x;
+      float a = smoothstep(-0.2, 0.75, dens) * shape;
+      vec3 gas = mix(INDIGO, TEAL * 0.8, smoothstep(-0.35, 0.35, hue));
+      col += gas * a * (0.16 + 0.30 * lit);
+      trans *= 1.0 - 0.25 * a;
+    }
+
+    // ---- mid layer: main emission nebula, amber filaments, dust
+    {
+      vec2 pl = p + uDrift * 1.0;
+      vec2 tc = tc0 * 0.03 + vec2(5.0, 9.0);
+      vec2 q = pl * 1.45 + vec2(7.7, 3.9);
+      vec2 w = vec2(fbm(q + vec2(1.7, 9.2), tc, 4), fbm(q + vec2(8.3, 2.8), tc + 2.0, 4));
+      vec2 q2 = q + 0.55 * w;
+      vec2 w2 = vec2(fbm(q2 * 2.1 + vec2(5.1, 3.3), tc * 1.3, 3), fbm(q2 * 2.1 + vec2(2.2, 7.7), tc * 1.3 + 4.0, 3));
+      vec2 q3 = q2 + 0.2 * w2;
+      float dens = fbm(q3, tc, 6);
+      float rid  = ridged(q3 * 2.2 + 3.0, tc * 1.4, 5);
+      float hf   = ridged(q3 * 7.5 + 5.0, tc * 2.0, 2);
+      float hue  = fbm(q * 0.45 + 11.0, tc * 0.4, 2) + 0.55 * pl.y + 0.35 * pl.x;
+      float hue2 = fbm(q3 * 2.6 + 27.0, tc * 1.1, 2);
+      float dust = fbm(q3 * 1.6 + 21.0, tc * 0.9, 5);
+      float a = smoothstep(-0.10, 0.85, dens) * shape * (0.62 + 0.75 * hf);
+      float fil = smoothstep(0.45, 0.92, rid) * smoothstep(-0.3, 0.5, dens) * shape * (0.5 + 0.9 * hf);
+      float dk = smoothstep(0.10, 0.72, dust) * smoothstep(-0.25, 0.5, dens) * shape;
+      col *= 1.0 - dk * 0.88 * vec3(1.0, 0.90, 0.74);
+      trans *= 1.0 - dk * 0.7 - 0.35 * a;
+      vec3 gas = mix(ROSE * 1.15, TEAL, smoothstep(-0.25, 0.35, hue + 0.35 * hue2));
+      vec3 emit = gas * a * (0.24 + 0.50 * lit);
+      emit += AMBER * fil * (0.09 + 0.85 * lit);
+      emit += vec3(1.0, 0.9, 0.75) * a * a * lit * lit * 0.10;
+      col += emit;
+    }
+
+    // ---- near layer: dark dust lanes + rose wisps
+    {
+      vec2 pl = p + uDrift * 1.5;
+      vec2 tc = tc0 * 0.04 + vec2(41.0, 3.0);
+      vec2 q = pl * 2.3 + vec2(1.1, 8.8);
+      vec2 w = vec2(fbm(q + vec2(3.7, 1.2), tc, 3), fbm(q + vec2(6.3, 5.8), tc + 2.0, 3));
+      vec2 q2 = q + 0.5 * w;
+      float dust = fbm(q2 * 0.8 + 33.0, tc * 0.8, 5);
+      float rid  = ridged(q2 * 1.3 + 9.0, tc * 1.2, 4);
+      float dens = fbm(q2 * 0.6 + 17.0, tc * 0.6, 3);
+      float dk = smoothstep(0.18, 0.78, dust) * smoothstep(-0.3, 0.4, dens) * shape * 0.94;
+      col *= 1.0 - dk * vec3(1.0, 0.88, 0.70);
+      trans *= 1.0 - dk * 0.9;
+      float wisp = smoothstep(0.55, 1.0, rid) * smoothstep(-0.2, 0.6, dens) * shape;
+      col += mix(ROSE, vec3(1.0, 0.75, 0.5), clamp(lit * 0.5, 0.0, 1.0)) * wisp * (0.08 + 0.4 * lit);
+    }
+
+    fragColor = vec4(max(col, 0.0) * uPack, clamp(trans, 0.0, 1.0));
+  }`;
+
+  // --------------------------------------------------------- stars (full res)
+  const FS_STARS = HEADER + NOISE4D + HERO_GLSL + `
+  uniform sampler2D uNeb;
+
+  float bandDensity(vec2 sp) {
+    float d = sp.y - (0.38 * sp.x - 0.02);
+    return 0.30 + 0.70 * exp(-d * d / (2.0 * 0.22 * 0.22));
+  }
+
+  vec3 starLayer(vec2 sp, float cell, float dens, float amp, float sizeMul, float briMul, float seed) {
+    vec2 gi = floor(sp / cell);
+    vec3 acc = vec3(0.0);
+    float cellPx = cell / PIX;
+    for (int j = -1; j <= 1; j++)
+    for (int i = -1; i <= 1; i++) {
+      vec2 c = gi + vec2(float(i), float(j));
+      vec4 h = hash42(c + seed);
+      float bd = bandDensity((c + 0.5) * cell);
+      if (h.x > dens * bd) continue;
+      vec4 h2 = hash42(c * 1.37 + seed + 7.1);
+      vec4 h3 = hash42(c * 2.11 + seed + 3.3);
+      vec2 pos = (c + 0.5 + 0.8 * (h.yz - 0.5)) * cell;
+      float dpx = length(sp - pos) / PIX;
+      float bri = (pow(h.w, 9.0) * 4.0 + 0.035) * briMul;
+      float sig = (0.70 + 0.80 * sqrt(bri)) * sizeMul;
+      float k1 = floor(2.0 + 5.0 * h2.x), k2 = floor(7.0 + 6.0 * h2.y);
+      float tw = 1.0 + amp * (0.7 * sin(k1 * uTheta + TAU * h2.z) + 0.3 * sin(k2 * uTheta + TAU * h2.w));
+      float I = exp(-dpx * dpx / (2.0 * sig * sig));
+      I += 0.035 * bri / (1.0 + dpx * dpx * 0.3) * step(0.5, bri) * max(0.0, 1.0 - dpx / (cellPx * 1.2));
+      acc += starColor(h3.x * 0.75 + h3.y * 0.25) * I * bri * tw;
+    }
+    return acc;
+  }
+
+  vec3 heroStars(vec2 p) {
+    vec3 acc = vec3(0.0);
+    for (int i = 0; i < NHERO; i++) {
+      vec4 s = HS[i];
+      vec2 pos = s.xy + uDrift * ${HERO_PAR.toFixed(3)};
+      vec2 d = (p - pos) / PIX;
+      float r = length(d);
+      float bri = s.z;
+      float L = 150.0 + 330.0 * bri;
+      if (r > L * 1.5) continue;
+      vec3 c = starColor(s.w);
+      float fi = float(i);
+      float tw = 1.0 + 0.05 * sin(3.0 * uTheta + fi * 1.7) + 0.03 * sin(7.0 * uTheta + fi * 2.9);
+      float sig = 2.0 + 2.4 * bri;
+      float core = exp(-r * r / (2.0 * sig * sig)) * 6.0;
+      float halo = 1.2 / (1.0 + r * r * 0.003) * (1.0 - smoothstep(0.6 * L, 1.4 * L, r));
+      float sp = 0.0;
+      for (int k = 0; k < 3; k++) {
+        float ang = 1.5707963 + float(k) * 1.0471976;
+        vec2 dir = vec2(cos(ang), sin(ang));
+        float along = abs(dot(d, dir));
+        float perp = abs(dot(d, vec2(-dir.y, dir.x)));
+        float w = 1.3 + along * 0.0045;
+        float ws = 1.0 + 0.10 * sin((5.0 + float(k)) * uTheta + fi * 2.1 + float(k) * 1.3);
+        sp += exp(-perp * perp / (2.0 * w * w)) * exp(-along / (L * 0.36)) * (1.0 - smoothstep(0.6 * L, 1.4 * L, along)) * ws;
+      }
+      float alongH = abs(d.x), perpH = abs(d.y);
+      float wH = 1.0 + alongH * 0.003;
+      sp += 0.5 * exp(-perpH * perpH / (2.0 * wH * wH)) * exp(-alongH / (L * 0.18)) * (1.0 - smoothstep(0.3 * L, 0.7 * L, alongH));
+      vec3 spCol = c * mix(vec3(1.0), vec3(1.25, 0.72, 0.42), smoothstep(0.0, L * 0.9, r));
+      acc += (c * (core + halo * 0.35) + spCol * sp * 0.7) * bri * tw;
+    }
+    return acc;
+  }
+
+  vec3 galaxy(vec2 sp) {
+    vec2 c = vec2(-0.56, 0.27);
+    vec2 d = sp - c;
+    float ca = cos(0.55), sa = sin(0.55);
+    vec2 l = vec2(ca * d.x - sa * d.y, sa * d.x + ca * d.y);
+    l.y /= 0.42;
+    float R0 = 0.072;
+    float r = length(l) / R0;
+    if (r > 2.8) return vec3(0.0);
+    float phi = atan(l.y, l.x);
+    float lr = log(r + 0.10);
+    float arm = 0.5 + 0.5 * cos(2.0 * phi - 5.2 * lr);
+    arm = pow(arm, 3.0);
+    float disk = exp(-r * 1.5) * smoothstep(2.8, 1.5, r);
+    float bulge = exp(-r * r * 16.0) + 0.18 * exp(-r * r * 3.0);
+    vec2 tc = vec2(cos(uTheta), sin(uTheta)) * 0.15 + 50.0;
+    float n  = snoise(vec4(l * 26.0, tc));
+    float n2 = snoise(vec4(l * 70.0 + 3.0, tc * 1.3));
+    float n3 = snoise(vec4(l * 160.0 + 9.0, tc * 1.6));
+    float armD = disk * (0.10 + 0.90 * arm) * (0.70 + 0.35 * n + 0.20 * n2 + 0.15 * n3);
+    float near = 0.45 + 0.55 * smoothstep(0.25, -0.35, l.y / R0);
+    float dust = smoothstep(0.05, 0.55, -n) * disk * (1.0 - bulge) * (0.3 + 0.7 * arm) * 0.8 * near;
+    float knots = smoothstep(0.55, 0.95, n3) * armD * arm;
+    vec3 col = vec3(1.0, 0.86, 0.62) * bulge * 1.1
+             + vec3(0.55, 0.68, 1.0) * armD * 1.5
+             + vec3(1.0, 0.45, 0.62) * knots * 2.5
+             + vec3(1.0, 0.95, 0.85) * smoothstep(0.7, 0.98, n2) * armD * 1.2;
+    col *= 1.0 - dust * vec3(0.95, 0.85, 0.65);
+    return max(col, 0.0) * 0.9;
+  }
+
+  void main() {
+    vec2 fc = vUV * uRes;
+    vec2 p = (fc - 0.5 * uRes) / uRes.y;
+    float trans = texture(uNeb, vUV).a;
+    vec3 far = starLayer(p + uDrift * 0.30, 14.0 * PIX, 0.34, 0.45, 1.00, 0.55, 1.0);
+    far += starLayer(p + uDrift * 0.45, 27.0 * PIX, 0.50, 0.35, 1.05, 0.90, 2.0);
+    far += galaxy(p + uDrift * 0.35);
+    vec3 mid = starLayer(p + uDrift * 0.75, 64.0 * PIX, 0.55, 0.22, 1.25, 1.25, 3.0);
+    vec3 hs = heroStars(p);
+    vec3 col = far * mix(0.12, 1.0, trans) + mid * mix(0.55, 1.0, trans) + hs;
+    fragColor = vec4(col * uPack, 1.0);
+  }`;
+
+  // ------------------------------------------------------------ bright pass
+  const FS_BRIGHT = HEADER + `
+  uniform sampler2D uNeb, uStars;
+  void main() {
+    vec2 tx = 1.0 / uRes;
+    vec3 s = texture(uStars, vUV + tx * vec2(-0.25, -0.25)).rgb
+           + texture(uStars, vUV + tx * vec2( 0.25, -0.25)).rgb
+           + texture(uStars, vUV + tx * vec2(-0.25,  0.25)).rgb
+           + texture(uStars, vUV + tx * vec2( 0.25,  0.25)).rgb;
+    vec3 c = (s * 0.25 + texture(uNeb, vUV).rgb) * uUnpack;
+    float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+    float thr = 0.55, knee = 0.35;
+    float soft = clamp(l - thr + knee, 0.0, 2.0 * knee);
+    soft = soft * soft / (4.0 * knee + 1e-4);
+    float contrib = max(l - thr, soft) / max(l, 1e-4);
+    fragColor = vec4(c * contrib * uPack, 1.0);
+  }`;
+
+  const FS_BLUR = HEADER + `
+  uniform sampler2D uTex;
+  uniform vec2 uDir;
+  void main() {
+    vec3 c = texture(uTex, vUV).rgb * 0.2270270270;
+    c += texture(uTex, vUV + uDir * 1.3846153846).rgb * 0.3162162162;
+    c += texture(uTex, vUV - uDir * 1.3846153846).rgb * 0.3162162162;
+    c += texture(uTex, vUV + uDir * 3.2307692308).rgb * 0.0702702703;
+    c += texture(uTex, vUV - uDir * 3.2307692308).rgb * 0.0702702703;
+    fragColor = vec4(c, 1.0);
+  }`;
+
+  const FS_COPY = HEADER + `
+  uniform sampler2D uTex;
+  void main() { fragColor = texture(uTex, vUV); }`;
+
+  // --------------------------------------------------------------- composite
+  const FS_COMPOSITE = HEADER + `
+  uniform sampler2D uNeb, uStars, uB1, uB2;
+  vec3 aces(vec3 x) {
+    const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+  }
+  void main() {
+    vec2 fc = vUV * uRes;
+    vec2 p = (fc - 0.5 * uRes) / uRes.y;
+    vec3 neb = texture(uNeb, vUV).rgb * uUnpack;
+    vec3 st  = texture(uStars, vUV).rgb * uUnpack;
+    vec3 b1  = texture(uB1, vUV).rgb * uUnpack;
+    vec2 ca  = (vUV - 0.5) * 0.0035;
+    vec3 b2  = vec3(texture(uB2, vUV + ca).r, texture(uB2, vUV).g, texture(uB2, vUV - ca).b) * uUnpack;
+    vec3 col = neb + st + b1 * 0.45 + b2 * 0.75;
+    col *= 1.05;
+    float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
+    col = max(mix(vec3(lum), col, 1.18), 0.0);
+    col = aces(col);
+    col += vec3(0.004, 0.006, 0.012) * (1.0 - col);
+    float v = 1.0 - 0.28 * smoothstep(0.45, 1.25, length(p * vec2(0.85, 1.0)));
+    col *= v;
+    col = pow(max(col, 0.0), vec3(1.0 / 2.2));
+    float g = hash12(fc + vec2(fract(uTime * 0.731) * 173.0, fract(uTime * 0.317) * 97.0)) - 0.5;
+    col += g * (0.012 * (1.0 - col) + 1.0 / 255.0);
+    fragColor = vec4(col, 1.0);
+  }`;
+
+  // ------------------------------------------------------------ GL helpers
+  function compile(type, src) {
+    const sh = gl.createShader(type);
+    gl.shaderSource(sh, src);
+    gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+      const log = gl.getShaderInfoLog(sh);
+      throw new Error('Shader compile error:\n' + log);
+    }
+    return sh;
+  }
+  const vs = compile(gl.VERTEX_SHADER, VS);
+  function program(fsSrc) {
+    const p = gl.createProgram();
+    gl.attachShader(p, vs);
+    gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fsSrc));
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error('Link error: ' + gl.getProgramInfoLog(p));
+    const u = {};
+    const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+    for (let i = 0; i < n; i++) {
+      const info = gl.getActiveUniform(p, i);
+      const name = info.name.replace(/\[0\]$/, '');
+      u[name] = gl.getUniformLocation(p, info.name);
+    }
+    return { p, u };
+  }
+  function target(w, h) {
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texStorage2D(gl.TEXTURE_2D, 1, HDR_FMT, w, h);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    const fb = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    const st = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+    if (st !== gl.FRAMEBUFFER_COMPLETE) throw new Error('Framebuffer incomplete: ' + st);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return { fb, tex, w, h };
+  }
+
+  let progs, rt;
+  try {
+    progs = {
+      nebula: program(FS_NEBULA),
+      stars: program(FS_STARS),
+      bright: program(FS_BRIGHT),
+      blur: program(FS_BLUR),
+      copy: program(FS_COPY),
+      comp: program(FS_COMPOSITE)
+    };
+    rt = {
+      neb: target(W / 2, H / 2),
+      stars: target(W, H),
+      b1: target(W / 4, H / 4), t1: target(W / 4, H / 4),
+      b2: target(W / 8, H / 8), t2: target(W / 8, H / 8)
+    };
+  } catch (e) {
+    errBox.style.display = 'block'; errBox.textContent = String(e); console.error(e); return;
+  }
+
+  const vao = gl.createVertexArray();
+  gl.bindVertexArray(vao);
+  gl.disable(gl.DEPTH_TEST);
+  gl.disable(gl.BLEND);
+
+  const frameState = { theta: 0, time: 0, drift: [0, 0] };
+
+  function pass(prog, dst, textures, extra) {
+    const w = dst ? dst.w : W, h = dst ? dst.h : H;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, dst ? dst.fb : null);
+    gl.viewport(0, 0, w, h);
+    gl.useProgram(prog.p);
+    const u = prog.u;
+    if (u.uRes) gl.uniform2f(u.uRes, w, h);
+    if (u.uTheta) gl.uniform1f(u.uTheta, frameState.theta);
+    if (u.uTime) gl.uniform1f(u.uTime, frameState.time);
+    if (u.uDrift) gl.uniform2f(u.uDrift, frameState.drift[0], frameState.drift[1]);
+    if (u.uPack) gl.uniform1f(u.uPack, PACK);
+    if (u.uUnpack) gl.uniform1f(u.uUnpack, UNPACK);
+    let unit = 0;
+    for (const name in textures) {
+      gl.activeTexture(gl.TEXTURE0 + unit);
+      gl.bindTexture(gl.TEXTURE_2D, textures[name].tex);
+      if (u[name]) gl.uniform1i(u[name], unit);
+      unit++;
+    }
+    if (extra) extra(u);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  const lightData = new Float32Array(LIGHTS.length * 4);
+
+  function render(t) {
+    const theta = (2 * Math.PI * t) / DURATION;
+    frameState.theta = theta;
+    frameState.time = t;
+    frameState.drift = [DRIFT_AMP * Math.cos(theta), DRIFT_AMP * Math.sin(theta)];
+
+    for (let i = 0; i < LIGHTS.length; i++) {
+      const hs = HERO[LIGHTS[i][0]];
+      lightData[i * 4 + 0] = hs[0] + frameState.drift[0] * HERO_PAR;
+      lightData[i * 4 + 1] = hs[1] + frameState.drift[1] * HERO_PAR;
+      lightData[i * 4 + 2] = LIGHTS[i][1];
+      lightData[i * 4 + 3] = LIGHTS[i][2];
+    }
+
+    // 1. nebula (half res, alpha = transmittance)
+    pass(progs.nebula, rt.neb, {}, u => gl.uniform4fv(u.uLights, lightData));
+    // 2. stars + galaxy (full res), attenuated by nebula dust
+    pass(progs.stars, rt.stars, { uNeb: rt.neb });
+    // 3. bloom: bright pass to quarter res, tight blur
+    pass(progs.bright, rt.b1, { uNeb: rt.neb, uStars: rt.stars });
+    pass(progs.blur, rt.t1, { uTex: rt.b1 }, u => gl.uniform2f(u.uDir, 1 / rt.b1.w, 0));
+    pass(progs.blur, rt.b1, { uTex: rt.t1 }, u => gl.uniform2f(u.uDir, 0, 1 / rt.b1.h));
+    // 4. wide bloom at eighth res, two blur iterations
+    pass(progs.copy, rt.b2, { uTex: rt.b1 });
+    for (let i = 0; i < 2; i++) {
+      pass(progs.blur, rt.t2, { uTex: rt.b2 }, u => gl.uniform2f(u.uDir, 1 / rt.b2.w, 0));
+      pass(progs.blur, rt.b2, { uTex: rt.t2 }, u => gl.uniform2f(u.uDir, 0, 1 / rt.b2.h));
+    }
+    // 5. composite, grade, grain
+    pass(progs.comp, null, { uNeb: rt.neb, uStars: rt.stars, uB1: rt.b1, uB2: rt.b2 });
+  }
+
+  // ---------------------------------------------------------------- loop
+  let t0 = null;
+  function frame(now) {
+    if (t0 === null) t0 = now;
+    let t = ((now - t0) / 1000) % DURATION;
+    if (t < 0) t += DURATION;
+    render(t);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  // Optional deterministic hook for frame-by-frame renderers:
+  //   window.__renderAt(seconds) draws the exact frame for that time.
+  window.__renderAt = function (t) { render(((t % DURATION) + DURATION) % DURATION); };
+  window.__loopDuration = DURATION;
+})();
+</script>
+</body>
+</html>
