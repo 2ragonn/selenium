@@ -1,0 +1,1409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blockchain Cryptocurrency Nodes - Golden and Blue 3D Network - 4K 15s Loop</title>
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #01030a; }
+  body { cursor: none; }
+  canvas { position: fixed; left: 0; top: 0; width: 100vw; height: 100vh; object-fit: contain; display: block; background: #01030a; }
+</style>
+</head>
+<body>
+<canvas id="stage" width="3840" height="2160"></canvas>
+<script>
+/* =====================================================================
+ *  BLOCKCHAIN / CRYPTOCURRENCY NODE NETWORK
+ *  Golden + blue digital nodes connecting in 3D space.
+ *
+ *  - 3840 x 2160 WebGL2 canvas, HDR pipeline (RGBA16F), bloom, anamorphic
+ *    streaks, depth-of-field bokeh, chromatic aberration, film grain.
+ *  - 15.000 s seamless loop: every motion is a function of phi = t / 15
+ *    built only from integer harmonics, so frame(15 s) == frame(0 s).
+ *  - Starts automatically. Optional URL params (for previews / tooling):
+ *      ?t=6.5        render one still frame at t seconds and stop
+ *      ?scale=0.5    render at a reduced internal resolution (debug)
+ *  - Tooling hooks: window.setTime(sec), window.pause(), window.play(),
+ *    window.LOOP_DURATION (= 15).
+ * ===================================================================== */
+(function () {
+'use strict';
+
+const WIDTH = 3840, HEIGHT = 2160, DURATION = 15;
+const TAU = Math.PI * 2, HALF_PI = Math.PI / 2;
+const qs = new URLSearchParams(location.search);
+const SCALE = Math.min(1, Math.max(0.05, parseFloat(qs.get('scale')) || 1));
+
+const canvas = document.getElementById('stage');
+canvas.width = Math.round(WIDTH * SCALE);
+canvas.height = Math.round(HEIGHT * SCALE);
+const RW = canvas.width, RH = canvas.height;
+
+const gl = canvas.getContext('webgl2', {
+  alpha: false, antialias: false, depth: false, stencil: false,
+  preserveDrawingBuffer: true, powerPreference: 'high-performance'
+});
+if (!gl) {
+  document.body.insertAdjacentHTML('beforeend',
+    '<p style="position:fixed;left:24px;top:24px;color:#fff;font:24px sans-serif">WebGL2 is required to play this animation.</p>');
+  return;
+}
+gl.getExtension('EXT_color_buffer_float');
+gl.getExtension('EXT_color_buffer_half_float');
+gl.getExtension('OES_texture_float_linear');
+
+/* ------------------------------------------------------------------ *
+ *  Small math helpers (column-major mat4)
+ * ------------------------------------------------------------------ */
+const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const len = (a) => Math.hypot(a[0], a[1], a[2]);
+const norm = (a) => { const l = len(a) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
+const dist3 = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+
+function perspective(fovy, aspect, n, f) {
+  const t = 1 / Math.tan(fovy / 2);
+  return new Float32Array([t / aspect, 0, 0, 0, 0, t, 0, 0, 0, 0, (f + n) / (n - f), -1, 0, 0, 2 * f * n / (n - f), 0]);
+}
+function lookAt(e, c, up) {
+  const z = norm(sub(e, c)), x = norm(cross(up, z)), y = cross(z, x);
+  return new Float32Array([x[0], y[0], z[0], 0, x[1], y[1], z[1], 0, x[2], y[2], z[2], 0, -dot(x, e), -dot(y, e), -dot(z, e), 1]);
+}
+// 3x3 rotation matrices, row-major arrays of 9
+function rotX(t) { const c = Math.cos(t), s = Math.sin(t); return [1, 0, 0, 0, c, -s, 0, s, c]; }
+function rotY(t) { const c = Math.cos(t), s = Math.sin(t); return [c, 0, s, 0, 1, 0, -s, 0, c]; }
+function rotAxis(ax, t) {
+  const c = Math.cos(t), s = Math.sin(t), k = 1 - c, x = ax[0], y = ax[1], z = ax[2];
+  return [c + x * x * k, x * y * k - z * s, x * z * k + y * s,
+          y * x * k + z * s, c + y * y * k, y * z * k - x * s,
+          z * x * k - y * s, z * y * k + x * s, c + z * z * k];
+}
+function mulM(A, B) {
+  const r = new Array(9);
+  for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++)
+    r[i * 3 + j] = A[i * 3] * B[j] + A[i * 3 + 1] * B[3 + j] + A[i * 3 + 2] * B[6 + j];
+  return r;
+}
+function mulV(R, v) {
+  return [R[0] * v[0] + R[1] * v[1] + R[2] * v[2], R[3] * v[0] + R[4] * v[1] + R[5] * v[2], R[6] * v[0] + R[7] * v[1] + R[8] * v[2]];
+}
+
+/* deterministic random */
+const rng = (function (a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+})(902113);
+const rr = (a, b) => a + (b - a) * rng();
+const ri = (a, b) => Math.floor(rr(a, b + 1));
+
+/* palette (linear) */
+const GOLD = [1.0, 0.60, 0.13], GOLD_HOT = [1.0, 0.80, 0.36];
+const BLUE = [0.10, 0.42, 1.0], BLUE_HOT = [0.42, 0.78, 1.0];
+
+/* ------------------------------------------------------------------ *
+ *  GL helpers
+ * ------------------------------------------------------------------ */
+function compile(type, src, name) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+    console.error(name + ' shader error:\n' + gl.getShaderInfoLog(s) + '\n' +
+      src.split('\n').map((l, i) => (i + 1) + ': ' + l).join('\n'));
+    throw new Error('shader compile failed: ' + name);
+  }
+  return s;
+}
+function makeProgram(vs, fs, name) {
+  const p = gl.createProgram();
+  gl.attachShader(p, compile(gl.VERTEX_SHADER, vs, name + '.vs'));
+  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs, name + '.fs'));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+    console.error(name + ' link error: ' + gl.getProgramInfoLog(p));
+    throw new Error('program link failed: ' + name);
+  }
+  const u = {};
+  const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) {
+    const info = gl.getActiveUniform(p, i);
+    u[info.name.replace(/\[0\]$/, '')] = gl.getUniformLocation(p, info.name);
+  }
+  return { p, u, name };
+}
+
+let HDR = true;
+function makeTarget(w, h, withDepth, hdr) {
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  if (hdr) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.HALF_FLOAT, null);
+  else gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  const fb = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+  if (withDepth) {
+    const rb = gl.createRenderbuffer();
+    gl.bindRenderbuffer(gl.RENDERBUFFER, rb);
+    gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, w, h);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, rb);
+  }
+  const ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+  return { tex, fb, w, h, ok };
+}
+{
+  const t = makeTarget(16, 16, true, true);
+  if (!t.ok) HDR = false;
+}
+
+const CORNERS_LINE = new Float32Array([0, -1, 1, -1, 0, 1, 1, 1]);
+const CORNERS_QUAD = new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]);
+function staticBuf(data) {
+  const b = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, b);
+  gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+  return b;
+}
+const bufCornersLine = staticBuf(CORNERS_LINE);
+const bufCornersQuad = staticBuf(CORNERS_QUAD);
+
+function makeInstanced(cornerBuf, attribs, maxInst) {
+  const stride = attribs.reduce((a, b) => a + b, 0);
+  const vao = gl.createVertexArray();
+  gl.bindVertexArray(vao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, cornerBuf);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, maxInst * stride * 4, gl.DYNAMIC_DRAW);
+  let off = 0;
+  attribs.forEach((sz, i) => {
+    gl.enableVertexAttribArray(1 + i);
+    gl.vertexAttribPointer(1 + i, sz, gl.FLOAT, false, stride * 4, off * 4);
+    gl.vertexAttribDivisor(1 + i, 1);
+    off += sz;
+  });
+  gl.bindVertexArray(null);
+  return { vao, buf, stride, max: maxInst, n: 0, data: new Float32Array(maxInst * stride) };
+}
+function uploadInst(I) {
+  if (!I.n) return;
+  gl.bindBuffer(gl.ARRAY_BUFFER, I.buf);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, I.data, 0, I.n * I.stride);
+}
+function drawInst(I) {
+  if (!I.n) return;
+  gl.bindVertexArray(I.vao);
+  gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, I.n);
+}
+
+/* ------------------------------------------------------------------ *
+ *  GLSL
+ * ------------------------------------------------------------------ */
+const COMMON = `
+const float TAU = 6.28318530718;
+uniform vec2  uRes;
+uniform float uPhi;
+uniform float uFocal;
+uniform float uFocus;
+uniform vec4  uWave0;
+uniform vec4  uWave1;
+uniform vec3  uWaveLife;
+const vec3 WCOL0 = vec3(1.0, 0.62, 0.14);
+const vec3 WCOL1 = vec3(0.16, 0.56, 1.0);
+
+float cocOf(float z){
+  float c = 1.25 * abs(z - uFocus) / max(z, 0.5);
+  return smoothstep(0.06, 1.0, c);
+}
+float depthFade(float z){
+  float far = mix(1.0, 0.38, smoothstep(uFocus - 2.0, uFocus + 26.0, z));
+  float near = smoothstep(0.8, 3.5, z);
+  return far * near;
+}
+float waveFront(float k, float life){
+  return (exp(-k*k/5.0) + (k < 0.0 ? 0.30*exp(k/9.0) : 0.0)) * life;
+}
+vec3 waveEnergy(vec3 P, out float fl){
+  float k0 = distance(P, uWave0.xyz) - uWave0.w;
+  float k1 = distance(P, uWave1.xyz) - uWave1.w;
+  float f0 = waveFront(k0, uWaveLife.x);
+  float f1 = waveFront(k1, uWaveLife.y);
+  fl = f0 + f1;
+  return WCOL0*f0 + WCOL1*f1;
+}
+`;
+
+/* ---------- full-screen triangle ---------- */
+const VS_FULL = `#version 300 es
+precision highp float;
+out vec2 vUv;
+void main(){
+  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+  vUv = p;
+  gl_Position = vec4(p*2.0 - 1.0, 0.0, 1.0);
+}`;
+
+/* ---------- background ---------- */
+const FS_BG = `#version 300 es
+precision highp float;
+${COMMON}
+in vec2 vUv;
+uniform vec2 uPar;
+out vec4 o;
+float h21(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123); }
+float vnoise(vec2 p){
+  vec2 i = floor(p), f = fract(p);
+  f = f*f*(3.0 - 2.0*f);
+  return mix(mix(h21(i), h21(i + vec2(1,0)), f.x), mix(h21(i + vec2(0,1)), h21(i + vec2(1,1)), f.x), f.y);
+}
+float fbm(vec2 p){
+  float a = 0.5, s = 0.0;
+  for (int i = 0; i < 5; i++){ s += a*vnoise(p); p = p*2.03 + vec2(17.3, 9.1); a *= 0.5; }
+  return s;
+}
+void main(){
+  float asp = uRes.x/uRes.y;
+  vec2 p = (vUv - 0.5)*vec2(asp, 1.0);
+  vec2 q = p + uPar;
+  float r = length(p*vec2(0.8, 1.0));
+  vec3 col = mix(vec3(0.0035, 0.008, 0.026), vec3(0.0006, 0.0015, 0.006), smoothstep(0.0, 1.0, r));
+  col += vec3(0.020, 0.115, 0.40) * 0.085 * exp(-dot(q - vec2(0.42, 0.20), q - vec2(0.42, 0.20)) * 1.9);
+  col += vec3(0.30, 0.15, 0.015) * 0.075 * exp(-dot(q - vec2(-0.62, -0.30), q - vec2(-0.62, -0.30)) * 2.4);
+  col += vec3(0.02, 0.07, 0.22) * 0.06 * exp(-dot(q - vec2(-0.2, 0.42), q - vec2(-0.2, 0.42)) * 4.0);
+
+  // slow volumetric haze (loop-safe: noise domain travels on a circle)
+  vec2 c = vec2(cos(TAU*uPhi), sin(TAU*uPhi));
+  float f1 = fbm(q*1.7 + c*0.30 + vec2(3.1, 1.7));
+  float f2 = fbm(q*3.4 - c*0.42 + vec2(8.0, 4.0));
+  float haze = smoothstep(0.34, 0.86, f1)*0.60 + smoothstep(0.42, 0.92, f2)*0.28;
+  float warm = smoothstep(-0.5, 0.7, -q.x*0.85 - q.y*0.55 + (f1 - 0.5)*0.6);
+  col += mix(vec3(0.030, 0.105, 0.30), vec3(0.30, 0.165, 0.028), warm) * haze * 0.10;
+
+  // broad soft light shafts
+  vec2 b = q*mat2(0.866, -0.5, 0.5, 0.866);
+  float shaft1 = exp(-pow((b.x - 0.30)*3.0, 2.0)) * (0.55 + 0.45*fbm(b*vec2(0.5, 2.2) + c*0.4));
+  float shaft2 = exp(-pow((b.x + 0.55)*3.4, 2.0)) * (0.55 + 0.45*fbm(b*vec2(0.6, 2.0) - c*0.4 + 5.0));
+  col += vec3(0.02, 0.085, 0.26) * shaft1 * 0.10 * smoothstep(-0.55, 0.45, q.y);
+  col += vec3(0.24, 0.13, 0.02) * shaft2 * 0.07 * smoothstep(0.5, -0.5, q.y);
+
+  o = vec4(col, 1.0);
+}`;
+
+/* ---------- glowing edge lines (with travelling data packets) ---------- */
+const VS_LINE = `#version 300 es
+precision highp float;
+${COMMON}
+layout(location=0) in vec2 aCorner;
+layout(location=1) in vec4 a0;   // A.xyz, width
+layout(location=2) in vec4 a1;   // B.xyz, intensity
+layout(location=3) in vec4 a2;   // colA.rgb, pulse speed (cycles / loop)
+layout(location=4) in vec4 a3;   // colB.rgb, pulse phase
+layout(location=5) in vec4 a4;   // duty, pulse brightness, wave weight, -
+uniform mat4 uView;
+uniform mat4 uProj;
+out vec2 vLocal;
+flat out float vLen;
+flat out vec4 vSig;
+flat out vec3 vColA;
+flat out vec3 vColB;
+flat out vec4 vPulse;
+flat out vec3 vWA;
+flat out vec3 vWB;
+flat out vec2 vDepth;
+flat out float vWaveW;
+void main(){
+  vec3 A = a0.xyz, B = a1.xyz;
+  vec4 vA = uView*vec4(A, 1.0);
+  vec4 vB = uView*vec4(B, 1.0);
+  const float NZ = -0.7;
+  if (vA.z > NZ && vB.z > NZ){ gl_Position = vec4(3.0, 3.0, 3.0, 1.0); return; }
+  float dz = vB.z - vA.z;
+  float tA = vA.z > NZ ? (NZ - vA.z)/dz : 0.0;
+  float tB = vB.z > NZ ? (NZ - vA.z)/dz : 1.0;
+  vec4 cA = mix(vA, vB, tA);
+  vec4 cB = mix(vA, vB, tB);
+  vec4 pA = uProj*cA, pB = uProj*cB;
+  vec3 nA = pA.xyz/pA.w, nB = pB.xyz/pB.w;
+  float rs = uRes.y/2160.0;
+  vec2 sA = nA.xy*0.5*uRes, sB = nB.xy*0.5*uRes;
+  float L = max(length(sB - sA), 0.5);
+  vec2 dir = (sB - sA)/L;
+  vec2 nrm = vec2(-dir.y, dir.x);
+  float dA = -cA.z, dB = -cB.z;
+  float dM = 0.5*(dA + dB);
+  float coc = cocOf(dM);
+  float wpx = a0.w*uFocal/dM;
+  float sigma = max(0.5*wpx, 0.6*rs) + coc*4.5*rs;
+  float glowR = a2.w > 0.0 ? (7.0 + 2.0*wpx)*rs*(1.0 + coc*1.2) : 0.0;
+  float ext = max(3.0*sigma, 2.2*glowR);
+  float along = mix(-ext, L + ext, aCorner.x);
+  float across = aCorner.y*ext;
+  vec2 pos = sA + dir*along + nrm*across;
+  float zz = mix(nA.z, nB.z, clamp(along/L, 0.0, 1.0));
+  gl_Position = vec4(pos/(0.5*uRes), zz, 1.0);
+  float fade = depthFade(dM) / (1.0 + coc*1.4);
+  vLocal = vec2(along, across);
+  vLen = L;
+  vSig = vec4(sigma, glowR, a1.w*fade, coc);
+  vColA = a2.xyz; vColB = a3.xyz;
+  vPulse = vec4(a2.w, a3.w, a4.x, a4.y*fade);
+  vWA = mix(A, B, tA); vWB = mix(A, B, tB);
+  vDepth = vec2(dA, dB);
+  vWaveW = a4.z*fade;
+}`;
+const FS_LINE = `#version 300 es
+precision highp float;
+${COMMON}
+in vec2 vLocal;
+flat in float vLen;
+flat in vec4 vSig;
+flat in vec3 vColA;
+flat in vec3 vColB;
+flat in vec4 vPulse;
+flat in vec3 vWA;
+flat in vec3 vWB;
+flat in vec2 vDepth;
+flat in float vWaveW;
+out vec4 o;
+void main(){
+  float along = vLocal.x, across = vLocal.y;
+  float sigma = vSig.x, glowR = vSig.y, inten = vSig.z;
+  float us = clamp(along/vLen, 0.0, 1.0);
+  float u3 = (us/vDepth.y)/((1.0 - us)/vDepth.x + us/vDepth.y);
+  vec3 P = mix(vWA, vWB, u3);
+  vec3 base = mix(vColA, vColB, u3);
+  float endFade = smoothstep(-1.5*sigma - 2.0, 0.0, along) * (1.0 - smoothstep(vLen, vLen + 1.5*sigma + 2.0, along));
+  float strand = exp(-across*across/(sigma*sigma));
+
+  float fl;
+  vec3 we = waveEnergy(P, fl);
+  vec3 col = base*strand*inten;
+  col += we*strand*vWaveW*1.3;
+
+  if (vPulse.x > 0.0){
+    float h = fract(vPulse.y + vPulse.x*uPhi)/max(vPulse.z, 0.001);
+    float alive = smoothstep(0.0, 0.05, h) * (1.0 - smoothstep(0.92, 1.22, h));
+    float dx = along - h*vLen;
+    float tail = dx < 0.0 ? exp(dx/(0.42*vLen + 10.0)) : exp(-dx*dx/(glowR*glowR*0.45));
+    float sp = sigma*1.6;
+    float core = exp(-across*across/(sp*sp))*tail;
+    float head = exp(-(dx*dx + across*across)/(glowR*glowR));
+    vec3 pc = mix(base, vec3(1.0), 0.62);
+    col += pc*(core*0.95 + head*1.9)*vPulse.w*alive;
+  }
+  o = vec4(col*endFade, 1.0);
+}`;
+
+/* ---------- glowing orbs, hub stars, sparks, cube cores ---------- */
+const VS_NODE = `#version 300 es
+precision highp float;
+${COMMON}
+layout(location=0) in vec2 aCorner;
+layout(location=1) in vec4 n0;  // pos.xyz, radius
+layout(location=2) in vec4 n1;  // color.rgb, kind
+layout(location=3) in vec4 n2;  // hot.rgb, intensity
+layout(location=4) in vec4 n3;  // blink phase, blink k, blink amp, -
+uniform mat4 uView;
+uniform mat4 uProj;
+out vec2 vUv;
+flat out vec4 vA;
+flat out vec3 vCol;
+flat out vec3 vHot;
+flat out vec4 vB;
+flat out vec3 vBlink;
+flat out vec3 vWorld;
+void main(){
+  vec4 v = uView*vec4(n0.xyz, 1.0);
+  float z = -v.z;
+  if (z < 0.8){ gl_Position = vec4(3.0, 3.0, 3.0, 1.0); return; }
+  float rs = uRes.y/2160.0;
+  float kind = n1.w;
+  float coc = kind > 2.5 ? 0.0 : cocOf(z);
+  float rpx = max(n0.w*uFocal/z, 0.5*rs);
+  float cocPx = coc*62.0*rs;
+  float discR = sqrt(rpx*rpx + cocPx*cocPx);
+  float HM = kind < 0.5 ? 6.5 : (kind < 1.5 ? 9.0 : (kind < 2.5 ? 5.0 : 1.0));
+  float Q = discR*HM;
+  vec4 cp = uProj*v;
+  gl_Position = vec4(cp.xy + aCorner*Q*2.0/uRes*cp.w, cp.z, cp.w);
+  vUv = aCorner*HM;
+  vA = vec4(rpx, cocPx, discR, coc);
+  vB = vec4(n2.w*depthFade(z), kind, z, 0.0);
+  vCol = n1.xyz; vHot = n2.xyz; vBlink = n3.xyz; vWorld = n0.xyz;
+}`;
+const FS_NODE = `#version 300 es
+precision highp float;
+${COMMON}
+in vec2 vUv;
+flat in vec4 vA;
+flat in vec3 vCol;
+flat in vec3 vHot;
+flat in vec4 vB;
+flat in vec3 vBlink;
+flat in vec3 vWorld;
+out vec4 o;
+float ripple(float t, float d){
+  if (t <= 0.0) return 0.0;
+  float r = 1.3 + t*2.6;
+  return exp(-t*2.8) * smoothstep(0.0, 0.05, t) * exp(-(d - r)*(d - r)/0.05);
+}
+void main(){
+  float d = length(vUv);
+  float rpx = vA.x, discR = vA.z, coc = vA.w;
+  float kind = vB.y;
+  float energy = clamp(pow(rpx/discR, 1.6)*1.3, 0.05, 1.0);
+  float fl;
+  vec3 we = waveEnergy(vWorld, fl);
+  float blink = pow(0.5 + 0.5*cos(TAU*(vBlink.y*uPhi + vBlink.x)), 8.0)*vBlink.z;
+  float boost = 1.0 + 1.8*fl + blink;
+  vec3 col = vec3(0.0);
+
+  if (kind < 1.5){
+    float aa = 1.6/max(discR, 1.0);
+    float mask = 1.0 - smoothstep(1.0 - aa, 1.0, d);
+    vec3 n = vec3(vUv, sqrt(max(0.0, 1.0 - d*d)));
+    vec3 L = normalize(vec3(-0.45, 0.62, 0.65));
+    float diff = max(dot(n, L), 0.0);
+    float fres = pow(1.0 - n.z, 2.2);
+    float spec = pow(max(dot(reflect(-L, n), vec3(0.0, 0.0, 1.0)), 0.0), 60.0);
+    vec3 core = mix(vCol*0.32, vHot, pow(n.z, 3.0));
+    vec3 sph = (core*(0.50 + 0.65*diff) + vCol*fres*1.5 + vec3(spec)*0.85)*mask;
+    float rim = 0.55 + 0.45*smoothstep(0.5, 1.0, d);
+    vec3 bok = vCol*rim*mask*0.95;
+    col = mix(sph, bok, smoothstep(0.12, 0.7, coc));
+    float hd = max(d - 1.0, 0.0);
+    float halo = exp(-hd*2.9)*0.34 + exp(-hd*0.8)*0.028;
+    col += vCol*halo*(1.0 - 0.65*coc);
+    // shock-wave ripples when the block broadcast passes this node
+    float t0 = (uWave0.w - distance(vWorld, uWave0.xyz))/uWaveLife.z;
+    float t1 = (uWave1.w - distance(vWorld, uWave1.xyz))/uWaveLife.z;
+    col += (WCOL0*ripple(t0, d)*uWaveLife.x + WCOL1*ripple(t1, d)*uWaveLife.y)*0.7*(1.0 - coc);
+    col += we*0.22*halo*(1.0 - coc);
+    if (kind > 0.5){
+      float sx = exp(-abs(vUv.y)*15.0)*exp(-abs(vUv.x)*0.42);
+      float sy = exp(-abs(vUv.x)*15.0)*exp(-abs(vUv.y)*0.55);
+      col += mix(vCol, vec3(1.0), 0.45)*(sx*0.9 + sy*0.55)*(0.12 + 0.55*fl + 0.5*blink)*(1.0 - coc);
+    }
+    col *= boost*energy;
+  } else if (kind < 2.5){
+    float g = exp(-d*d*1.7);
+    col = mix(vCol, vHot, exp(-d*d*3.2))*g*1.7*boost;
+  } else {
+    float g = exp(-d*d*5.5)*(1.0 - smoothstep(0.86, 1.0, d));
+    col = mix(vCol, vHot, exp(-d*d*9.0))*g*(0.55 + 1.5*fl + blink*0.4);
+  }
+  o = vec4(col*vB.x, 1.0);
+}`;
+
+/* ---------- translucent cube faces (data-bit lattice) ---------- */
+const VS_FACE = `#version 300 es
+precision highp float;
+${COMMON}
+layout(location=0) in vec2 aCorner;
+layout(location=1) in vec4 f0;   // center.xyz, intensity
+layout(location=2) in vec4 f1;   // U.xyz, seed
+layout(location=3) in vec4 f2;   // V.xyz, -
+layout(location=4) in vec4 f3;   // color.rgb, wave weight
+uniform mat4 uView;
+uniform mat4 uProj;
+out vec2 vUv;
+out vec3 vP;
+flat out vec4 vF;
+flat out vec3 vCol;
+void main(){
+  vec3 P = f0.xyz + f1.xyz*aCorner.x + f2.xyz*aCorner.y;
+  vec4 v = uView*vec4(P, 1.0);
+  gl_Position = uProj*v;
+  vUv = aCorner;
+  vP = P;
+  vF = vec4(f0.w*depthFade(-v.z), f1.w, f3.w, 0.0);
+  vCol = f3.rgb;
+}`;
+const FS_FACE = `#version 300 es
+precision highp float;
+${COMMON}
+in vec2 vUv;
+in vec3 vP;
+flat in vec4 vF;
+flat in vec3 vCol;
+out vec4 o;
+float h21(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123); }
+void main(){
+  vec2 aq = abs(vUv);
+  float ad = max(aq.x, aq.y);
+  vec2 s = vec2(min(aq.x, aq.y), max(aq.x, aq.y));      // D4-symmetric coords
+  float edge = exp(-(1.0 - ad)*16.0);
+  vec2 cell = floor(s*5.0), cf = fract(s*5.0);
+  float hb = h21(cell + vF.y);
+  float on = step(0.60, hb);
+  float tw = 0.5 + 0.5*sin(TAU*(1.0 + floor(hb*2.0))*uPhi + hb*40.0);
+  float bit = on*tw*smoothstep(0.14, 0.3, min(cf.x, cf.y))*smoothstep(0.14, 0.3, min(1.0 - cf.x, 1.0 - cf.y));
+  vec2 gg = abs(fract(s*2.5) - 0.5);
+  float grid = 1.0 - smoothstep(0.0, 0.025, min(gg.x, gg.y));
+  float pp = fract(uPhi*2.0 + fract(vF.y*3.0));
+  float ping = exp(-pow((ad - pp)*8.0, 2.0))*(1.0 - pp);
+  vec3 gold = vec3(1.0, 0.64, 0.17);
+  vec3 col = vCol*(0.05 + 0.13*edge + 0.05*grid) + gold*bit*0.58*(1.0 - 0.4*ad)
+           + vCol*ping*0.55 + mix(vCol, vec3(1.0), 0.4)*edge*0.09;
+  float fl;
+  vec3 we = waveEnergy(vP, fl);
+  col += we*(0.12 + 0.9*edge + 0.5*grid + 0.9*bit)*vF.z;
+  o = vec4(col*vF.x, 1.0);
+}`;
+
+/* ---------- gold coins (opaque, depth-written, PBR-ish) ---------- */
+const VS_COIN = `#version 300 es
+precision highp float;
+${COMMON}
+layout(location=0) in vec2 aCorner;
+layout(location=1) in vec4 c0;  // center.xyz, radius
+layout(location=2) in vec4 c1;  // U.xyz, kind
+layout(location=3) in vec4 c2;  // V.xyz, slice offset
+layout(location=4) in vec4 c3;  // N.xyz, -
+uniform mat4 uView;
+uniform mat4 uProj;
+out vec2 vUv;
+out vec3 vP;
+flat out vec3 vU;
+flat out vec3 vV;
+flat out vec3 vN;
+flat out float vKind;
+void main(){
+  vec3 P = c0.xyz + c3.xyz*c2.w + (c1.xyz*aCorner.x + c2.xyz*aCorner.y)*c0.w;
+  vec4 v = uView*vec4(P, 1.0);
+  gl_Position = uProj*v;
+  vUv = aCorner; vP = P; vU = c1.xyz; vV = c2.xyz; vN = c3.xyz; vKind = c1.w;
+}`;
+const FS_COIN = `#version 300 es
+precision highp float;
+${COMMON}
+in vec2 vUv;
+in vec3 vP;
+flat in vec3 vU;
+flat in vec3 vV;
+flat in vec3 vN;
+flat in float vKind;
+uniform vec3 uEye;
+out vec4 o;
+float sdHex(vec2 p, float r){
+  const vec3 k = vec3(-0.866025404, 0.5, 0.577350269);
+  p = abs(p);
+  p -= 2.0*min(dot(k.xy, p), 0.0)*k.xy;
+  p -= vec2(clamp(p.x, -k.z*r, k.z*r), r);
+  return length(p)*sign(p.y);
+}
+float sdSeg(vec2 p, vec2 a, vec2 b){
+  vec2 pa = p - a, ba = b - a;
+  float h = clamp(dot(pa, ba)/dot(ba, ba), 0.0, 1.0);
+  return length(pa - ba*h);
+}
+float hgt(vec2 p){
+  float d = length(p);
+  float h = smoothstep(0.80, 0.855, d)*(1.0 - smoothstep(0.965, 1.0, d));
+  float ang = atan(p.y, p.x);
+  h += 0.55*smoothstep(0.35, 0.9, cos(ang*44.0))*(1.0 - smoothstep(0.022, 0.05, abs(d - 0.735)));
+  h += 0.9*(1.0 - smoothstep(0.010, 0.040, abs(sdHex(p.yx, 0.53))));
+  vec2 v0 = vec2(0.0, 0.31), v1 = vec2(-0.27, -0.155), v2 = vec2(0.27, -0.155);
+  float e = min(sdSeg(p, v0, v1), min(sdSeg(p, v1, v2), sdSeg(p, v2, v0)));
+  h += 0.7*(1.0 - smoothstep(0.009, 0.026, e));
+  float s = min(sdSeg(p, vec2(0.0), v0), min(sdSeg(p, vec2(0.0), v1), sdSeg(p, vec2(0.0), v2)));
+  h += 0.4*(1.0 - smoothstep(0.006, 0.02, s));
+  float nd = min(min(length(p - v0), length(p - v1)), min(length(p - v2), length(p)*1.35));
+  h += 1.1*(1.0 - smoothstep(0.04, 0.066, nd));
+  return h;
+}
+vec3 env(vec3 r){
+  float t = r.y*0.5 + 0.5;
+  vec3 sky = mix(vec3(0.03, 0.02, 0.02), vec3(0.16, 0.10, 0.08), smoothstep(0.3, 1.0, t));
+  float keyd = max(dot(r, normalize(vec3(0.55, 0.55, 0.65))), 0.0);
+  vec3 key = vec3(1.0, 0.72, 0.30)*(2.6*pow(keyd, 6.0) + 0.7*pow(keyd, 2.0));
+  float rimd = max(dot(r, normalize(vec3(-0.85, 0.15, 0.35))), 0.0);
+  vec3 rim = vec3(0.25, 0.50, 1.0)*1.1*pow(rimd, 5.0);
+  float strip = smoothstep(0.92, 0.99, dot(r, normalize(vec3(0.1, 0.9, 0.3))));
+  return sky*0.55 + key + rim + vec3(1.0, 0.9, 0.7)*strip*1.4 + 0.03;
+}
+void main(){
+  float d = length(vUv);
+  float aa = max(fwidth(d), 1e-4)*1.2;
+  float alpha = 1.0 - smoothstep(1.0 - aa, 1.0, d);
+  if (alpha < 0.004) discard;
+  vec3 V = normalize(uEye - vP);
+  vec3 nw;
+  float h = 0.0;
+  float ang = atan(vUv.y, vUv.x);
+  if (vKind < 1.5){
+    vec2 p = vKind < 0.5 ? vUv : vec2(-vUv.x, vUv.y);
+    float e = 0.006;
+    h = hgt(p);
+    vec2 g = vec2(hgt(p + vec2(e, 0.0)) - hgt(p - vec2(e, 0.0)), hgt(p + vec2(0.0, e)) - hgt(p - vec2(0.0, e)))/(2.0*e);
+    float sgn = vKind < 0.5 ? 1.0 : -1.0;
+    vec3 nl = normalize(vec3(-g*0.028, 1.0));
+    nw = normalize(vU*(nl.x*sgn) + vV*nl.y + vN*(nl.z*sgn));
+  } else {
+    vec3 side = normalize(vU*cos(ang) + vV*sin(ang));
+    float reed = 0.5 + 0.5*cos(ang*110.0);
+    nw = normalize(side + (vU*(-sin(ang)) + vV*cos(ang))*(reed - 0.5)*0.55);
+    h = 0.35 + 0.25*reed;
+  }
+  vec3 r = reflect(-V, nw);
+  vec3 F0 = vec3(1.0, 0.62, 0.16);
+  float fres = pow(1.0 - max(dot(nw, V), 0.0), 4.0);
+  vec3 col = F0*env(r)*(0.80 + 0.30*h) + fres*vec3(1.0, 0.85, 0.55)*0.35;
+  // ambient occlusion in the recessed plate
+  if (vKind < 1.5){
+    float plate = 1.0 - smoothstep(0.0, 0.25, h);
+    col *= 1.0 - 0.28*plate*smoothstep(0.86, 0.6, d);
+  }
+  float fl;
+  vec3 we = waveEnergy(vP, fl);
+  col += we*0.25*fl;
+  o = vec4(col*alpha, alpha);
+}`;
+
+/* ---------- ambient dust + big bokeh lights ---------- */
+const VS_DUST = `#version 300 es
+precision highp float;
+${COMMON}
+layout(location=0) in vec2 aCorner;
+layout(location=1) in vec4 d0;  // base.xyz (0..1), size
+layout(location=2) in vec4 d1;  // k.xyz (integer drift), twinkle k
+layout(location=3) in vec4 d2;  // color.rgb, brightness
+layout(location=4) in vec4 d3;  // phase, bokeh flag
+uniform mat4 uView;
+uniform mat4 uProj;
+uniform vec3 uExt;
+out vec2 vUv;
+flat out vec3 vCol;
+flat out vec4 vP;
+flat out vec4 vQ;
+void main(){
+  vec3 f = fract(d0.xyz + d1.xyz*uPhi);
+  vec3 P = (f - 0.5)*uExt;
+  float fw = 1.0;
+  if (d1.x != 0.0) fw *= smoothstep(0.0, 0.1, f.x)*smoothstep(1.0, 0.9, f.x);
+  if (d1.y != 0.0) fw *= smoothstep(0.0, 0.1, f.y)*smoothstep(1.0, 0.9, f.y);
+  if (d1.z != 0.0) fw *= smoothstep(0.0, 0.1, f.z)*smoothstep(1.0, 0.9, f.z);
+  P += 0.4*vec3(sin(TAU*uPhi + d3.x*40.0), cos(TAU*2.0*uPhi + d3.x*23.0), sin(TAU*uPhi + d3.x*11.0));
+  vec4 v = uView*vec4(P, 1.0);
+  float z = -v.z;
+  if (z < 1.5){ gl_Position = vec4(3.0, 3.0, 3.0, 1.0); return; }
+  float rs = uRes.y/2160.0;
+  bool bokeh = d3.y > 0.5;
+  float coc = bokeh ? 1.0 : cocOf(z);
+  float rpx = max(d0.w*uFocal/z, 0.6*rs);
+  float cocPx = coc*(bokeh ? 6.0 : 62.0)*rs;
+  float discR = sqrt(rpx*rpx + cocPx*cocPx);
+  float HM = bokeh ? 1.12 : 3.0;
+  float Q = discR*HM;
+  vec4 cp = uProj*v;
+  gl_Position = vec4(cp.xy + aCorner*Q*2.0/uRes*cp.w, cp.z, cp.w);
+  vUv = aCorner*HM;
+  float tw = 0.65 + 0.35*sin(TAU*d1.w*uPhi + d3.x*6.2831);
+  float energy = clamp(pow(rpx/discR, 1.6)*1.3, 0.05, 1.0);
+  float bright = d2.w*fw*tw*depthFade(z);
+  vCol = d2.rgb;
+  vP = vec4(bright, coc, bokeh ? 1.0 : 0.0, energy);
+  vQ = vec4(discR, 0.0, 0.0, 0.0);
+}`;
+const FS_DUST = `#version 300 es
+precision highp float;
+${COMMON}
+in vec2 vUv;
+flat in vec3 vCol;
+flat in vec4 vP;
+flat in vec4 vQ;
+out vec4 o;
+void main(){
+  float d = length(vUv);
+  float bright = vP.x, coc = vP.y, energy = vP.w;
+  vec3 col;
+  if (vP.z > 0.5){
+    float m = 1.0 - smoothstep(0.90, 1.0, d);
+    float rim = 0.45 + 0.55*smoothstep(0.55, 0.98, d);
+    col = vCol*m*rim*bright;
+  } else {
+    float disc = (1.0 - smoothstep(0.86, 1.0, d))*(0.6 + 0.4*smoothstep(0.5, 0.98, d));
+    float dot_ = exp(-d*d*3.2) + 0.25*exp(-d*d*0.7);
+    col = vCol*mix(dot_, disc, smoothstep(0.15, 0.7, coc))*bright*energy;
+  }
+  o = vec4(col, 1.0);
+}`;
+
+/* ---------- post: bloom ---------- */
+const FS_DOWN = `#version 300 es
+precision highp float;
+precision highp sampler2D;
+uniform sampler2D uTex;
+uniform vec2 uTexel;      // 1 / source size
+uniform vec2 uDst;        // destination size
+uniform float uFirst;
+out vec4 o;
+float lum(vec3 c){ return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+void main(){
+  vec2 uv = gl_FragCoord.xy/uDst;
+  vec2 t = uTexel;
+  vec3 a = texture(uTex, uv + t*vec2(-2.0,  2.0)).rgb;
+  vec3 b = texture(uTex, uv + t*vec2( 0.0,  2.0)).rgb;
+  vec3 c = texture(uTex, uv + t*vec2( 2.0,  2.0)).rgb;
+  vec3 d = texture(uTex, uv + t*vec2(-2.0,  0.0)).rgb;
+  vec3 e = texture(uTex, uv).rgb;
+  vec3 f = texture(uTex, uv + t*vec2( 2.0,  0.0)).rgb;
+  vec3 g = texture(uTex, uv + t*vec2(-2.0, -2.0)).rgb;
+  vec3 h = texture(uTex, uv + t*vec2( 0.0, -2.0)).rgb;
+  vec3 i = texture(uTex, uv + t*vec2( 2.0, -2.0)).rgb;
+  vec3 j = texture(uTex, uv + t*vec2(-1.0,  1.0)).rgb;
+  vec3 k = texture(uTex, uv + t*vec2( 1.0,  1.0)).rgb;
+  vec3 l = texture(uTex, uv + t*vec2(-1.0, -1.0)).rgb;
+  vec3 m = texture(uTex, uv + t*vec2( 1.0, -1.0)).rgb;
+  vec3 res;
+  if (uFirst > 0.5){
+    vec3 g0 = (a + b + d + e)*0.25, g1 = (b + c + e + f)*0.25, g2 = (d + e + g + h)*0.25, g3 = (e + f + h + i)*0.25, g4 = (j + k + l + m)*0.25;
+    float w0 = 1.0/(1.0 + lum(g0)), w1 = 1.0/(1.0 + lum(g1)), w2 = 1.0/(1.0 + lum(g2)), w3 = 1.0/(1.0 + lum(g3)), w4 = 1.0/(1.0 + lum(g4));
+    res = (g0*w0*0.125 + g1*w1*0.125 + g2*w2*0.125 + g3*w3*0.125 + g4*w4*0.5)/(w0*0.125 + w1*0.125 + w2*0.125 + w3*0.125 + w4*0.5);
+    float br = max(res.r, max(res.g, res.b));
+    float soft = clamp(br - 1.0 + 0.4, 0.0, 0.8);
+    soft = soft*soft/(4.0*0.4 + 1e-4);
+    float contrib = max(soft, br - 1.0)/max(br, 1e-4);
+    res *= contrib;
+  } else {
+    res = e*0.125 + (a + c + g + i)*0.03125 + (b + d + f + h)*0.0625 + (j + k + l + m)*0.125;
+  }
+  o = vec4(res, 1.0);
+}`;
+const FS_UP = `#version 300 es
+precision highp float;
+precision highp sampler2D;
+uniform sampler2D uTex;
+uniform vec2 uTexel;      // 1 / source (low-res) size
+uniform vec2 uDst;
+uniform float uWeight;
+out vec4 o;
+void main(){
+  vec2 uv = gl_FragCoord.xy/uDst;
+  vec2 t = uTexel;
+  vec3 r = texture(uTex, uv).rgb*4.0;
+  r += (texture(uTex, uv + t*vec2(0.0, 1.0)).rgb + texture(uTex, uv + t*vec2(0.0, -1.0)).rgb +
+        texture(uTex, uv + t*vec2(1.0, 0.0)).rgb + texture(uTex, uv + t*vec2(-1.0, 0.0)).rgb)*2.0;
+  r += texture(uTex, uv + t*vec2(1.0, 1.0)).rgb + texture(uTex, uv + t*vec2(-1.0, 1.0)).rgb +
+       texture(uTex, uv + t*vec2(1.0, -1.0)).rgb + texture(uTex, uv + t*vec2(-1.0, -1.0)).rgb;
+  o = vec4(r/16.0*uWeight, 1.0);
+}`;
+const FS_STREAK = `#version 300 es
+precision highp float;
+precision highp sampler2D;
+uniform sampler2D uTex;
+uniform vec2 uTexel;
+uniform vec2 uDst;
+out vec4 o;
+void main(){
+  vec2 uv = gl_FragCoord.xy/uDst;
+  vec3 s = vec3(0.0);
+  float ws = 0.0;
+  for (int i = -40; i <= 40; i++){
+    float x = float(i);
+    float w = exp(-x*x/380.0);
+    s += texture(uTex, uv + vec2(x*2.2*uTexel.x, 0.0)).rgb*w;
+    ws += w;
+  }
+  o = vec4(s/ws, 1.0);
+}`;
+const FS_COMP = `#version 300 es
+precision highp float;
+precision highp sampler2D;
+uniform sampler2D uScene;
+uniform sampler2D uBloom;
+uniform sampler2D uStreak;
+uniform vec2 uRes;
+uniform float uTime;
+out vec4 o;
+float h12(vec2 p){
+  vec3 p3 = fract(vec3(p.xyx)*0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y)*p3.z);
+}
+vec3 aces(vec3 x){
+  return clamp((x*(2.51*x + 0.03))/(x*(2.43*x + 0.59) + 0.14), 0.0, 1.0);
+}
+void main(){
+  vec2 uv = gl_FragCoord.xy/uRes;
+  vec2 c = uv - 0.5;
+  vec2 off = c*dot(c, c)*0.014;
+  vec3 s;
+  s.r = texture(uScene, uv + off).r;
+  s.g = texture(uScene, uv).g;
+  s.b = texture(uScene, uv - off).b;
+  vec3 bloom = texture(uBloom, uv).rgb;
+  vec3 streak = texture(uStreak, uv).rgb;
+  vec3 col = s + bloom*0.55 + streak*vec3(0.55, 0.80, 1.25)*0.16;
+  col = aces(col*0.85);
+  col = pow(col, vec3(1.0/2.2));
+  col = mix(col, col*col*(3.0 - 2.0*col), 0.22);
+  col += vec3(0.000, 0.004, 0.014)*(1.0 - col);
+  float asp = uRes.x/uRes.y;
+  float vg = 1.0 - smoothstep(0.30, 0.98, length(c*vec2(asp, 1.0)*0.95));
+  col *= mix(0.42, 1.0, vg);
+  float g1 = h12(gl_FragCoord.xy + uTime*vec2(61.3, 37.7));
+  float g2 = h12(gl_FragCoord.xy*1.31 + uTime*vec2(17.9, 83.1));
+  col += (g1 + g2 - 1.0)*(1.6/255.0);
+  o = vec4(col, 1.0);
+}`;
+
+/* ------------------------------------------------------------------ *
+ *  Programs, targets
+ * ------------------------------------------------------------------ */
+const P_BG = makeProgram(VS_FULL, FS_BG, 'bg');
+const P_LINE = makeProgram(VS_LINE, FS_LINE, 'line');
+const P_NODE = makeProgram(VS_NODE, FS_NODE, 'node');
+const P_FACE = makeProgram(VS_FACE, FS_FACE, 'face');
+const P_COIN = makeProgram(VS_COIN, FS_COIN, 'coin');
+const P_DUST = makeProgram(VS_DUST, FS_DUST, 'dust');
+const P_DOWN = makeProgram(VS_FULL, FS_DOWN, 'down');
+const P_UP = makeProgram(VS_FULL, FS_UP, 'up');
+const P_STREAK = makeProgram(VS_FULL, FS_STREAK, 'streak');
+const P_COMP = makeProgram(VS_FULL, FS_COMP, 'comp');
+
+const sceneRT = makeTarget(RW, RH, true, HDR);
+const LEVELS = 6;
+const bloomRT = [];
+for (let i = 0; i < LEVELS; i++) bloomRT.push(makeTarget(Math.max(2, RW >> (i + 1)), Math.max(2, RH >> (i + 1)), false, HDR));
+const streakRT = makeTarget(bloomRT[2].w, bloomRT[2].h, false, HDR);
+const emptyVAO = gl.createVertexArray();
+
+/* ------------------------------------------------------------------ *
+ *  SCENE DEFINITION  (all deterministic)
+ * ------------------------------------------------------------------ */
+
+/* ---- the blockchain: a helix of glass blocks ---- */
+const CHAIN_N = 8, CHAIN_HALF = 1.35;
+const chain = [];
+for (let i = 0; i < CHAIN_N; i++) {
+  const s = i / (CHAIN_N - 1), th = i * 0.78 + 0.5;
+  chain.push({
+    c: [-14.7 + 29.4 * s, 2.6 * Math.sin(th) - 0.2, 4.6 * Math.cos(th)],
+    m: [2, 3, 4][i % 3] * (i % 2 ? 1 : -1),     // quarter-turns per loop (cube has 90 degree symmetry)
+    m2: (i % 3) + 1,                             // thirds-of-a-turn per loop for the inner cube (3-fold about diagonal)
+    off: i * 0.7, bobK: 1 + (i % 2), seed: rr(0, 50)
+  });
+}
+function segDist(p, a, b) {
+  const ab = sub(b, a), ap = sub(p, a);
+  const t = Math.min(1, Math.max(0, dot(ap, ab) / dot(ab, ab)));
+  return dist3(p, [a[0] + ab[0] * t, a[1] + ab[1] * t, a[2] + ab[2] * t]);
+}
+function chainClear(p) {
+  for (let i = 0; i < CHAIN_N; i++) {
+    if (dist3(p, chain[i].c) < 3.7) return false;
+    if (i < CHAIN_N - 1 && segDist(p, chain[i].c, chain[i + 1].c) < 2.4) return false;
+  }
+  return true;
+}
+
+/* ---- node cloud ---- */
+const ELL = [30, 15.5, 16.5], MIN_D = 3.0, NODE_TARGET = 330;
+const nodes = [];
+for (let tries = 0; nodes.length < NODE_TARGET && tries < 150000; tries++) {
+  const x = rr(-1, 1), y = rr(-1, 1), z = rr(-1, 1);
+  if (x * x + y * y + z * z > 1) continue;
+  const p = [x * ELL[0], y * ELL[1], z * ELL[2]];
+  if (!chainClear(p)) continue;
+  let ok = true;
+  for (let k = 0; k < nodes.length; k++) {
+    const b = nodes[k].b, dx = p[0] - b[0], dy = p[1] - b[1], dz = p[2] - b[2];
+    if (dx * dx + dy * dy + dz * dz < MIN_D * MIN_D) { ok = false; break; }
+  }
+  if (!ok) continue;
+  const type = rng() < 0.44 ? 0 : 1;
+  nodes.push({
+    b: p, type, col: type ? BLUE : GOLD, hot: type ? BLUE_HOT : GOLD_HOT,
+    r: rr(0.17, 0.30), amp: rr(0.30, 0.75),
+    k: [ri(1, 2), ri(1, 2), ri(1, 2)], ph: [rr(0, TAU), rr(0, TAU), rr(0, TAU)],
+    bk: ri(1, 3), bp: rng(), ba: rr(0.15, 0.6), hub: false, cube: null
+  });
+}
+const NN = nodes.length;
+
+/* ---- hubs: far-apart validator nodes with orbit rings ---- */
+const hubs = [];
+{
+  let first = 0, best = 1e9;
+  for (let i = 0; i < NN; i++) { const d = dist3(nodes[i].b, [-12, 6, -8]); if (d < best) { best = d; first = i; } }
+  hubs.push(first);
+  const mind = new Float32Array(NN).fill(1e9);
+  while (hubs.length < 15) {
+    const last = nodes[hubs[hubs.length - 1]].b;
+    let bi = 0, bd = -1;
+    for (let i = 0; i < NN; i++) {
+      mind[i] = Math.min(mind[i], dist3(nodes[i].b, last));
+      if (mind[i] > bd) { bd = mind[i]; bi = i; }
+    }
+    hubs.push(bi);
+  }
+}
+const hubDefs = [];
+hubs.forEach((idx, hi) => {
+  const n = nodes[idx];
+  n.hub = true; n.r = rr(0.52, 0.68);
+  if (hi % 2 === 0) { n.type = 0; n.col = GOLD; n.hot = GOLD_HOT; } else { n.type = 1; n.col = BLUE; n.hot = BLUE_HOT; }
+  const rings = [];
+  for (let k = 0; k < 2; k++) {
+    const nrm = norm([rr(-1, 1), rr(-1, 1), rr(-1, 1)]);
+    const e1 = norm(cross(nrm, Math.abs(nrm[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0]));
+    const e2 = cross(nrm, e1);
+    rings.push({ e1, e2, rad: 1.35 + k * 0.62 + rr(0, 0.15), mk: (k ? -1 : 1) * ri(1, 2), ph: rr(0, TAU), col: (k ? !n.type : n.type) ? BLUE : GOLD });
+  }
+  hubDefs.push({ idx, rings });
+});
+
+/* ---- mini block-cubes wrapped around some nodes ---- */
+{
+  const cand = [];
+  for (let i = 0; i < NN; i++) if (!nodes[i].hub) cand.push(i);
+  for (let k = 0; k < 42; k++) {
+    const j = cand.splice(ri(0, cand.length - 1), 1)[0];
+    nodes[j].cube = { axis: norm([rr(-1, 1), rr(-1, 1), rr(-1, 1)]), m: rng() < 0.5 ? 1 : -1, off: rr(0, TAU), half: rr(0.42, 0.62) };
+  }
+}
+
+/* ---- edges (k nearest neighbours) ---- */
+const edges = [];
+{
+  const set = new Set();
+  const addEdge = (i, j, hubEdge) => {
+    if (i === j) return;
+    const key = i < j ? i * 4096 + j : j * 4096 + i;
+    if (set.has(key)) return;
+    set.add(key);
+    const speed = [1, 2, 2, 3][ri(0, 3)];
+    const cross_ = rr(1.0, 2.4);
+    const has = rng() < (hubEdge ? 0.9 : 0.6);
+    const flip = rng() < 0.5;
+    edges.push({
+      a: flip ? j : i, b: flip ? i : j,
+      w: hubEdge ? 0.028 : rr(0.018, 0.026), inten: hubEdge ? rr(0.34, 0.46) : rr(0.16, 0.26),
+      speed: has ? speed : 0, phase: rng(), duty: Math.min(0.9, cross_ * speed / DURATION),
+      bright: rr(0.85, 1.35)
+    });
+  };
+  for (let i = 0; i < NN; i++) {
+    const ds = [];
+    for (let j = 0; j < NN; j++) if (j !== i) ds.push([dist3(nodes[i].b, nodes[j].b), j]);
+    ds.sort((p, q) => p[0] - q[0]);
+    const K = nodes[i].hub ? 6 : 3;
+    for (let k = 0; k < K; k++) if (ds[k][0] < 7.4) addEdge(i, ds[k][1], nodes[i].hub);
+  }
+}
+/* ---- chain <-> network uplinks ---- */
+const uplinks = [];
+chain.forEach((ch, ci) => {
+  const ds = [];
+  for (let j = 0; j < NN; j++) ds.push([dist3(ch.c, nodes[j].b), j]);
+  ds.sort((p, q) => p[0] - q[0]);
+  for (let k = 0; k < 3; k++) uplinks.push({ ci, j: ds[k][1], speed: [1, 2, 3][k], phase: rng() });
+});
+
+/* ---- gold coins ---- */
+const coins = [
+  { c: [-19.5, 6.5, 9.0], r: 1.9, spin: 1, off: 0.4, tilt: 0.25, bk: 1 },
+  { c: [17.5, -5.5, 8.0], r: 1.6, spin: -1, off: 2.0, tilt: -0.3, bk: 2 },
+  { c: [10.5, 8.5, -7.0], r: 1.5, spin: 1, off: 4.0, tilt: 0.35, bk: 1 },
+  { c: [-8.5, -9.0, 10.5], r: 1.3, spin: -1, off: 1.2, tilt: 0.2, bk: 2 },
+  { c: [23.0, 3.5, -9.0], r: 1.9, spin: 1, off: 3.1, tilt: -0.2, bk: 1 },
+  { c: [-25.0, -4.5, -8.0], r: 1.7, spin: -1, off: 5.0, tilt: 0.3, bk: 2 },
+  { c: [3.0, -11.0, 5.0], r: 1.35, spin: 1, off: 2.6, tilt: -0.35, bk: 1 },
+  { c: [-3.0, 10.5, -10.0], r: 1.25, spin: -1, off: 0.9, tilt: 0.28, bk: 2 }
+];
+const COIN_SLICES = 8, COIN_THICK = 0.17;
+
+/* ---- ambient dust / bokeh ---- */
+const DUST_N = 2400, BOKEH_N = 110;
+const dust = makeInstanced(bufCornersQuad, [4, 4, 4, 4], DUST_N + BOKEH_N);
+{
+  const d = dust.data;
+  let o = 0;
+  const put = (bx, by, bz, size, kx, ky, kz, tk, col, bright, ph, bok) => {
+    d[o++] = bx; d[o++] = by; d[o++] = bz; d[o++] = size;
+    d[o++] = kx; d[o++] = ky; d[o++] = kz; d[o++] = tk;
+    d[o++] = col[0]; d[o++] = col[1]; d[o++] = col[2]; d[o++] = bright;
+    d[o++] = ph; d[o++] = bok; d[o++] = 0; d[o++] = 0;
+    dust.n++;
+  };
+  for (let i = 0; i < DUST_N; i++) {
+    const gold = rng() < 0.45;
+    const col = gold ? [1.0, 0.72, 0.28] : [0.35, 0.72, 1.0];
+    put(rng(), rng(), rng(), rr(0.028, 0.075), 0, rng() < 0.4 ? 1 : 0, 0, ri(1, 4), col, rr(0.35, 1.1), rng(), 0);
+  }
+  for (let i = 0; i < BOKEH_N; i++) {
+    const gold = rng() < 0.5;
+    const col = gold ? [1.0, 0.62, 0.16] : [0.14, 0.50, 1.0];
+    put(rng(), rng(), rng(), rr(0.5, 1.9), 0, rng() < 0.5 ? 1 : 0, 0, ri(1, 2), col, rr(0.03, 0.085), rng(), 1);
+  }
+}
+const DUST_EXT = [62, 30, 62];
+
+/* ---- dynamic instance buffers ---- */
+const MAX_LINES = 6200;
+const LN = makeInstanced(bufCornersLine, [4, 4, 4, 4, 4], MAX_LINES);
+const ND = makeInstanced(bufCornersQuad, [4, 4, 4, 4], 1600);
+const FC = makeInstanced(bufCornersQuad, [4, 4, 4, 4], 80);
+const CN = makeInstanced(bufCornersQuad, [4, 4, 4, 4], coins.length * COIN_SLICES + 8);
+
+function pushLine(ax, ay, az, bx, by, bz, w, inten, ca, cb, speed, phase, duty, bright, waveW) {
+  if (LN.n >= LN.max) return;
+  const d = LN.data, o = LN.n++ * 20;
+  d[o] = ax; d[o + 1] = ay; d[o + 2] = az; d[o + 3] = w;
+  d[o + 4] = bx; d[o + 5] = by; d[o + 6] = bz; d[o + 7] = inten;
+  d[o + 8] = ca[0]; d[o + 9] = ca[1]; d[o + 10] = ca[2]; d[o + 11] = speed;
+  d[o + 12] = cb[0]; d[o + 13] = cb[1]; d[o + 14] = cb[2]; d[o + 15] = phase;
+  d[o + 16] = duty; d[o + 17] = bright; d[o + 18] = waveW; d[o + 19] = 0;
+}
+function pushNode(x, y, z, r, col, kind, hot, inten, bph, bk, bamp) {
+  if (ND.n >= ND.max) return;
+  const d = ND.data, o = ND.n++ * 16;
+  d[o] = x; d[o + 1] = y; d[o + 2] = z; d[o + 3] = r;
+  d[o + 4] = col[0]; d[o + 5] = col[1]; d[o + 6] = col[2]; d[o + 7] = kind;
+  d[o + 8] = hot[0]; d[o + 9] = hot[1]; d[o + 10] = hot[2]; d[o + 11] = inten;
+  d[o + 12] = bph; d[o + 13] = bk; d[o + 14] = bamp; d[o + 15] = 0;
+}
+function pushFace(c, U, V, inten, seed, col, waveW) {
+  if (FC.n >= FC.max) return;
+  const d = FC.data, o = FC.n++ * 16;
+  d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = inten;
+  d[o + 4] = U[0]; d[o + 5] = U[1]; d[o + 6] = U[2]; d[o + 7] = seed;
+  d[o + 8] = V[0]; d[o + 9] = V[1]; d[o + 10] = V[2]; d[o + 11] = 0;
+  d[o + 12] = col[0]; d[o + 13] = col[1]; d[o + 14] = col[2]; d[o + 15] = waveW;
+}
+function pushCoin(c, r, U, kind, V, off, N) {
+  if (CN.n >= CN.max) return;
+  const d = CN.data, o = CN.n++ * 16;
+  d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = r;
+  d[o + 4] = U[0]; d[o + 5] = U[1]; d[o + 6] = U[2]; d[o + 7] = kind;
+  d[o + 8] = V[0]; d[o + 9] = V[1]; d[o + 10] = V[2]; d[o + 11] = off;
+  d[o + 12] = N[0]; d[o + 13] = N[1]; d[o + 14] = N[2]; d[o + 15] = 0;
+}
+
+/* cube helpers */
+const CUBE_CORNERS = [];
+for (let i = 0; i < 8; i++) CUBE_CORNERS.push([(i & 1) ? 1 : -1, (i & 2) ? 1 : -1, (i & 4) ? 1 : -1]);
+const CUBE_EDGES = [];
+for (let i = 0; i < 8; i++) for (const b of [1, 2, 4]) { const j = i ^ b; if (i < j) CUBE_EDGES.push([i, j]); }
+const CUBE_FACES = [
+  [[1, 0, 0], [0, 1, 0], [0, 0, 1]], [[-1, 0, 0], [0, 1, 0], [0, 0, 1]],
+  [[0, 1, 0], [1, 0, 0], [0, 0, 1]], [[0, -1, 0], [1, 0, 0], [0, 0, 1]],
+  [[0, 0, 1], [1, 0, 0], [0, 1, 0]], [[0, 0, -1], [1, 0, 0], [0, 1, 0]]
+];
+const DIAG = norm([1, 1, 1]);
+const vadd = (a, b, s) => [a[0] + b[0] * s, a[1] + b[1] * s, a[2] + b[2] * s];
+
+function wireCube(c, R, half, w, inten, col, waveW) {
+  const cor = CUBE_CORNERS.map(k => vadd(c, mulV(R, k), half));
+  for (const e of CUBE_EDGES) {
+    const A = cor[e[0]], B = cor[e[1]];
+    pushLine(A[0], A[1], A[2], B[0], B[1], B[2], w, inten, col, col, 0, 0, 0, 0, waveW);
+  }
+  return cor;
+}
+
+/* ------------------------------------------------------------------ *
+ *  PER-FRAME UPDATE
+ * ------------------------------------------------------------------ */
+const G = {
+  phi: 0, view: null, proj: perspective(36 * Math.PI / 180, RW / RH, 0.5, 260),
+  focal: (RH / 2) / Math.tan(18 * Math.PI / 180), focus: 32, eye: [0, 0, 32],
+  wave0: [0, 0, 0, 0], wave1: [0, 0, 0, 0], waveLife: [0, 0, 8.5], par: [0, 0]
+};
+const WAVE_V = 8.5;
+const NP = new Float32Array(NN * 3);
+
+function updateCamera(phi) {
+  const a = TAU * phi;
+  const yaw = 0.42 * Math.sin(a + 0.6);
+  const pitch = 0.16 + 0.07 * Math.sin(2 * a + 1.2);
+  const dist = 33.0 + 2.6 * Math.cos(a - 0.4);
+  const tx = 1.2 * Math.sin(a + 2.0), ty = 0.6 * Math.sin(2 * a), tz = 0;
+  const cp = Math.cos(pitch);
+  const e = [tx + dist * Math.sin(yaw) * cp, ty + dist * Math.sin(pitch), tz + dist * Math.cos(yaw) * cp];
+  const roll = 0.02 * Math.sin(2 * a + 0.3);
+  G.view = lookAt(e, [tx, ty, tz], [Math.sin(roll), Math.cos(roll), 0]);
+  G.eye = e;
+  G.focus = dist + 3.0 * Math.sin(2 * a + 0.8);
+  G.par = [yaw * 0.22, -pitch * 0.30];
+}
+function updateWaves(phi) {
+  const srcs = [chain[0].c, chain[CHAIN_N - 1].c];
+  for (let k = 0; k < 2; k++) {
+    const tau = ((phi - 0.5 * k) % 1 + 1) % 1;
+    const R = WAVE_V * tau * DURATION;
+    const life = smooth(0.0, 0.03, tau) * (1 - smooth(0.38, 0.56, tau));
+    const w = k ? G.wave1 : G.wave0;
+    w[0] = srcs[k][0]; w[1] = srcs[k][1]; w[2] = srcs[k][2]; w[3] = R;
+    G.waveLife[k] = life;
+  }
+  G.waveLife[2] = WAVE_V;
+}
+
+function updateScene(phi) {
+  const a = TAU * phi;
+  LN.n = 0; ND.n = 0; FC.n = 0; CN.n = 0;
+
+  /* node positions */
+  for (let i = 0; i < NN; i++) {
+    const n = nodes[i];
+    NP[i * 3] = n.b[0] + n.amp * Math.sin(a * n.k[0] + n.ph[0]);
+    NP[i * 3 + 1] = n.b[1] + n.amp * 0.8 * Math.sin(a * n.k[1] + n.ph[1]);
+    NP[i * 3 + 2] = n.b[2] + n.amp * Math.sin(a * n.k[2] + n.ph[2]);
+  }
+
+  /* network edges */
+  for (let i = 0; i < edges.length; i++) {
+    const e = edges[i], A = nodes[e.a], B = nodes[e.b];
+    const ia = e.a * 3, ib = e.b * 3;
+    pushLine(NP[ia], NP[ia + 1], NP[ia + 2], NP[ib], NP[ib + 1], NP[ib + 2],
+      e.w, e.inten, A.col, B.col, e.speed, e.phase, e.duty, e.bright, 1.0);
+  }
+
+  /* nodes + mini cubes */
+  for (let i = 0; i < NN; i++) {
+    const n = nodes[i], x = NP[i * 3], y = NP[i * 3 + 1], z = NP[i * 3 + 2];
+    pushNode(x, y, z, n.r, n.col, n.hub ? 1 : 0, n.hot, n.hub ? 1.15 : 1.0, n.bp, n.bk, n.ba);
+    if (n.cube) {
+      const R = rotAxis(n.cube.axis, TAU * phi * n.cube.m + n.cube.off);
+      wireCube([x, y, z], R, n.cube.half, 0.020, 0.62, n.col, 1.0);
+    }
+  }
+
+  /* hub orbit rings + satellites */
+  for (const h of hubDefs) {
+    const c = [NP[h.idx * 3], NP[h.idx * 3 + 1], NP[h.idx * 3 + 2]];
+    for (const rg of h.rings) {
+      const hot = TAU * phi * rg.mk + rg.ph, SEG = 40;
+      let prev = null;
+      for (let j = 0; j <= SEG; j++) {
+        const th = TAU * j / SEG;
+        const p = vadd(vadd(c, rg.e1, Math.cos(th) * rg.rad), rg.e2, Math.sin(th) * rg.rad);
+        if (prev) {
+          let dd = Math.abs(((th - TAU / SEG * 0.5 - hot) % TAU + TAU) % TAU); if (dd > Math.PI) dd = TAU - dd;
+          const inten = 0.16 + 0.95 * Math.exp(-dd * dd / 0.30);
+          pushLine(prev[0], prev[1], prev[2], p[0], p[1], p[2], 0.022, inten, rg.col, rg.col, 0, 0, 0, 0, 0.8);
+        }
+        prev = p;
+      }
+      const sp = vadd(vadd(c, rg.e1, Math.cos(hot) * rg.rad), rg.e2, Math.sin(hot) * rg.rad);
+      pushNode(sp[0], sp[1], sp[2], 0.085, rg.col, 2, rg.col === GOLD ? GOLD_HOT : BLUE_HOT, 1.2, 0, 1, 0);
+    }
+  }
+
+  /* the blockchain itself */
+  const centers = [];
+  for (let i = 0; i < CHAIN_N; i++) {
+    const ch = chain[i];
+    const c = [ch.c[0], ch.c[1] + 0.18 * Math.sin(a * ch.bobK + ch.off), ch.c[2]];
+    centers.push(c);
+    const R1 = rotX(HALF_PI * ch.m * phi + ch.off * HALF_PI);
+    const R2 = rotAxis(DIAG, (TAU / 3) * ch.m2 * phi * (i % 2 ? -1 : 1) + ch.off);
+    const cor = wireCube(c, R1, CHAIN_HALF, 0.055, 1.05, GOLD, 1.0);
+    wireCube(c, R2, CHAIN_HALF * 0.5, 0.034, 0.85, BLUE, 1.0);
+    for (const cc of cor) pushNode(cc[0], cc[1], cc[2], 0.11, GOLD, 0, GOLD_HOT, 1.5, ch.seed, 1, 0.3);
+    pushNode(c[0], c[1], c[2], 1.05, BLUE, 3, BLUE_HOT, 1.0, (i * 0.13) % 1, 1, 0.9);
+    for (const f of CUBE_FACES) {
+      const ctr = vadd(c, mulV(R1, f[0]), CHAIN_HALF);
+      pushFace(ctr, mulV(R1, [f[1][0] * CHAIN_HALF, f[1][1] * CHAIN_HALF, f[1][2] * CHAIN_HALF]),
+        mulV(R1, [f[2][0] * CHAIN_HALF, f[2][1] * CHAIN_HALF, f[2][2] * CHAIN_HALF]), 1.0, ch.seed, BLUE, 1.0);
+    }
+  }
+  /* links between blocks: pulsing axis + counter-twisting double helix */
+  for (let i = 0; i < CHAIN_N - 1; i++) {
+    const c0 = centers[i], c1 = centers[i + 1];
+    const dv = norm(sub(c1, c0));
+    const A = vadd(c0, dv, CHAIN_HALF * 1.08), B = vadd(c1, dv, -CHAIN_HALF * 1.08);
+    const e1 = norm(cross(dv, Math.abs(dv[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0])), e2 = cross(dv, e1);
+    pushLine(A[0], A[1], A[2], B[0], B[1], B[2], 0.045, 0.75, GOLD_HOT, BLUE_HOT, 3, (i * 0.31) % 1, 0.36, 1.5, 1.0);
+    for (let s = 0; s < 2; s++) {
+      let prev = null;
+      for (let j = 0; j <= 14; j++) {
+        const t = j / 14, th = TAU * (1.25 * t + 0.5 * s) + TAU * phi;
+        const rad = 0.24 * Math.sin(Math.PI * t);
+        const base = vadd(A, sub(B, A), t);
+        const p = vadd(vadd(base, e1, Math.cos(th) * rad), e2, Math.sin(th) * rad);
+        if (prev) pushLine(prev[0], prev[1], prev[2], p[0], p[1], p[2], 0.028, 0.85, s ? BLUE : GOLD, s ? BLUE : GOLD, 0, 0, 0, 0, 1.0);
+        prev = p;
+      }
+    }
+  }
+  /* uplinks: chain broadcasts to nearby validators */
+  for (const u of uplinks) {
+    const c = centers[u.ci], j = u.j * 3;
+    const dv = norm([NP[j] - c[0], NP[j + 1] - c[1], NP[j + 2] - c[2]]);
+    const A = vadd(c, dv, CHAIN_HALF * 1.1);
+    pushLine(A[0], A[1], A[2], NP[j], NP[j + 1], NP[j + 2], 0.032, 0.5, GOLD, nodes[u.j].col, u.speed, u.phase, 0.16 * u.speed, 1.3, 1.0);
+  }
+
+  /* coins */
+  for (const co of coins) {
+    const th = TAU * phi * co.spin + co.off;
+    const R = mulM(rotY(th), rotX(co.tilt));
+    const U = mulV(R, [1, 0, 0]), V = mulV(R, [0, 1, 0]), N = mulV(R, [0, 0, 1]);
+    const c = [co.c[0], co.c[1] + 0.35 * Math.sin(a * co.bk + co.off), co.c[2]];
+    const T = COIN_THICK * co.r;
+    pushCoin(c, co.r * 1.2, U, 1, V, -T * 0.5, N);
+    for (let s = 0; s < COIN_SLICES - 2; s++) pushCoin(c, co.r * 1.2, U, 2, V, T * (0.5 - (s + 1) / (COIN_SLICES - 1)), N);
+    pushCoin(c, co.r * 1.2, U, 0, V, T * 0.5, N);
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ *  RENDER
+ * ------------------------------------------------------------------ */
+function setCommon(P) {
+  const u = P.u;
+  if (u.uRes) gl.uniform2f(u.uRes, RW, RH);
+  if (u.uPhi) gl.uniform1f(u.uPhi, G.phi);
+  if (u.uFocal) gl.uniform1f(u.uFocal, G.focal);
+  if (u.uFocus) gl.uniform1f(u.uFocus, G.focus);
+  if (u.uWave0) gl.uniform4fv(u.uWave0, G.wave0);
+  if (u.uWave1) gl.uniform4fv(u.uWave1, G.wave1);
+  if (u.uWaveLife) gl.uniform3fv(u.uWaveLife, G.waveLife);
+  if (u.uView) gl.uniformMatrix4fv(u.uView, false, G.view);
+  if (u.uProj) gl.uniformMatrix4fv(u.uProj, false, G.proj);
+  if (u.uEye) gl.uniform3fv(u.uEye, G.eye);
+}
+function fullscreen() { gl.bindVertexArray(emptyVAO); gl.drawArrays(gl.TRIANGLES, 0, 3); }
+function bindTex(unit, tex) { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, tex); }
+
+function renderFrame(t) {
+  const phi = ((t % DURATION) + DURATION) % DURATION / DURATION;
+  G.phi = phi;
+  updateCamera(phi);
+  updateWaves(phi);
+  updateScene(phi);
+  uploadInst(LN); uploadInst(ND); uploadInst(FC); uploadInst(CN);
+
+  /* ---- scene pass (HDR) ---- */
+  gl.bindFramebuffer(gl.FRAMEBUFFER, sceneRT.fb);
+  gl.viewport(0, 0, RW, RH);
+  gl.disable(gl.BLEND);
+  gl.disable(gl.DEPTH_TEST);
+  gl.depthMask(true);
+  gl.clearColor(0, 0, 0, 1);
+  gl.clearDepth(1.0);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+  gl.useProgram(P_BG.p); setCommon(P_BG);
+  gl.uniform2f(P_BG.u.uPar, G.par[0], G.par[1]);
+  fullscreen();
+
+  // opaque-ish coins (depth write)
+  gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LESS); gl.depthMask(true);
+  gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+  gl.useProgram(P_COIN.p); setCommon(P_COIN);
+  drawInst(CN);
+
+  // additive light passes (depth-tested against coins, no depth write)
+  gl.depthMask(false); gl.depthFunc(gl.LEQUAL);
+  gl.blendFunc(gl.ONE, gl.ONE);
+
+  gl.useProgram(P_DUST.p); setCommon(P_DUST);
+  gl.uniform3fv(P_DUST.u.uExt, DUST_EXT);
+  drawInst(dust);
+
+  gl.useProgram(P_FACE.p); setCommon(P_FACE);
+  drawInst(FC);
+
+  gl.useProgram(P_LINE.p); setCommon(P_LINE);
+  drawInst(LN);
+
+  gl.useProgram(P_NODE.p); setCommon(P_NODE);
+  drawInst(ND);
+
+  /* ---- bloom ---- */
+  gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND);
+  gl.useProgram(P_DOWN.p);
+  gl.uniform1i(P_DOWN.u.uTex, 0);
+  let src = sceneRT;
+  for (let i = 0; i < LEVELS; i++) {
+    const dst = bloomRT[i];
+    gl.bindFramebuffer(gl.FRAMEBUFFER, dst.fb);
+    gl.viewport(0, 0, dst.w, dst.h);
+    bindTex(0, src.tex);
+    gl.uniform2f(P_DOWN.u.uTexel, 1 / src.w, 1 / src.h);
+    gl.uniform2f(P_DOWN.u.uDst, dst.w, dst.h);
+    gl.uniform1f(P_DOWN.u.uFirst, i === 0 ? 1 : 0);
+    fullscreen();
+    src = dst;
+  }
+  // anamorphic streak from level 2
+  gl.useProgram(P_STREAK.p);
+  gl.uniform1i(P_STREAK.u.uTex, 0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, streakRT.fb);
+  gl.viewport(0, 0, streakRT.w, streakRT.h);
+  bindTex(0, bloomRT[2].tex);
+  gl.uniform2f(P_STREAK.u.uTexel, 1 / bloomRT[2].w, 1 / bloomRT[2].h);
+  gl.uniform2f(P_STREAK.u.uDst, streakRT.w, streakRT.h);
+  fullscreen();
+  // up-sample chain (accumulate into the higher level)
+  gl.useProgram(P_UP.p);
+  gl.uniform1i(P_UP.u.uTex, 0);
+  gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+  for (let i = LEVELS - 2; i >= 0; i--) {
+    const lo = bloomRT[i + 1], hi = bloomRT[i];
+    gl.bindFramebuffer(gl.FRAMEBUFFER, hi.fb);
+    gl.viewport(0, 0, hi.w, hi.h);
+    bindTex(0, lo.tex);
+    gl.uniform2f(P_UP.u.uTexel, 1 / lo.w, 1 / lo.h);
+    gl.uniform2f(P_UP.u.uDst, hi.w, hi.h);
+    gl.uniform1f(P_UP.u.uWeight, i === 0 ? 0.9 : 0.95);
+    fullscreen();
+  }
+  gl.disable(gl.BLEND);
+
+  /* ---- composite to screen ---- */
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, RW, RH);
+  gl.useProgram(P_COMP.p);
+  gl.uniform1i(P_COMP.u.uScene, 0);
+  gl.uniform1i(P_COMP.u.uBloom, 1);
+  gl.uniform1i(P_COMP.u.uStreak, 2);
+  bindTex(0, sceneRT.tex); bindTex(1, bloomRT[0].tex); bindTex(2, streakRT.tex);
+  gl.uniform2f(P_COMP.u.uRes, RW, RH);
+  gl.uniform1f(P_COMP.u.uTime, phi * DURATION);
+  fullscreen();
+}
+
+/* ------------------------------------------------------------------ *
+ *  TIMELINE  (autoplay, seamless 15 s loop)
+ * ------------------------------------------------------------------ */
+let playing = true, t0 = null, offset = 0;
+window.LOOP_DURATION = DURATION;
+window.setTime = function (sec) { renderFrame(sec); };
+window.pause = function () { playing = false; };
+window.play = function () { playing = true; t0 = null; };
+
+const fixed = qs.get('t');
+renderFrame(fixed !== null ? parseFloat(fixed) || 0 : 0);   // warm-up + first frame
+if (fixed === null) {
+  const tick = (ts) => {
+    if (playing) {
+      if (t0 === null) t0 = ts - offset;
+      offset = ts - t0;
+      renderFrame((offset / 1000) % DURATION);
+    }
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+window.__ready = true;
+})();
+</script>
+</body>
+</html>
