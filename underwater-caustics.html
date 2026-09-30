@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=3840, height=2160">
+<title>Underwater Caustics – Sun Rays Loop (15s, 4K)</title>
+<style>
+  html, body {
+    margin: 0; padding: 0;
+    width: 3840px; height: 2160px;
+    overflow: hidden;
+    background: #02101f;
+  }
+  canvas {
+    display: block;
+    position: absolute; left: 0; top: 0;
+    width: 3840px; height: 2160px;
+  }
+</style>
+</head>
+<body>
+<canvas id="c" width="3840" height="2160"></canvas>
+
+<script id="vs" type="x-shader/x-vertex">
+attribute vec2 aPos;
+void main() { gl_Position = vec4(aPos, 0.0, 1.0); }
+</script>
+
+<script id="fs" type="x-shader/x-fragment">
+precision highp float;
+
+uniform vec2  uRes;   // canvas resolution
+uniform float uT;     // loop phase 0..1 (15 s)
+
+#define TAU 6.283185307179586
+
+/* ---------- hashing ---------- */
+vec3 hash33(vec3 p) {
+  p = fract(p * vec3(443.897, 441.423, 437.195));
+  p += dot(p, p.yxz + 19.19);
+  return fract((p.xxy + p.yxx) * p.zyx);
+}
+float hash12(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+
+/* ---------- 3D simplex noise (Ashima / Ian McEwan) ---------- */
+vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+vec4 permute(vec4 x) { return mod289(((x * 34.0) + 1.0) * x); }
+vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
+
+float snoise(vec3 v) {
+  const vec2 C = vec2(1.0 / 6.0, 1.0 / 3.0);
+  const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
+  vec3 i  = floor(v + dot(v, C.yyy));
+  vec3 x0 = v - i + dot(i, C.xxx);
+  vec3 g  = step(x0.yzx, x0.xyz);
+  vec3 l  = 1.0 - g;
+  vec3 i1 = min(g.xyz, l.zxy);
+  vec3 i2 = max(g.xyz, l.zxy);
+  vec3 x1 = x0 - i1 + C.xxx;
+  vec3 x2 = x0 - i2 + C.yyy;
+  vec3 x3 = x0 - D.yyy;
+  i = mod289(i);
+  vec4 p = permute(permute(permute(
+            i.z + vec4(0.0, i1.z, i2.z, 1.0))
+          + i.y + vec4(0.0, i1.y, i2.y, 1.0))
+          + i.x + vec4(0.0, i1.x, i2.x, 1.0));
+  float n_ = 0.142857142857;
+  vec3 ns = n_ * D.wyz - D.xzx;
+  vec4 j  = p - 49.0 * floor(p * ns.z * ns.z);
+  vec4 x_ = floor(j * ns.z);
+  vec4 y_ = floor(j - 7.0 * x_);
+  vec4 x  = x_ * ns.x + ns.yyyy;
+  vec4 y  = y_ * ns.x + ns.yyyy;
+  vec4 h  = 1.0 - abs(x) - abs(y);
+  vec4 b0 = vec4(x.xy, y.xy);
+  vec4 b1 = vec4(x.zw, y.zw);
+  vec4 s0 = floor(b0) * 2.0 + 1.0;
+  vec4 s1 = floor(b1) * 2.0 + 1.0;
+  vec4 sh = -step(h, vec4(0.0));
+  vec4 a0 = b0.xzyw + s0.xzyw * sh.xxyy;
+  vec4 a1 = b1.xzyw + s1.xzyw * sh.zzww;
+  vec3 p0 = vec3(a0.xy, h.x);
+  vec3 p1 = vec3(a0.zw, h.y);
+  vec3 p2 = vec3(a1.xy, h.z);
+  vec3 p3 = vec3(a1.zw, h.w);
+  vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3)));
+  p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;
+  vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
+  m = m * m;
+  return 42.0 * dot(m * m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
+}
+
+/* ---------- caustic light net ----------
+   Zero-crossings of layered noise form closed bright ridges = caustics.
+   All time terms are sin/cos of integer multiples of T, so the field
+   is exactly periodic over the 15 s loop. */
+float causticField(vec2 q, float T) {
+  float c = 0.0;
+  float amp = 1.0;
+  mat2 R = mat2(0.80, 0.60, -0.60, 0.80);
+  for (int i = 0; i < 3; i++) {
+    float fi = float(i);
+    float ph = fi * 2.094;
+    vec3 s1 = vec3(q + vec2(cos(T + ph), sin(T + ph)) * 0.32,
+                   fi * 4.71 + 0.45 * sin(T - ph));
+    vec3 s2 = vec3(q * 1.63 + vec2(3.1, 1.7) + vec2(-sin(T - ph), cos(T - ph)) * 0.27,
+                   fi * 3.3 + 8.0 + 0.45 * cos(T + ph));
+    float n = snoise(s1) * 0.72 + snoise(s2) * 0.48;
+    float v = max(1.0 - abs(n), 0.0);
+    // sharp filament + soft halo
+    c += (pow(v, 12.0) * 1.0 + pow(v, 3.0) * 0.09) * amp;
+    q = R * q * 1.55 + 2.7;
+    amp *= 0.60;
+  }
+  return c;
+}
+
+/* ---------- volumetric sun shafts ---------- */
+float sunRays(vec2 p, vec2 sun, float T) {
+  vec2 d = p - sun;
+  float r = length(d);
+  float ang = atan(d.x, -d.y);           // angle from straight-down
+  float n = 0.0;
+  n += snoise(vec3(ang * 9.0,        r * 0.50 + 0.35 * cos(T),       0.35 * sin(T) + 3.0))        * 0.55;
+  n += snoise(vec3(ang * 19.0 + 7.0, r * 0.35 - 0.30 * sin(T + 2.0), 0.30 * cos(T + 2.0) + 9.0))  * 0.30;
+  n += snoise(vec3(ang * 4.0 + 1.0,  0.40 * cos(T + 4.0),            0.40 * sin(T + 4.0) + 15.0)) * 0.45;
+  float shaft = smoothstep(-0.15, 0.85, n);
+  shaft *= shaft;
+  float env  = exp(-ang * ang * 1.5);    // cone width
+  float fall = smoothstep(2.3, 0.15, r); // fade with depth
+  return shaft * env * fall;
+}
+
+/* ---------- drifting marine snow (bokeh particles) ---------- */
+float particles(vec2 p, float T, float scale, float seed, float size, float density) {
+  vec2 q = p * scale + vec2(seed * 7.3, seed * 3.1);
+  vec2 cell = floor(q);
+  vec2 f = q - cell;
+  float acc = 0.0;
+  for (int y = -1; y <= 1; y++) {
+    for (int x = -1; x <= 1; x++) {
+      vec2 o = vec2(float(x), float(y));
+      vec3 h = hash33(vec3(cell + o, seed));
+      if (h.y > density) continue;
+      // slow elliptical drift, unique phase per particle -> loops exactly
+      float dir = h.x > 0.5 ? 1.0 : -1.0;
+      vec2 wob = vec2(cos(dir * T + h.x * TAU) * (0.25 + 0.2 * h.z),
+                      sin(dir * T + h.y * TAU) * (0.18 + 0.15 * h.x));
+      vec2 pos = o + 0.5 + wob;
+      float dd = length(f - pos);
+      float sz = size * (0.55 + h.z);
+      float tw = 0.65 + 0.35 * sin(2.0 * T + h.x * 25.0);
+      acc += smoothstep(sz, sz * 0.15, dd) * tw;
+    }
+  }
+  return acc;
+}
+
+vec3 aces(vec3 x) {
+  return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+}
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / uRes;
+  float aspect = uRes.x / uRes.y;
+  float T = uT * TAU;
+
+  vec2 p = (uv - 0.5) * vec2(aspect, 1.0);
+
+  // gentle camera sway = slow water movement
+  p += vec2(sin(T) * 0.012, cos(2.0 * T) * 0.007);
+  p *= 1.0 + 0.012 * sin(T + 1.0);
+
+  /* --- water body gradient --- */
+  float depth = uv.y;
+  vec3 deep    = vec3(0.002, 0.018, 0.060);
+  vec3 mid     = vec3(0.012, 0.185, 0.355);
+  vec3 shallow = vec3(0.070, 0.490, 0.660);
+  vec3 col = mix(deep, mid, smoothstep(-0.10, 0.65, depth));
+  col = mix(col, shallow, smoothstep(0.60, 1.15, depth));
+  col *= 0.90 + 0.18 * smoothstep(1.0, 0.0, abs(p.x - 0.18));
+
+  /* --- large-scale refracted light wash (slow volume breathing) --- */
+  float wash = snoise(vec3(p * 1.1 + vec2(cos(T), sin(T)) * 0.5, 40.0));
+  col *= 1.0 + 0.16 * wash;
+
+  /* --- caustics with chromatic dispersion --- */
+  vec2 q = p * 2.6;
+  q.y *= 1.12;
+  vec2 warp = vec2(
+    snoise(vec3(q * 0.55 + vec2(cos(T),  sin(T)) * 0.45, 21.0)),
+    snoise(vec3(q * 0.55 + vec2(sin(T), -cos(T)) * 0.45, 37.0)));
+  q += warp * 0.22;
+  vec2 chroma = vec2(0.011, 0.006);
+  float cr = causticField(q - chroma, T);
+  float cg = causticField(q, T);
+  float cb = causticField(q + chroma, T);
+  vec3 caus = vec3(cr, cg, cb);
+  float cfade = mix(0.10, 1.0, smoothstep(-0.62, 0.55, p.y));
+  col += caus * vec3(0.55, 0.86, 0.97) * 0.70 * cfade;
+
+  /* --- sun shafts --- */
+  vec2 sun = vec2(0.22, 1.05);
+  float rays = sunRays(p, sun, T);
+  float rays2 = sunRays(p * 1.7 + vec2(0.3, 0.0), sun * 1.7 + vec2(0.3, 0.0), T + 2.5) * 0.5;
+  col += (rays + rays2) * vec3(0.45, 0.80, 0.95) * 1.05;
+
+  // soft sun glow bleeding through the surface
+  float r = length(p - sun);
+  col += exp(-r * r * 2.6) * vec3(0.50, 0.88, 1.00) * 0.55;
+  col += exp(-r * r * 0.9) * vec3(0.20, 0.45, 0.60) * 0.25;
+
+  /* --- particles: far (sharp, tiny), mid, near (soft bokeh) --- */
+  float pf = particles(p, T, 26.0, 1.0, 0.045, 0.30);
+  float pm = particles(p, T, 12.0, 2.0, 0.060, 0.28);
+  float pn = particles(p + vec2(0.0, 0.02 * sin(T)), T, 5.5, 3.0, 0.11, 0.22);
+  float plight = 0.35 + 0.65 * smoothstep(-0.6, 0.6, p.y) + rays * 1.5;
+  col += pf * vec3(0.70, 0.90, 1.00) * 0.40 * plight;
+  col += pm * vec3(0.65, 0.88, 1.00) * 0.30 * plight;
+  col += pn * vec3(0.60, 0.85, 1.00) * 0.14 * plight;
+
+  /* --- finishing --- */
+  float vig = smoothstep(1.45, 0.30, length(p * vec2(0.78, 1.0)));
+  col *= mix(0.55, 1.0, vig);
+
+  col = aces(col * 1.25);
+  col = pow(col, vec3(1.0 / 1.05));
+
+  // fine dither to kill banding in the deep gradient
+  float grain = hash12(gl_FragCoord.xy + vec2(uT * 97.0, 0.0)) - 0.5;
+  col += grain * (1.8 / 255.0);
+
+  gl_FragColor = vec4(col, 1.0);
+}
+</script>
+
+<script>
+(function () {
+  var LOOP_MS = 15000;             // 15 second seamless loop
+  var canvas = document.getElementById('c');
+  var opts = { antialias: false, alpha: false, depth: false, stencil: false,
+               preserveDrawingBuffer: true, powerPreference: 'high-performance' };
+  var gl = canvas.getContext('webgl2', opts) || canvas.getContext('webgl', opts) ||
+           canvas.getContext('experimental-webgl', opts);
+  if (!gl) { document.body.style.background = '#03203a'; return; }
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error(gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, document.getElementById('vs').textContent));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, document.getElementById('fs').textContent));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error(gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'aPos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uRes = gl.getUniformLocation(prog, 'uRes');
+  var uT   = gl.getUniformLocation(prog, 'uT');
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.uniform2f(uRes, canvas.width, canvas.height);
+
+  var t0 = null;
+  function frame(now) {
+    if (t0 === null) t0 = now;
+    var phase = ((now - t0) % LOOP_MS) / LOOP_MS;   // 0 -> 1, wraps every 15 s
+    gl.uniform1f(uT, phase);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
