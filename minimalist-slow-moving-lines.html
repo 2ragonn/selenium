@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Minimalist Slow Moving Lines</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #cdcfd2;
+  }
+  #stage {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 3840px;
+    height: 2160px;
+    overflow: hidden;
+    transform-origin: 0 0;
+  }
+  #c {
+    display: block;
+    width: 3840px;
+    height: 2160px;
+  }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="c" width="3840" height="2160"></canvas></div>
+
+<script>
+/*
+  Minimalist Slow Moving Lines
+  3840 x 2160 · 15 s · seamless loop · autoplays on open
+
+  Every moving quantity is a function of  tau = 2*PI * t / 15  using whole
+  harmonics only, so frame(0) === frame(15) and the loop has no seam.
+
+  Render hooks for capture tools:
+    window.DURATION            -> 15
+    window.renderFrame(sec)    -> draws the frame at time `sec` (deterministic)
+    ?t=3.5                     -> opens paused on a single frame
+    window.__t                 -> current loop time in seconds
+*/
+(() => {
+  const W = 3840, H = 2160, DUR = 15, TAU = Math.PI * 2;
+  const cv = document.getElementById('c');
+  const stage = document.getElementById('stage');
+  const ctx = cv.getContext('2d', { alpha: false });
+
+  /* ---------- fit to window (scale 1 at 3840x2160) ---------- */
+  function fit() {
+    const s = Math.min(innerWidth / W, innerHeight / H);
+    stage.style.transform =
+      `translate(${(innerWidth - W * s) / 2}px, ${(innerHeight - H * s) / 2}px) scale(${s})`;
+  }
+  addEventListener('resize', fit);
+  fit();
+
+  /* ---------- deterministic random ---------- */
+  function mulberry(seed) {
+    return () => {
+      seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  const rnd = mulberry(7301);
+  const between = (a, b) => a + (b - a) * rnd();
+
+  /* ---------- palette ---------- */
+  const INK   = '30,34,42';      // graphite hairlines
+  const SNOW  = '255,255,255';   // white hairlines
+
+  /* ---------- static background (smooth gray) ---------- */
+  const bg = document.createElement('canvas');
+  bg.width = W; bg.height = H;
+  {
+    const b = bg.getContext('2d');
+    const g = b.createLinearGradient(0, 0, W, H);
+    g.addColorStop(0.00, '#d9dbde');
+    g.addColorStop(0.50, '#cdcfd3');
+    g.addColorStop(1.00, '#bfc2c7');
+    b.fillStyle = g; b.fillRect(0, 0, W, H);
+
+    const v = b.createRadialGradient(W * .5, H * .5, H * .35, W * .5, H * .5, W * .68);
+    v.addColorStop(0, 'rgba(0,0,0,0)');
+    v.addColorStop(1, 'rgba(20,24,32,0.16)');
+    b.fillStyle = v; b.fillRect(0, 0, W, H);
+  }
+
+  /* ---------- fine static grain (kills gradient banding after encode) ---------- */
+  const grain = document.createElement('canvas');
+  grain.width = grain.height = 256;
+  {
+    const gc = grain.getContext('2d');
+    const im = gc.createImageData(256, 256);
+    const gr = mulberry(99);
+    for (let i = 0; i < im.data.length; i += 4) {
+      const v = 128 + (gr() + gr() + gr() - 1.5) * 90;
+      im.data[i] = im.data[i + 1] = im.data[i + 2] = v;
+      im.data[i + 3] = 255;
+    }
+    gc.putImageData(im, 0, 0);
+  }
+  const grainPattern = ctx.createPattern(grain, 'repeat');
+
+  /* ---------- wave term: whole-harmonic travelling / breathing sine ---------- */
+  //  L: wavelength px · dir: -1,0,1 (whole cycles per loop) · wob: breathing phase swing
+  const wave = (x, p, tau) =>
+    Math.sin(TAU * x / p.L + p.ph + p.dir * tau + p.wob * Math.sin(tau + p.psi));
+  const W_ = (L, ph, dir, wob = 0, psi = 0) => ({ L, ph, dir, wob, psi });
+
+  /* ---------- ribbons: bundles of parallel hairlines that swell, pinch and twist ---------- */
+  const ribbons = [
+    { // deep, faint, wide
+      ang: -30, cx: W * .46, cy: H * .34, dx: 70, dy: 50, rot: .010, ph: 0.4,
+      n: 26, S0: 1150, ink: INK, alpha: .105, width: 1.25,
+      sp: [{ a: .34, w: W_(3800, 1.0, 0, 1.0, 0.5) }, { a: .14, w: W_(2100, 2.2, 1) }],
+      c:  [{ A: 210, w: W_(4200, .2, 0, 1.2, 1.4) },  { A: 60, w: W_(1900, 1.1, -1) }],
+      tw: { A: .10, w: W_(2300, .4, 1), k: 3.2 }
+    },
+    { // hero bundle: graphite
+      ang: -13, cx: W * .5, cy: H * .52, dx: 90, dy: 60, rot: .016, ph: 1.7,
+      n: 54, S0: 600, ink: INK, alpha: .30, width: 1.6, heroEvery: 17,
+      sp: [{ a: .50, w: W_(3000, .6, 0, 1.1, 0.0) }, { a: .22, w: W_(1550, 2.1, 1) }],
+      c:  [{ A: 175, w: W_(3400, 1.2, 0, 1.0, 2.0) }, { A: 55, w: W_(1750, .3, -1) }],
+      tw: { A: .16, w: W_(1950, .8, -1), k: 3.6 }
+    },
+    { // white glass bundle
+      ang: 9, cx: W * .5, cy: H * .70, dx: 80, dy: 50, rot: .014, ph: 3.1,
+      n: 36, S0: 400, ink: SNOW, alpha: .78, width: 1.7, heroEvery: 11,
+      sp: [{ a: .46, w: W_(3200, 2.4, 0, 1.0, 1.0) }, { a: .20, w: W_(1700, .9, -1) }],
+      c:  [{ A: 150, w: W_(3600, 4.0, 0, 1.1, 3.0) }, { A: 45, w: W_(1650, 2.0, 1) }],
+      tw: { A: .15, w: W_(2100, 1.5, 1), k: 3.0 }
+    },
+    { // small white accent, upper band
+      ang: 2.5, cx: W * .52, cy: H * .22, dx: 60, dy: 40, rot: .010, ph: 4.4,
+      n: 18, S0: 230, ink: SNOW, alpha: .60, width: 1.4,
+      sp: [{ a: .42, w: W_(2800, 3.0, 0, 1.0, 2.2) }, { a: .18, w: W_(1500, 1.4, 1) }],
+      c:  [{ A: 90, w: W_(3100, .9, 0, 1.0, 0.7) }, { A: 30, w: W_(1500, 2.7, -1) }],
+      tw: { A: .14, w: W_(1800, .3, -1), k: 2.6 }
+    },
+    { // low graphite echo
+      ang: -5, cx: W * .48, cy: H * .90, dx: 70, dy: 40, rot: .012, ph: 5.2,
+      n: 16, S0: 260, ink: INK, alpha: .17, width: 1.3,
+      sp: [{ a: .40, w: W_(3300, 1.9, 0, 1.0, 4.0) }, { a: .18, w: W_(1800, .5, 1) }],
+      c:  [{ A: 80, w: W_(3500, 2.6, 0, 1.0, 5.0) }, { A: 35, w: W_(1700, .1, -1) }],
+      tw: { A: .13, w: W_(2000, 2.4, 1), k: 2.8 }
+    }
+  ];
+
+  // per-line jitter, fixed for determinism
+  ribbons.forEach(r => { r.jit = Array.from({ length: r.n }, () => .82 + rnd() * .36); });
+
+  const X0 = -2900, X1 = 2900, STEP = 18;
+  const NX = Math.floor((X1 - X0) / STEP) + 1;
+  const bufSp = new Float32Array(NX), bufC = new Float32Array(NX), bufTw = new Float32Array(NX);
+
+  function drawRibbon(r, tau) {
+    ctx.save();
+    ctx.translate(r.cx + r.dx * Math.sin(tau + r.ph), r.cy + r.dy * Math.cos(tau + r.ph * .7));
+    ctx.rotate(r.ang * Math.PI / 180 + r.rot * Math.sin(tau + r.ph * 1.3));
+
+    const breathe = 1 + .07 * Math.sin(tau + r.ph);
+    for (let k = 0; k < NX; k++) {
+      const x = X0 + k * STEP;
+      let sp = 1, c = 0;
+      for (const t of r.sp) sp += t.a * wave(x, t.w, tau);
+      for (const t of r.c) c += t.A * wave(x, t.w, tau);
+      bufSp[k] = r.S0 * breathe * sp;
+      bufC[k] = c;
+      bufTw[k] = TAU * x / r.tw.w.L + r.tw.w.ph + r.tw.w.dir * tau;
+    }
+
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    for (let i = 0; i < r.n; i++) {
+      const u = i / (r.n - 1) - .5;
+      const edge = Math.pow(1 - Math.abs(2 * u), .85);
+      let a = r.alpha * (.28 + .72 * edge) * r.jit[i];
+      let lw = r.width;
+      if (r.heroEvery && i % r.heroEvery === Math.floor(r.heroEvery / 2)) { a = Math.min(1, a * 1.55); lw *= 1.55; }
+      ctx.strokeStyle = `rgba(${r.ink},${a.toFixed(3)})`;
+      ctx.lineWidth = lw;
+      ctx.beginPath();
+      const phU = u * r.tw.k;
+      for (let k = 0; k < NX; k++) {
+        const y = bufC[k] + bufSp[k] * (u + r.tw.A * Math.sin(bufTw[k] + phU));
+        const x = X0 + k * STEP;
+        if (k === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /* ---------- straight hairline bundles drifting sideways ---------- */
+  const FRAME_ANG = 66;
+  const bundles = [];
+  {
+    const offs = [-1300, -620, -60, 640, 1350];
+    offs.forEach((p, bi) => {
+      const count = 2 + Math.floor(rnd() * 3);
+      const len = between(1500, 3600);
+      const gap0 = between(14, 30);
+      const D = between(70, 190);
+      const dirn = rnd() < .5 ? -1 : 1;
+      const ph = rnd() * TAU;
+      const along = between(-700, 700);
+      const dAlong = between(120, 380);
+      const white = bi % 2 === 1;
+      const lines = [];
+      for (let i = 0; i < count; i++) {
+        lines.push({
+          off: i * gap0 * (1 + i * .18),
+          lag: i * .30,
+          len: len * (1 - i * .07),
+          a: (white ? between(.40, .60) : between(.08, .17)) * (1 - i * .10),
+          w: between(1.15, 1.9)
+        });
+      }
+      bundles.push({ p, D, dirn, ph, along, dAlong, white, lines });
+    });
+  }
+
+  function drawBundles(tau) {
+    ctx.save();
+    ctx.translate(W * .5, H * .5);
+    ctx.rotate(FRAME_ANG * Math.PI / 180);
+    ctx.lineCap = 'round';
+    for (const b of bundles) {
+      const col = b.white ? SNOW : INK;
+      for (const l of b.lines) {
+        const y = b.p + l.off + b.D * Math.sin(b.dirn * tau + b.ph + l.lag);
+        const c = b.along + b.dAlong * Math.sin(tau + b.ph * 1.7 + l.lag);
+        const x0 = c - l.len / 2, x1 = c + l.len / 2;
+        const g = ctx.createLinearGradient(x0, 0, x1, 0);
+        g.addColorStop(0,    `rgba(${col},0)`);
+        g.addColorStop(.22,  `rgba(${col},${l.a.toFixed(3)})`);
+        g.addColorStop(.78,  `rgba(${col},${l.a.toFixed(3)})`);
+        g.addColorStop(1,    `rgba(${col},0)`);
+        ctx.strokeStyle = g;
+        ctx.lineWidth = l.w;
+        ctx.beginPath();
+        ctx.moveTo(x0, y);
+        ctx.lineTo(x1, y);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
+  /* ---------- fine horizontal reference hairlines (very quiet) ---------- */
+  function drawReference(tau) {
+    ctx.save();
+    ctx.lineWidth = 1;
+    const rows = 9;
+    for (let i = 0; i < rows; i++) {
+      const y = H * (0.08 + i * 0.105) + 26 * Math.sin(tau + i * .7);
+      const g = ctx.createLinearGradient(0, 0, W, 0);
+      g.addColorStop(0,   'rgba(255,255,255,0)');
+      g.addColorStop(.30, 'rgba(255,255,255,.20)');
+      g.addColorStop(.70, 'rgba(255,255,255,.20)');
+      g.addColorStop(1,   'rgba(255,255,255,0)');
+      ctx.strokeStyle = g;
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /* ---------- frame ---------- */
+  function render(sec) {
+    const t = ((sec % DUR) + DUR) % DUR;
+    const tau = TAU * t / DUR;
+    window.__t = t;
+
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    ctx.drawImage(bg, 0, 0);
+
+    // soft light that breathes across the surface
+    const lx = W * .5 + 380 * Math.cos(tau), ly = H * .42 + 170 * Math.sin(tau);
+    const hl = ctx.createRadialGradient(lx, ly, 0, lx, ly, W * .48);
+    hl.addColorStop(0, 'rgba(255,255,255,.20)');
+    hl.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = hl;
+    ctx.fillRect(0, 0, W, H);
+
+    drawReference(tau);
+    drawRibbon(ribbons[0], tau);
+    drawBundles(tau);
+    drawRibbon(ribbons[1], tau);
+    drawRibbon(ribbons[4], tau);
+    drawRibbon(ribbons[2], tau);
+    drawRibbon(ribbons[3], tau);
+
+    // grain
+    ctx.globalCompositeOperation = 'soft-light';
+    ctx.globalAlpha = .10;
+    ctx.fillStyle = grainPattern;
+    ctx.fillRect(0, 0, W, H);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+  }
+
+  window.DURATION = DUR;
+  window.renderFrame = render;
+
+  /* ---------- autoplay ---------- */
+  const fixed = new URLSearchParams(location.search).get('t');
+  if (fixed !== null) {
+    render(parseFloat(fixed) || 0);
+  } else {
+    let t0 = null;
+    const loop = now => {
+      if (t0 === null) t0 = now;
+      render((now - t0) / 1000);
+      requestAnimationFrame(loop);
+    };
+    render(0);
+    requestAnimationFrame(loop);
+  }
+})();
+</script>
+</body>
+</html>
