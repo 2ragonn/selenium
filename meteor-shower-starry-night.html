@@ -1,0 +1,764 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Meteor Shower Starry Night – 4K Seamless Loop (15s)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #01030c; }
+  #stage {
+    position: fixed; left: 50%; top: 50%;
+    width: 3840px; height: 2160px;
+    transform: translate(-50%, -50%) scale(1);
+    transform-origin: 50% 50%;
+    display: block; background: #020618;
+  }
+</style>
+</head>
+<body>
+<canvas id="stage" width="3840" height="2160"></canvas>
+<script>
+/* =====================================================================
+   METEOR SHOWER · STARRY NIGHT  —  3840×2160 · 15 s · seamless loop
+   ---------------------------------------------------------------------
+   • Every motion is a pure function of t (mod 15 s) built from integer
+     cycles or wrap-around timing → frame(15.000) === frame(0.000).
+   • Autoplays on open (requestAnimationFrame, t = 0 at first frame).
+   • Deterministic-render hooks for frame-by-frame capture tools:
+        window.renderAt(seconds)      draw any moment of the loop
+        window.LOOP_SECONDS           15
+        ?t=3.5                        freeze on a moment
+        ?grain=0                      disable film grain (bit-exact loop)
+   ===================================================================== */
+(() => {
+'use strict';
+
+const W = 3840, H = 2160, LOOP = 15, TAU = Math.PI * 2;
+const YH = 1500;            // waterline / horizon
+const M  = 140;             // margin of the (slowly rotating) sky layer
+const q  = new URLSearchParams(location.search);
+const GRAIN = q.get('grain') !== '0';
+
+/* ---------- helpers ------------------------------------------------- */
+const mk = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
+const clamp = (x, a = 0, b = 1) => x < a ? a : x > b ? b : x;
+const lerp = (a, b, t) => a + (b - a) * t;
+const smooth = (a, b, x) => { x = clamp((x - a) / (b - a)); return x * x * (3 - 2 * x); };
+const mix3 = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
+function rng(seed) {
+  return function () {
+    seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+    let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function makeNoise(seed) {
+  const r = rng(seed), perm = new Uint8Array(512), val = new Float32Array(256);
+  const idx = Array.from({ length: 256 }, (_, i) => i);
+  for (let i = 255; i > 0; i--) { const j = (r() * (i + 1)) | 0; [idx[i], idx[j]] = [idx[j], idx[i]]; }
+  for (let i = 0; i < 256; i++) { perm[i] = perm[i + 256] = idx[i]; val[i] = r(); }
+  const v = (x, y) => val[perm[(perm[x & 255] + y) & 255]];
+  const n = (x, y) => {
+    const xi = Math.floor(x), yi = Math.floor(y), fx = x - xi, fy = y - yi;
+    const u = fx * fx * (3 - 2 * fx), w = fy * fy * (3 - 2 * fy);
+    const a = v(xi, yi), b = v(xi + 1, yi), c = v(xi, yi + 1), d = v(xi + 1, yi + 1);
+    return a + (b - a) * u + (c - a) * w + (a - b - c + d) * u * w;
+  };
+  const fbm = (x, y, oct = 5) => {
+    let s = 0, a = 0.5, f = 1, t = 0;
+    for (let i = 0; i < oct; i++) { s += a * n(x * f + i * 11.3, y * f + i * 7.1); t += a; a *= 0.5; f *= 2.03; }
+    return s / t;
+  };
+  const ridged = (x, oct = 5) => {
+    let s = 0, a = 0.5, f = 1, t = 0;
+    for (let i = 0; i < oct; i++) { s += a * (1 - Math.abs(2 * n(x * f, 17.3 + i * 3.1) - 1)); t += a; a *= 0.5; f *= 2.07; }
+    return s / t;
+  };
+  const ridged2 = (x, y, oct = 5) => {
+    let s = 0, a = 0.5, f = 1, t = 0;
+    for (let i = 0; i < oct; i++) { s += a * (1 - Math.abs(2 * n(x * f + i * 13.7, y * f + i * 5.9) - 1)); t += a; a *= 0.5; f *= 2.1; }
+    return s / t;
+  };
+  return { n, fbm, ridged, ridged2 };
+}
+
+/* ---------- canvases ------------------------------------------------ */
+const canvas = document.getElementById('stage');
+const ctx = canvas.getContext('2d', { alpha: false });
+const scene = mk(W, H), sc = scene.getContext('2d');
+
+function fit() {
+  const s = Math.min(innerWidth / W, innerHeight / H);
+  canvas.style.transform = `translate(-50%,-50%) scale(${s})`;
+}
+addEventListener('resize', fit); fit();
+
+/* =====================================================================
+   1 · SKY  (deep-blue gradient + air-glow mottling + Milky Way + dust)
+   ===================================================================== */
+const TINTS = [[172,202,255],[212,229,255],[255,255,255],[255,241,216],[255,216,172],[148,182,255]];
+const TINT_W = [0.26,0.24,0.20,0.12,0.06,0.12];
+const pickTint = r => { let x = r(), i = 0; while (i < 5 && (x -= TINT_W[i]) > 0) i++; return TINTS[i]; };
+
+let milkyCanvas, milkyW = 0, milkyH = 0, dens;
+function buildSky() {
+  const SW = W + 2 * M, SH = H + 2 * M;
+  const c = mk(SW, SH), g = c.getContext('2d');
+  g.translate(M, M);
+  const noise = makeNoise(20260930);
+
+  // deep-blue gradient, dark zenith -> luminous blue horizon
+  const gr = g.createLinearGradient(0, -M, 0, YH + 40);
+  const stops = [[-M,[1,4,15]],[300,[2,9,35]],[700,[5,22,72]],[1050,[9,38,108]],[1300,[18,62,140]],[1500,[38,100,166]],[1540,[46,112,172]]];
+  for (const [y, col] of stops) gr.addColorStop((y + M) / (YH + 40 + M), `rgb(${col})`);
+  g.fillStyle = gr; g.fillRect(-M, -M, SW, SH);
+
+  // subtle airglow mottling (large soft luminous cloud-like variation)
+  const nw = 480, nh = 270, nc = mk(nw, nh), nx = nc.getContext('2d'), img = nx.createImageData(nw, nh);
+  for (let y = 0; y < nh; y++) for (let x = 0; x < nw; x++) {
+    const sxp = (x / nw) * SW - M, syp = (y / nh) * SH - M;
+    const n = noise.fbm(x * 0.013, y * 0.021, 4);
+    const v = smooth(0.38, 0.78, n) * (0.35 + 0.65 * smooth(200, 1300, syp));
+    const i = (y * nw + x) * 4;
+    img.data[i] = 26; img.data[i+1] = 86; img.data[i+2] = 196; img.data[i+3] = v * 26;
+  }
+  nx.putImageData(img, 0, 0);
+  g.globalCompositeOperation = 'lighter';
+  g.imageSmoothingQuality = 'high';
+  g.drawImage(nc, -M, -M, SW, SH);
+
+  // faint teal-green airglow band just above the horizon
+  const ag = g.createLinearGradient(0, 950, 0, YH + 40);
+  ag.addColorStop(0, 'rgba(40,190,160,0)'); ag.addColorStop(0.7, 'rgba(50,190,170,0.055)'); ag.addColorStop(1, 'rgba(70,200,190,0.02)');
+  g.fillStyle = ag; g.fillRect(-M, 950, SW, YH + 90 - 950);
+
+  /* ---- Milky Way : procedural galactic band with dust lanes ---- */
+  const S = 3, bw = Math.ceil(SW / S), bh = Math.ceil(SH / S);
+  milkyW = bw; milkyH = bh;
+  dens = new Float32Array(bw * bh);
+  const mc = mk(bw, bh), mx = mc.getContext('2d'), mimg = mx.createImageData(bw, bh);
+  const ang = -0.52, ca = Math.cos(ang), sa = Math.sin(ang), Cx = 1900, Cy = 800;
+  for (let py = 0; py < bh; py++) for (let px = 0; px < bw; px++) {
+    const x = px * S - M, y = py * S - M;
+    const dx = x - Cx, dy = y - Cy;
+    const s = dx * ca + dy * sa;
+    let d = -dx * sa + dy * ca;
+    d -= 130 * Math.sin(s * 0.0011 + 0.6) + 55 * Math.sin(s * 0.0031 + 2.0);
+    const core = Math.exp(-Math.pow((s + 520) / 700, 2));
+    const sig = 250 + 250 * core;
+    const g1 = Math.exp(-Math.pow(d / sig, 2));
+    const halo = 0.30 * Math.exp(-Math.pow(d / (sig * 2.5), 2));
+    const cloud = 0.62 + 0.85 * noise.fbm(x * 0.0011 + 3.1, y * 0.0013 + 1.7, 5);
+    const lane = smooth(0.66, 0.86, noise.ridged2(x * 0.0030 + 9.7, y * 0.0040 + 4.4, 5));
+    const rift = Math.exp(-Math.pow((d + 30 * Math.sin(s * 0.004)) / (sig * 0.48), 2));
+    const fine = 0.78 + 0.44 * noise.fbm(x * 0.006 + 40, y * 0.006 + 20, 3);
+    let den = (g1 * (0.55 + 0.95 * core) + halo) * cloud * fine;
+    den *= (1 - 0.50 * lane * rift);
+    den *= (1 - 0.10 * smooth(0.6, 0.8, noise.fbm(x * 0.004 + 70, y * 0.004 + 15, 4)) * g1);
+    dens[py * bw + px] = den;
+    const warm = clamp(core * 0.95 + (noise.fbm(x * 0.002 + 5, y * 0.002, 3) - 0.5) * 0.9, 0, 1);
+    const col = mix3([128,170,255], [255,224,182], warm * 0.55);
+    const I = den * 0.30;
+    const i = (py * bw + px) * 4;
+    mimg.data[i] = clamp(col[0] * I, 0, 255); mimg.data[i+1] = clamp(col[1] * I, 0, 255);
+    mimg.data[i+2] = clamp(col[2] * I, 0, 255); mimg.data[i+3] = 255;
+  }
+  mx.putImageData(mimg, 0, 0);
+  milkyCanvas = mc;
+  g.globalCompositeOperation = 'lighter';
+  g.drawImage(mc, -M, -M, bw * S, bh * S);
+
+  const densAt = (x, y) => {
+    const px = ((x + M) / S) | 0, py = ((y + M) / S) | 0;
+    return (px < 0 || py < 0 || px >= bw || py >= bh) ? 0 : dens[py * bw + px];
+  };
+
+  /* ---- baked star-dust (unresolved stars, very fine) ---- */
+  const r = rng(777);
+  g.globalCompositeOperation = 'lighter';
+  const dust = ['rgb(190,212,255)', 'rgb(236,240,255)', 'rgb(255,232,200)'];
+  for (let n = 0, placed = 0; placed < 42000 && n < 500000; n++) {
+    const x = r() * SW - M, y = r() * (YH + 40 + M) - M;
+    const d = densAt(x, y);
+    if (r() > 0.02 + d * 1.5) continue;
+    placed++;
+    g.globalAlpha = 0.06 + r() * 0.24 * Math.min(1, 0.4 + d);
+    g.fillStyle = dust[(r() * 3) | 0];
+    const s = r() < 0.12 ? 2 : 1.4;
+    g.fillRect(x, y, s, s);
+  }
+
+  /* ---- baked resolved stars (static) ---- */
+  for (let n = 0, placed = 0; placed < 15000 && n < 600000; n++) {
+    const x = r() * SW - M, y = r() * (YH + 40 + M) - M;
+    const d = densAt(x, y);
+    if (r() > 0.09 + d * 1.6) continue;
+    placed++;
+    const b = Math.pow(r(), 3.2), t = pickTint(r);
+    const rad = 0.6 + b * 1.7;
+    g.globalAlpha = 0.28 + 0.62 * b;
+    g.fillStyle = `rgb(${t})`;
+    g.beginPath(); g.arc(x, y, rad, 0, TAU); g.fill();
+  }
+  g.globalAlpha = 1; g.globalCompositeOperation = 'source-over';
+  return c;
+}
+
+/* ---------- twinkling stars (dynamic sprites) ---------- */
+function starSprite(rgb) {
+  const s = 64, c = mk(s, s), g = c.getContext('2d');
+  const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  gr.addColorStop(0, 'rgba(255,255,255,1)');
+  gr.addColorStop(0.10, `rgba(${rgb},0.95)`);
+  gr.addColorStop(0.26, `rgba(${rgb},0.30)`);
+  gr.addColorStop(0.58, `rgba(${rgb},0.06)`);
+  gr.addColorStop(1, `rgba(${rgb},0)`);
+  g.fillStyle = gr; g.fillRect(0, 0, s, s);
+  return c;
+}
+function heroSprite(rgb) {
+  const s = 256, c = mk(s, s), g = c.getContext('2d');
+  g.globalCompositeOperation = 'lighter';
+  const gr = g.createRadialGradient(128, 128, 0, 128, 128, 128);
+  gr.addColorStop(0, 'rgba(255,255,255,1)');
+  gr.addColorStop(0.05, `rgba(${rgb},0.95)`);
+  gr.addColorStop(0.16, `rgba(${rgb},0.30)`);
+  gr.addColorStop(0.45, `rgba(${rgb},0.05)`);
+  gr.addColorStop(1, `rgba(${rgb},0)`);
+  g.fillStyle = gr; g.fillRect(0, 0, s, s);
+  const spike = (len, alpha, th) => {
+    const lg = g.createLinearGradient(128 - len, 0, 128 + len, 0);
+    lg.addColorStop(0, `rgba(${rgb},0)`); lg.addColorStop(0.38, `rgba(${rgb},${alpha * 0.18})`);
+    lg.addColorStop(0.5, `rgba(255,255,255,${alpha})`);
+    lg.addColorStop(0.62, `rgba(${rgb},${alpha * 0.18})`); lg.addColorStop(1, `rgba(${rgb},0)`);
+    g.fillStyle = lg; g.fillRect(128 - len, -th / 2, len * 2, th);
+  };
+  g.save(); g.translate(0, 128); spike(128, 0.95, 2.6); g.restore();
+  g.save(); g.translate(128, 128); g.rotate(Math.PI / 2); g.translate(-128, 0); spike(128, 0.95, 2.6); g.restore();
+  g.save(); g.translate(128, 128); g.rotate(Math.PI / 4); g.translate(-128, 0); spike(84, 0.36, 2); g.restore();
+  g.save(); g.translate(128, 128); g.rotate(-Math.PI / 4); g.translate(-128, 0); spike(84, 0.36, 2); g.restore();
+  return c;
+}
+
+let stars = [], heroes = [];
+const starSprites = TINTS.map(t => starSprite(t.join(',')));
+const heroSprites = TINTS.map(t => heroSprite(t.join(',')));
+function buildStars() {
+  const r = rng(4242);
+  const densAt = (x, y) => {
+    const px = ((x + M) / 3) | 0, py = ((y + M) / 3) | 0;
+    return (px < 0 || py < 0 || px >= milkyW || py >= milkyH) ? 0 : dens[py * milkyW + px];
+  };
+  for (let n = 0; stars.length < 1700 && n < 200000; n++) {
+    const x = r() * (W + 80) - 40, y = r() * (YH + 50);
+    const d = densAt(x, y);
+    if (r() > 0.32 + d * 0.9) continue;
+    const b = Math.pow(r(), 2.6);
+    stars.push({
+      x, y, s: 6.5 + b * 24, a: 0.30 + 0.7 * (0.35 + 0.65 * b),
+      tint: (() => { const t = pickTint(r); return TINTS.indexOf(t); })(),
+      k: 3 + ((r() * 12) | 0), ph: r() * TAU, amp: 0.15 + r() * 0.45,
+      k2: 5 + ((r() * 14) | 0), ph2: r() * TAU
+    });
+  }
+  for (let i = 0; i < 34; i++) {
+    const x = 80 + r() * (W - 160), y = 80 + r() * (YH - 260);
+    heroes.push({
+      x, y, s: 44 + Math.pow(r(), 2) * 110, a: 0.6 + r() * 0.4,
+      tint: [0, 1, 2, 3, 4, 5][(r() * 6) | 0], k: 1 + ((r() * 3) | 0), ph: r() * TAU, rot: (r() - 0.5) * 0.3
+    });
+  }
+}
+function drawStars(c, ph) {
+  c.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < stars.length; i++) {
+    const s = stars[i];
+    const w1 = 0.5 + 0.5 * Math.sin(TAU * s.k * ph + s.ph);
+    const w2 = 0.5 + 0.5 * Math.sin(TAU * s.k2 * ph + s.ph2);
+    const tw = 1 - s.amp * (0.65 * w1 + 0.35 * w2);
+    c.globalAlpha = clamp(s.a * tw);
+    const sz = s.s * (0.9 + 0.12 * w1);
+    c.drawImage(starSprites[s.tint], s.x - sz / 2, s.y - sz / 2, sz, sz);
+  }
+  for (let i = 0; i < heroes.length; i++) {
+    const h = heroes[i];
+    const p = 0.5 + 0.5 * Math.sin(TAU * h.k * ph + h.ph);
+    c.globalAlpha = clamp(h.a * (0.72 + 0.28 * p));
+    const sz = h.s * (0.92 + 0.10 * p);
+    c.save(); c.translate(h.x, h.y); c.rotate(h.rot);
+    c.drawImage(heroSprites[h.tint], -sz / 2, -sz / 2, sz, sz);
+    c.restore();
+  }
+  c.globalAlpha = 1; c.globalCompositeOperation = 'source-over';
+}
+
+/* =====================================================================
+   2 · LANDSCAPE  (ridges, treeline, lake shore, foreground pines)
+   ===================================================================== */
+function pine(g, x, baseY, h, w, seed) {
+  const r = rng(seed), tiers = Math.max(7, Math.round(h / 44)), topY = baseY - h, body = h * 0.97, tierH = body / tiers;
+  const L = [], R = [];
+  for (let i = 0; i <= tiers; i++) {
+    const f = i / tiers, y = topY + f * body, hw = w * 0.5 * (0.05 + Math.pow(f, 0.88) * 0.95);
+    L.push([x - hw * (0.86 + r() * 0.38), y + tierH * (0.70 + r() * 0.30)]);
+    L.push([x - hw * (0.30 + r() * 0.16), y + tierH * (0.44 + r() * 0.10)]);
+    R.push([x + hw * (0.86 + r() * 0.38), y + tierH * (0.70 + r() * 0.30)]);
+    R.push([x + hw * (0.30 + r() * 0.16), y + tierH * (0.44 + r() * 0.10)]);
+  }
+  const tw = Math.max(4, w * 0.035), last = L[L.length - 1];
+  g.beginPath();
+  g.moveTo(x, topY - 4);
+  for (const p of L) g.lineTo(p[0], p[1]);
+  g.lineTo(x - tw, last[1]); g.lineTo(x - tw * 1.3, baseY + 30); g.lineTo(x + tw * 1.3, baseY + 30); g.lineTo(x + tw, last[1]);
+  for (let i = R.length - 1; i >= 0; i--) g.lineTo(R[i][0], R[i][1]);
+  g.closePath(); g.fill();
+}
+
+function buildMountains() {
+  const c = mk(W, H), g = c.getContext('2d');
+  const noise = makeNoise(90210);
+
+  const layer = (o) => {
+    const pts = [];
+    for (let x = -20; x <= W + 20; x += 5) {
+      const r = noise.ridged(x * o.freq + o.off, o.oct || 6);
+      const env = 0.30 + 0.70 * noise.n(x * o.envF + o.off, o.seed);
+      pts.push([x, YH - (o.min + o.amp * Math.pow(r, o.sharp) * env)]);
+    }
+    const topY = Math.floor(Math.min(...pts.map(p => p[1])));
+    const poly = () => { g.beginPath(); g.moveTo(-20, YH + 2); for (const p of pts) g.lineTo(p[0], p[1]); g.lineTo(W + 20, YH + 2); g.closePath(); };
+    const gr = g.createLinearGradient(0, topY, 0, YH);
+    gr.addColorStop(0, `rgb(${o.top})`); gr.addColorStop(1, `rgb(${o.bot})`);
+    poly(); g.fillStyle = gr; g.fill();
+
+    // ridge-following form shading: faces that look toward the sky-glow catch light,
+    // faces turned away sink into shadow; the slope window widens with depth so the
+    // ridge lines fan downward like real alpine spurs. A soft gully texture rides on top.
+    const S = 2, tw = Math.ceil(W / S), th = Math.ceil((YH - topY) / S);
+    const tc = mk(tw, th), tg = tc.getContext('2d'), ti = tg.createImageData(tw, th);
+    const yTop = new Float32Array(W + 41);
+    for (let x = -20, j = 0; x <= W + 20; x++, j++) {
+      const f = (x + 20) / 5, i0 = Math.min(pts.length - 2, Math.floor(f)), t = f - i0;
+      yTop[j] = lerp(pts[i0][1], pts[i0 + 1][1], t);
+    }
+    const yt = x => yTop[clamp(Math.round(x) + 20, 0, W + 40)];
+    for (let y = 0; y < th; y++) for (let x = 0; x < tw; x++) {
+      const X = x * S, Y = topY + y * S, d = Y - yt(X);
+      const i = (y * tw + x) * 4;
+      if (d < 0) continue;
+      const w = 10 + d * 0.55;
+      const slope = (yt(X + w) - yt(X - w)) / (2 * w);          // <0 : face rises to the right (lit side)
+      const gully = noise.fbm(X * o.tf * 2.2, Y * o.tf * 0.55 + o.seed * 4, 4) - 0.5;
+      const v = -slope * o.facet + gully * o.gully;
+      const fade = 1 - smooth(0, 520, d) * 0.55;
+      const k = clamp(Math.abs(v), 0, 0.5) * fade;
+      if (v > 0) { ti.data[i] = o.lit[0]; ti.data[i+1] = o.lit[1]; ti.data[i+2] = o.lit[2]; ti.data[i+3] = k * 255 * 0.9; }
+      else       { ti.data[i] = 0; ti.data[i+1] = 3; ti.data[i+2] = 14; ti.data[i+3] = k * 255 * 1.1; }
+    }
+    tg.putImageData(ti, 0, 0);
+    g.save(); poly(); g.clip(); g.imageSmoothingQuality = 'high'; g.drawImage(tc, 0, topY, tw * S, th * S); g.restore();
+
+    // faint starlit rim on the crest line
+    g.beginPath(); g.moveTo(pts[0][0], pts[0][1]); for (const p of pts) g.lineTo(p[0], p[1]);
+    g.strokeStyle = `rgba(${o.rim},${o.rimA})`; g.lineWidth = 3; g.lineJoin = 'round'; g.stroke();
+    // atmospheric haze at the foot of the layer
+    const hz = g.createLinearGradient(0, YH - 360, 0, YH);
+    hz.addColorStop(0, 'rgba(70,130,200,0)'); hz.addColorStop(1, `rgba(70,130,200,${o.haze})`);
+    g.save(); g.globalCompositeOperation = 'source-atop'; g.fillStyle = hz; g.fillRect(0, YH - 360, W, 362); g.restore();
+  };
+  // far range
+  layer({ seed: 1.3, off: 3.2, freq: 0.0011, envF: 0.00055, oct: 6, min: 170, amp: 420, sharp: 1.5, tf: 0.0032, facet: 0.55, gully: 0.34, lit: [120,170,255], top: [34,66,138], bot: [16,36,92], rim: '120,168,240', rimA: 0.38, haze: 0.34 });
+  // mid range
+  layer({ seed: 5.9, off: 8.8, freq: 0.0018, envF: 0.0007, oct: 6, min: 90, amp: 300, sharp: 1.45, tf: 0.0048, facet: 0.60, gully: 0.30, lit: [80,130,225], top: [12,27,70], bot: [5,13,40], rim: '96,146,232', rimA: 0.22, haze: 0.24 });
+
+  // distant forest hugging the water: two irregular rows of conifers
+  {
+    const r = rng(31337), n2 = makeNoise(555);
+    const row = (scale, colTop, colBot, jit) => {
+      g.beginPath(); g.moveTo(-10, YH + 2);
+      let x = -10 + r() * 10;
+      while (x < W + 30) {
+        const w = 9 + r() * 24, base = (30 + 70 * n2.fbm(x * 0.0021 + jit, 3.3, 4)) * scale, hgt = base * (0.62 + 0.75 * r());
+        g.lineTo(x, YH - base * 0.30 - r() * 6);
+        g.lineTo(x + w * (0.35 + r() * 0.3), YH - hgt * 0.62);
+        g.lineTo(x + w * 0.42, YH - hgt * 0.58);
+        g.lineTo(x + w * 0.5 + (r() - 0.5) * w * 0.25, YH - hgt);
+        x += w;
+      }
+      g.lineTo(W + 30, YH - 20); g.lineTo(W + 30, YH + 2); g.closePath();
+      const tg = g.createLinearGradient(0, YH - 150 * scale, 0, YH);
+      tg.addColorStop(0, `rgb(${colTop})`); tg.addColorStop(1, `rgb(${colBot})`);
+      g.fillStyle = tg; g.fill();
+    };
+    row(1.05, [8,20,54], [5,12,34], 0);
+    row(0.78, [3,8,26], [2,6,20], 40);
+  }
+  return c;
+}
+
+function buildForeground() {
+  const c = mk(W, H), g = c.getContext('2d');
+  // dark shoreline land masses (left / right)
+  const land = (pathFn) => { g.beginPath(); pathFn(); g.closePath(); g.fillStyle = 'rgb(3,8,24)'; g.fill(); };
+  land(() => {
+    g.moveTo(-10, H + 10); g.lineTo(-10, 1560);
+    g.bezierCurveTo(220, 1548, 420, 1600, 620, 1640);
+    g.bezierCurveTo(800, 1676, 940, 1740, 1120, H + 10);
+  });
+  land(() => {
+    g.moveTo(W + 10, H + 10); g.lineTo(W + 10, 1580);
+    g.bezierCurveTo(W - 220, 1590, W - 420, 1650, W - 600, 1710);
+    g.bezierCurveTo(W - 760, 1770, W - 880, 1860, W - 980, H + 10);
+  });
+  // pines
+  g.fillStyle = 'rgb(2,6,18)';
+  // left cluster
+  pine(g, 96, 1640, 1120, 430, 11);
+  pine(g, 330, 1690, 760, 300, 12);
+  pine(g, 545, 1720, 470, 210, 13);
+  pine(g, 730, 1770, 300, 150, 14);
+  pine(g, -40, 1640, 1500, 560, 15);
+  pine(g, 860, 1830, 190, 100, 16);
+  // right cluster
+  pine(g, W - 120, 1700, 980, 380, 21);
+  pine(g, W - 400, 1740, 640, 270, 22);
+  pine(g, W - 610, 1790, 380, 180, 23);
+  pine(g, W - 790, 1840, 230, 120, 24);
+  pine(g, W + 30, 1700, 1300, 480, 25);
+  // shoreline reeds / rocks
+  {
+    const r = rng(99);
+    g.fillStyle = 'rgb(2,6,18)';
+    for (let i = 0; i < 260; i++) {
+      const left = i < 130, x = left ? r() * 1000 : W - r() * 900;
+      const base = left ? 1650 + Math.min(1, x / 1000) * 180 : 1690 + Math.min(1, (W - x) / 900) * 160;
+      const hgt = 26 + r() * 90, lean = (r() - 0.5) * 30;
+      g.beginPath(); g.moveTo(x - 3, base + 20); g.quadraticCurveTo(x + lean * 0.4, base - hgt * 0.6, x + lean, base - hgt); g.quadraticCurveTo(x + lean * 0.4 + 3, base - hgt * 0.5, x + 4, base + 20); g.fill();
+    }
+  }
+  // skylight rim from above
+  g.globalCompositeOperation = 'source-atop';
+  const rg = g.createLinearGradient(0, 380, 0, 1700);
+  rg.addColorStop(0, 'rgba(40,90,190,0.30)'); rg.addColorStop(0.5, 'rgba(20,50,120,0.10)'); rg.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = rg; g.fillRect(0, 0, W, H);
+  g.globalCompositeOperation = 'source-over';
+  return c;
+}
+
+/* mist hugging the waterline */
+function buildMist() {
+  const mw = 4080, mh = 460, S = 4, bw = mw / S, bh = mh / S;
+  const c = mk(bw, bh), g = c.getContext('2d'), img = g.createImageData(bw, bh), nz = makeNoise(8080);
+  for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
+    const v = y / bh, prof = Math.exp(-Math.pow((v - 0.56) / 0.2, 2));
+    const n = nz.fbm(x * 0.012, y * 0.05, 5), a = prof * (0.25 + 1.15 * Math.max(0, n - 0.28));
+    const i = (y * bw + x) * 4;
+    img.data[i] = 96; img.data[i+1] = 150; img.data[i+2] = 214; img.data[i+3] = clamp(a * 62, 0, 255);
+  }
+  g.putImageData(img, 0, 0);
+  const out = mk(mw, mh); const og = out.getContext('2d'); og.imageSmoothingQuality = 'high'; og.drawImage(c, 0, 0, mw, mh);
+  return out;
+}
+
+/* =====================================================================
+   3 · METEORS
+   ===================================================================== */
+const PAL = {
+  ice:     { h:[238,248,255], m:[128,196,255], t:[44,96,238],  g:[74,146,255] },
+  emerald: { h:[240,255,246], m:[124,255,200], t:[22,152,172], g:[40,224,172] },
+  gold:    { h:[255,248,232], m:[255,198,124], t:[214,92,62],  g:[255,150,72] },
+  violet:  { h:[248,240,255], m:[198,164,255], t:[98,66,216],  g:[152,112,255] }
+};
+function glowSprite(col, size = 128) {
+  const c = mk(size, size), g = c.getContext('2d'), h = size / 2;
+  const gr = g.createRadialGradient(h, h, 0, h, h, h);
+  gr.addColorStop(0, `rgba(${col.h},1)`); gr.addColorStop(0.12, `rgba(${col.h},0.75)`);
+  gr.addColorStop(0.32, `rgba(${col.g},0.22)`); gr.addColorStop(0.65, `rgba(${col.g},0.05)`); gr.addColorStop(1, `rgba(${col.g},0)`);
+  g.fillStyle = gr; g.fillRect(0, 0, size, size); return c;
+}
+function flashSprite(col) {
+  const size = 256, c = mk(size, size), g = c.getContext('2d'), h = size / 2;
+  const gr = g.createRadialGradient(h, h, 0, h, h, h);
+  gr.addColorStop(0, `rgba(${col.g},0.55)`); gr.addColorStop(0.25, `rgba(${col.g},0.16)`); gr.addColorStop(0.6, `rgba(${col.g},0.04)`); gr.addColorStop(1, `rgba(${col.g},0)`);
+  g.fillStyle = gr; g.fillRect(0, 0, size, size); return c;
+}
+const GLOW = {}, FLASH = {}, FLARE = {};
+for (const k in PAL) { GLOW[k] = glowSprite(PAL[k]); FLASH[k] = flashSprite(PAL[k]); FLARE[k] = heroSprite(PAL[k].h.join(',')); }
+
+// shower radiant: up & to the right of the frame, meteors fan away from it
+const RAD = { x: W * 0.90, y: -H * 0.26 };
+const STARTS = [0.30,0.95,1.55,2.10,2.85,3.45,4.10,4.75,5.40,6.05,6.60,7.20,7.45,8.05,8.70,9.30,9.95,10.45,11.05,11.65,12.25,12.70,12.95,13.20,13.85,14.45,2.45,5.05,6.95,9.05,11.35,14.05];
+const KIND = { 6: 'fireA', 17: 'fireB', 22: 'bright', 12: 'bright', 3: 'bright', 25: 'bright' };
+const PALS = ['ice','ice','ice','emerald','ice','gold','emerald','ice','ice','violet','ice','ice','gold','ice','ice','ice','emerald','gold','ice','violet','ice','ice','ice','emerald','ice','ice','ice','emerald','ice','gold','ice','ice'];
+const meteors = [];
+(function buildMeteors() {
+  const r = rng(1999);
+  STARTS.forEach((start, i) => {
+    const kind = KIND[i] || 'norm';
+    let x0, y0, L, dur, trail, b, w, train = 0, sparks = 0;
+    // spread the origins over the sky; deterministic per index
+    x0 = W * (0.30 + 0.72 * ((i * 0.6180339 + 0.13) % 1));
+    y0 = H * (0.03 + 0.42 * ((i * 0.7548777 + 0.31) % 1));
+    if (i === 22) { x0 = W * 0.72; y0 = H * 0.14; }
+    if (kind === 'fireA') { x0 = W * 0.86; y0 = H * 0.10; }
+    if (kind === 'fireB') { x0 = W * 0.60; y0 = H * 0.16; }
+    let dx = x0 - RAD.x, dy = y0 - RAD.y; const dl = Math.hypot(dx, dy); dx /= dl; dy /= dl;
+    if (kind === 'fireA')      { L = 2250; dur = 1.85; trail = 1.00; b = 1.00; w = 8.4; train = 1; sparks = 26; }
+    else if (kind === 'fireB') { L = 2050; dur = 1.95; trail = 1.05; b = 0.98; w = 8.0; train = 1; sparks = 22; }
+    else if (kind === 'bright'){ L = 1500 + r() * 500; dur = 0.85 + r() * 0.25; trail = 0.62; b = 0.86; w = 4.6; train = 0.6; sparks = 8; }
+    else                       { L = 700 + r() * 1100; dur = 0.45 + r() * 0.5; trail = 0.34 + r() * 0.3; b = 0.42 + r() * 0.42; w = 2.6 + b * 2.2; }
+    const sp = [];
+    for (let k = 0; k < sparks; k++) sp.push({ fb: 0.06 + 0.78 * r(), vn: (r() - 0.5) * 210, vd: 20 + r() * 120, s: 1.6 + r() * 3.2, life: 0.45 + r() * 0.5 });
+    meteors.push({ start, dur, trail, L, b, w, train, sp, seed: i * 1.7 + 0.3, pal: PALS[i], x0, y0, dx, dy, nx: -dy, ny: dx, kind });
+  });
+})();
+
+const ease = x => Math.pow(x, 1.14);
+const env = x => (x <= 0 || x >= 1) ? 0 : Math.pow(Math.sin(Math.PI * Math.pow(x, 0.62)), 1.1);
+const pathAt = (m, tau) => { const f = ease(clamp(tau / m.dur)) * m.L; return [m.x0 + m.dx * f, m.y0 + m.dy * f]; };
+
+function drawMeteor(c, m, u) {
+  const total = m.dur + m.trail;
+  const pal = PAL[m.pal];
+  if (m.train) drawTrain(c, m, u, pal);
+  if (u < 0 || u >= total) return;
+
+  // trail samples (head -> tail), brightness = light emitted at that moment
+  const N = 18, S = [];
+  for (let i = 0; i <= N; i++) {
+    const k = i / N, tau = u - k * m.trail, p = pathAt(m, tau);
+    const flick = 0.93 + 0.07 * Math.sin(tau * 83 + m.seed * 9);
+    S.push({ x: p[0], y: p[1], k, a: env(tau / m.dur) * m.b * flick * Math.pow(1 - k, 1.35) });
+  }
+  const hd = S[0], tl = S[N];
+  const D = Math.hypot(tl.x - hd.x, tl.y - hd.y);
+  const headA = env(u / m.dur) * m.b;
+
+  if (D > 2) {
+    c.globalCompositeOperation = 'lighter';
+    const colAt = k => k < 0.22 ? mix3(pal.h, pal.m, k / 0.22) : mix3(pal.m, pal.t, Math.pow((k - 0.22) / 0.78, 0.8));
+    const pass = (wMul, aMul) => {
+      const gr = c.createLinearGradient(hd.x, hd.y, tl.x, tl.y);
+      for (let i = 0; i <= N; i++) {
+        const s = S[i], col = colAt(s.k), off = clamp(Math.hypot(s.x - hd.x, s.y - hd.y) / D);
+        gr.addColorStop(off, `rgba(${col[0] | 0},${col[1] | 0},${col[2] | 0},${clamp(s.a * aMul)})`);
+      }
+      c.beginPath();
+      for (let i = 0; i <= N; i++) { const s = S[i], wd = m.w * wMul * Math.pow(1 - s.k, 0.72) * 0.5; const X = s.x + m.nx * wd, Y = s.y + m.ny * wd; i ? c.lineTo(X, Y) : c.moveTo(X, Y); }
+      for (let i = N; i >= 0; i--) { const s = S[i], wd = m.w * wMul * Math.pow(1 - s.k, 0.72) * 0.5; c.lineTo(s.x - m.nx * wd, s.y - m.ny * wd); }
+      c.closePath(); c.fillStyle = gr; c.fill();
+    };
+    pass(11, 0.13);   // wide bloom
+    pass(4.2, 0.36);  // halo
+    pass(1.6, 0.85);  // body
+    pass(0.62, 1.0);  // white-hot core
+  }
+
+  if (headA > 0.01) {
+    const sz = (64 + 260 * m.b) * (0.45 + 0.55 * headA / Math.max(m.b, 0.01));
+    c.globalCompositeOperation = 'lighter';
+    c.globalAlpha = clamp(headA * 1.05);
+    c.drawImage(GLOW[m.pal], hd.x - sz / 2, hd.y - sz / 2, sz, sz);
+    if (m.b > 0.8) {                                     // cinematic flare + local sky flash
+      const fs = 260 * headA * (m.kind.startsWith('fire') ? 1.5 : 1);
+      c.globalAlpha = clamp(headA * 0.9);
+      c.drawImage(FLARE[m.pal], hd.x - fs / 2, hd.y - fs / 2, fs, fs);
+      const fl = 1500 + 1500 * headA;
+      c.globalAlpha = clamp(headA * 0.55);
+      c.drawImage(FLASH[m.pal], hd.x - fl / 2, hd.y - fl / 2, fl, fl);
+    }
+    c.globalAlpha = 1;
+  }
+
+  // ablation sparks / fragments
+  if (m.sp.length) {
+    c.globalCompositeOperation = 'lighter';
+    for (const s of m.sp) {
+      const tb = s.fb * m.dur, age = u - tb;
+      if (age <= 0 || age > s.life) continue;
+      const p = pathAt(m, tb), f = age / s.life;
+      const X = p[0] + m.nx * s.vn * age + m.dx * s.vd * age, Y = p[1] + m.ny * s.vn * age + m.dy * s.vd * age + 120 * age * age;
+      const a = Math.pow(1 - f, 2) * env(tb / m.dur) * m.b;
+      const col = mix3(pal.h, pal.m, f);
+      c.fillStyle = `rgba(${col[0] | 0},${col[1] | 0},${col[2] | 0},${clamp(a * 0.9)})`;
+      c.beginPath(); c.arc(X, Y, s.s * (1 - f * 0.5), 0, TAU); c.fill();
+      c.fillStyle = `rgba(${pal.g[0]},${pal.g[1]},${pal.g[2]},${clamp(a * 0.18)})`;
+      c.beginPath(); c.arc(X, Y, s.s * 4.5, 0, TAU); c.fill();
+    }
+  }
+  c.globalCompositeOperation = 'source-over';
+}
+
+// persistent ionisation train: soft luminous smoke that lingers, drifts and fades
+function drawTrain(c, m, u, pal) {
+  const t0 = m.dur * 0.30, age = u - t0, life = 3.6;
+  if (age <= 0 || age > life + m.dur) return;
+  const endF = ease(clamp(u / m.dur)), fade = smooth(0, 0.45, age) * Math.pow(1 - clamp((age - 0.6) / life), 2.2);
+  const a = m.train * m.b * fade * 0.30;
+  if (a < 0.004) return;
+  const amp = 4 + 46 * smooth(0, 3.2, age), n = 44, f0 = 0.05;
+  const pts = [];
+  for (let i = 0; i <= n; i++) {
+    const s = f0 + (endF - f0) * (i / n); if (endF <= f0) return;
+    const d = s * m.L, wob = Math.sin(s * 7.3 + m.seed * 2.1 + age * 1.1) * amp * Math.sin(Math.PI * i / n) + Math.sin(s * 19 + m.seed) * amp * 0.25;
+    pts.push([m.x0 + m.dx * d + m.nx * wob, m.y0 + m.dy * d + m.ny * wob]);
+  }
+  c.globalCompositeOperation = 'lighter'; c.lineCap = 'round'; c.lineJoin = 'round';
+  const stroke = (w, al, col) => {
+    c.beginPath(); c.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) c.lineTo(pts[i][0], pts[i][1]);
+    c.strokeStyle = `rgba(${col[0]},${col[1]},${col[2]},${clamp(al)})`; c.lineWidth = w; c.stroke();
+  };
+  stroke(64 * (1 + age * 0.15), a * 0.10, pal.g);
+  stroke(22 * (1 + age * 0.10), a * 0.32, pal.m);
+  stroke(5, a * 0.70, pal.h);
+  c.lineCap = 'butt'; c.globalCompositeOperation = 'source-over';
+}
+
+/* =====================================================================
+   4 · LAKE  (mirror reflection with travelling ripples, glints, tint)
+   ===================================================================== */
+const LH = H - YH, RS = 1.45, STRIP = 3;
+let glints = [];
+function glintSprite(rgb) {
+  const c = mk(128, 32), g = c.getContext('2d');
+  g.translate(64, 16); g.scale(4, 1);
+  const gr = g.createRadialGradient(0, 0, 0, 0, 0, 16);
+  gr.addColorStop(0, `rgba(${rgb},1)`); gr.addColorStop(0.3, `rgba(${rgb},0.45)`); gr.addColorStop(1, `rgba(${rgb},0)`);
+  g.fillStyle = gr; g.fillRect(-16, -16, 32, 32); return c;
+}
+const glintC = glintSprite('182,216,255'), glintW = glintSprite('255,228,186');
+function buildGlints() {
+  const r = rng(6060);
+  for (let i = 0; i < 380; i++) {
+    const v = Math.pow(r(), 1.5);
+    glints.push({
+      x: r() * W, y: YH + 6 + v * (LH - 30), len: 40 + r() * 300 * (0.3 + v), th: 1.4 + v * 2.8,
+      k: 2 + ((r() * 12) | 0), ph: r() * TAU, a: 0.16 + r() * 0.42, warm: r() < 0.16
+    });
+  }
+}
+function drawLake(ph) {
+  const g = ctx;
+  g.fillStyle = 'rgb(3,10,28)'; g.fillRect(0, YH, W, LH);
+  g.imageSmoothingEnabled = true;
+  for (let y = 0; y < LH; y += STRIP) {
+    const qv = y + STRIP * 0.5, f = qv / LH;
+    const amp = 2 + 15 * Math.pow(f, 0.9);
+    const dx = amp * (0.62 * Math.sin(qv * 0.043 + TAU * 7 * ph) + 0.38 * Math.sin(qv * 0.109 - TAU * 11 * ph + 1.3)) * (0.55 + 0.45 * Math.sin(qv * 0.0137 + TAU * 3 * ph + 0.7));
+    const sy = YH - (y + STRIP) * RS;
+    g.drawImage(scene, 0, sy, W, STRIP * RS, dx - 24, YH + y, W + 48, STRIP + 0.6);
+  }
+  // fresnel-ish darkening toward the viewer + depth tint
+  const tg = g.createLinearGradient(0, YH, 0, H);
+  tg.addColorStop(0, 'rgba(8,26,66,0.10)'); tg.addColorStop(0.35, 'rgba(3,12,36,0.36)'); tg.addColorStop(1, 'rgba(1,4,15,0.66)');
+  g.fillStyle = tg; g.fillRect(0, YH, W, LH);
+
+  // glints of starlight on the ripples
+  g.globalCompositeOperation = 'lighter';
+  for (const s of glints) {
+    const p = Math.max(0, Math.sin(TAU * s.k * ph + s.ph)), a = s.a * p * p * p;
+    if (a < 0.01) continue;
+    g.globalAlpha = a;
+    const wob = Math.sin(TAU * 2 * ph + s.ph) * 6;
+    g.drawImage(s.warm ? glintW : glintC, s.x + wob - s.len * 0.5, s.y - s.th * 1.6, s.len, s.th * 3.2);
+  }
+  g.globalAlpha = 1; g.globalCompositeOperation = 'source-over';
+}
+
+/* =====================================================================
+   5 · FRAME
+   ===================================================================== */
+let sky, mtn, fg, mist, grainC, vig;
+function buildGrain() {
+  const s = 512, c = mk(s, s), g = c.getContext('2d'), img = g.createImageData(s, s), r = rng(12345);
+  for (let i = 0; i < s * s; i++) { const v = 96 + (r() + r() + r()) * 21; img.data[i*4] = img.data[i*4+1] = img.data[i*4+2] = v; img.data[i*4+3] = 255; }
+  g.putImageData(img, 0, 0); return c;
+}
+function hash(n) { n = Math.imul(n ^ 0x9E3779B9, 0x85EBCA6B); n ^= n >>> 13; n = Math.imul(n, 0xC2B2AE35); n ^= n >>> 16; return (n >>> 0) / 4294967296; }
+
+function render(tRaw) {
+  const t = ((tRaw % LOOP) + LOOP) % LOOP, ph = t / LOOP;
+
+  /* --- scene above the horizon (also the mirror source) --- */
+  sc.globalCompositeOperation = 'source-over'; sc.globalAlpha = 1;
+  sc.fillStyle = '#020618'; sc.fillRect(0, 0, W, H);
+
+  // sky drifts as the earth turns: tiny rotation about the celestial pole (periodic)
+  const rot = 0.0105 * Math.sin(TAU * ph), px = W * 0.28, py = H * 0.10;
+  sc.save();
+  sc.translate(px, py); sc.rotate(rot); sc.translate(-px, -py);
+  sc.imageSmoothingEnabled = true; sc.imageSmoothingQuality = 'high';
+  sc.drawImage(sky, -M, -M);
+  // gentle breathing of the galactic glow
+  sc.globalCompositeOperation = 'lighter';
+  sc.globalAlpha = 0.07 * (0.5 + 0.5 * Math.sin(TAU * ph));
+  sc.drawImage(milkyCanvas, -M, -M, milkyW * 3, milkyH * 3);
+  sc.globalAlpha = 1; sc.globalCompositeOperation = 'source-over';
+  drawStars(sc, ph);
+  sc.restore();
+
+  // meteors (behind the mountains)
+  for (const m of meteors) {
+    const u = ((t - m.start) % LOOP + LOOP) % LOOP;
+    if (u < m.dur + m.trail || (m.train && u < m.dur + 4.2)) drawMeteor(sc, m, u);
+  }
+
+  // landscape
+  sc.drawImage(mtn, 0, 0);
+
+  /* --- compose final frame --- */
+  ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+  ctx.drawImage(scene, 0, 0);
+  drawLake(ph);
+
+  // mist on the waterline (slow sway, periodic)
+  ctx.globalAlpha = 0.85 + 0.15 * Math.sin(TAU * ph + 1.0);
+  ctx.drawImage(mist, -120 + 46 * Math.sin(TAU * ph), YH - 250);
+  ctx.globalAlpha = 1;
+
+  ctx.drawImage(fg, 0, 0);
+
+  // vignette
+  ctx.fillStyle = vig; ctx.fillRect(0, 0, W, H);
+
+  // film grain (dither + organic finish)
+  if (GRAIN) {
+    const fi = Math.floor(t * 30), ox = (hash(fi * 3 + 1) * 512) | 0, oy = (hash(fi * 3 + 2) * 512) | 0;
+    ctx.save();
+    ctx.globalCompositeOperation = 'soft-light'; ctx.globalAlpha = 0.20;
+    ctx.translate(-ox, -oy); ctx.fillStyle = ctx.createPattern(grainC, 'repeat'); ctx.fillRect(ox, oy, W, H);
+    ctx.restore();
+  }
+}
+
+/* ---------- boot ---------- */
+sky = buildSky();
+buildStars();
+buildGlints();
+mtn = buildMountains();
+fg = buildForeground();
+mist = buildMist();
+grainC = buildGrain();
+{
+  vig = ctx.createRadialGradient(W / 2, H * 0.46, H * 0.42, W / 2, H * 0.5, H * 1.22);
+  vig.addColorStop(0, 'rgba(0,3,14,0)'); vig.addColorStop(0.65, 'rgba(0,3,14,0.20)'); vig.addColorStop(1, 'rgba(0,2,10,0.62)');
+}
+
+window.LOOP_SECONDS = LOOP;
+window.renderAt = render;
+window.animationReady = true;
+
+const fixed = q.get('t');
+if (fixed !== null) {
+  render(parseFloat(fixed) || 0);
+} else {
+  let t0 = null;
+  const tick = now => { if (t0 === null) t0 = now; render((now - t0) / 1000); requestAnimationFrame(tick); };
+  requestAnimationFrame(tick);
+}
+})();
+</script>
+</body>
+</html>
