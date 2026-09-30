@@ -72,6 +72,10 @@ uniform float uDef;
 uniform float uTanH;
 uniform float uAspect;
 const float TAU = 6.283185307179586;
+float ss(float a,float b,float x){float t=clamp((x-a)/(b-a),0.0,1.0);return t*t*(3.0-2.0*t);}
+vec2 ss(float a,float b,vec2 x){vec2 t=clamp((x-a)/(b-a),0.0,1.0);return t*t*(3.0-2.0*t);}
+// anti-aliased edge glow: widens with pixel footprint, keeps energy constant
+float edgeG(float d,float w,float fw){float w2=max(w,fw*1.4);return ss(w2,0.0,d)*min(1.0,w/w2);}
 uint pcg(uint v){uint s=v*747796405u+2891336137u;uint w=((s>>((s>>28u)+4u))^s)*277803737u;return (w>>22u)^w;}
 float h21(vec2 c,float salt){
   ivec2 i=ivec2(floor(c))+ivec2(50000);
@@ -81,13 +85,13 @@ float h21(vec2 c,float salt){
 vec3 hazeColor(vec3 d){
   float h=d.y;
   float hz=exp(-abs(h)*10.0);
-  float side=smoothstep(0.30,-0.50,d.x);
+  float side=ss(0.30,-0.50,d.x);
   vec3 glow=mix(vec3(0.03,0.20,0.95),vec3(0.95,0.04,0.12),side);
   glow=mix(glow,vec3(0.95,0.04,0.12),uAlert*0.40);
   vec3 c=vec3(0.003,0.008,0.028)+vec3(0.0,0.006,0.026)*exp(-abs(h)*3.0);
   c+=glow*hz*0.20;
   c+=glow*exp(-abs(h)*3.2)*0.012;
-  c*=mix(1.0,0.30,smoothstep(0.0,0.9,h));
+  c*=mix(1.0,0.30,ss(0.0,0.9,h));
   return c;
 }
 `;
@@ -107,16 +111,16 @@ vec4 fieldState(vec2 c){
   for(int k=0;k<5;k++){
     float g=clamp((uT-OT0[k])/4.4,0.0,1.0);
     if(g>0.0){
-      float R=ORM[k]*(1.0-pow(1.0-g,2.0));
+      float R=ORM[k]*(1.0-(1.0-g)*(1.0-g));
       float d=distance(q,ORG[k])+(hj-0.5)*4.0+(lo-0.5)*9.0;
-      inf=max(inf,smoothstep(-0.3,0.3,R-d));
+      inf=max(inf,ss(-0.3,0.3,R-d));
       eI=max(eI,exp(-abs(R-d)*1.4)*(1.0-g));
     }
   }
   float Rc=(uT-8.6)*30.0;
   float dc=distance(q,SH)+(hj-0.5)*3.0+(lo-0.5)*4.0;
-  float cure=smoothstep(-0.3,0.3,Rc-dc);
-  float fr=1.0-smoothstep(110.0,170.0,Rc);
+  float cure=ss(-0.3,0.3,Rc-dc);
+  float fr=1.0-ss(110.0,170.0,Rc);
   float eC=exp(-abs(Rc-dc)*1.0)*fr*step(0.0,Rc);
   float aft=exp(-max(Rc-dc,0.0)*0.2)*inf*step(0.0,Rc-dc)*fr;
   return vec4(inf*(1.0-cure),eI*(1.0-cure),eC,aft);
@@ -155,9 +159,9 @@ float pulseTrain(float along,float idx,float salt){
   float off=h21(vec2(idx,3.0),salt);
   const float L=64.0;
   float f=fract(dir*along/L-k*uP+off);
-  float a=exp(-(1.0-f)*L/3.0)*smoothstep(1.0,0.985,f);
+  float a=exp(-(1.0-f)*L/3.0)*ss(1.0,0.985,f);
   float f2=fract(dir*along/L-k*uP+off+0.5);
-  float b=exp(-(1.0-f2)*L/3.0)*smoothstep(1.0,0.985,f2)*0.6;
+  float b=exp(-(1.0-f2)*L/3.0)*ss(1.0,0.985,f2)*0.6;
   return on*(a+b);
 }
 void main(){
@@ -173,8 +177,8 @@ void main(){
   float fw=max(length(fwidth(p)),1e-4);
   vec2 dd=abs(p-floor(p+0.5));
   float lw=0.03;
-  vec2 ln=(1.0-smoothstep(lw-fw*0.5,lw+fw*0.5,dd))*min(1.0,lw/fw);
-  float far=smoothstep(0.22,0.7,fw);
+  vec2 ln=(1.0-ss(lw-fw*0.5,lw+fw*0.5,dd))*min(1.0,lw/fw);
+  float far=ss(0.22,0.7,fw);
 
   float mz=step(mod(floor(p.y+0.5)+800.0,8.0),0.5);
   float mx=step(mod(floor(p.x+0.5)+800.0,8.0),0.5);
@@ -190,30 +194,30 @@ void main(){
 
   float hc=h21(cell,1.0), hk=h21(cell,2.0);
   float kk=1.0+floor(hk*3.0);
-  float act=step(0.72,h21(cell,3.0));
-  float fl=pow(0.5+0.5*sin(TAU*(kk*uP+hc*17.0)),24.0)*act;
-  float flick=step(0.55,h21(cell+floor(uP*180.0),4.0));
-  float stripe=step(0.5,fract(p.y*7.0+floor(uP*90.0)*0.31));
+  float act=step(0.80,h21(cell,3.0));
+  float fl=pow(max(0.5+0.5*sin(TAU*(kk*uP+hc*17.0)),0.0),6.0)*act;
+  float flick=0.5+0.5*sin(TAU*(6.0*uP+hc*13.0));
+  float stripe=0.5+0.5*sin(TAU*(p.y*3.0+3.0*uP))*(1.0-far);
   vec2 lf=fract(p)-0.5;
-  float inner=1.0-smoothstep(0.36,0.5,max(abs(lf.x),abs(lf.y)));
-  float tile=0.008*(0.6+0.8*hc)+0.16*fl+red*(0.05+0.11*flick*stripe)+0.20*fs.w+0.22*fs.y+0.45*fs.z;
+  float inner=mix(1.0-ss(0.36,0.5,max(abs(lf.x),abs(lf.y))),0.75,far);
+  float tile=0.008*(0.6+0.8*hc)+0.16*fl+red*(0.05+0.09*flick*stripe)+0.20*fs.w+0.22*fs.y+0.45*fs.z;
   vec3 tileC=col*tile*inner;
 
   // emblem plinth: rotating rings on the floor under the shield
   float rs=distance(p,SH);
-  float ang=atan(p.y-SH.y,p.x-SH.x);
+  float ang=atan(p.y-SH.y,p.x-SH.x+1e-4);
   float dsh=step(0.5,fract(ang/TAU*36.0+uP*3.0));
   float w1=0.05+fw;
-  float ringG=smoothstep(w1+0.12,0.0,abs(rs-10.0))*(0.55+0.45*dsh)
-             +smoothstep(w1+0.05,0.0,abs(rs-13.0))*0.9
-             +smoothstep(w1+0.25,0.0,abs(rs-7.0))*0.5*(1.0-dsh);
+  float ringG=ss(w1+0.12,0.0,abs(rs-10.0))*(0.55+0.45*dsh)
+             +ss(w1+0.05,0.0,abs(rs-13.0))*0.9
+             +ss(w1+0.25,0.0,abs(rs-7.0))*0.5*(1.0-dsh);
   vec3 rc=mix(vec3(0.15,0.60,1.0),vec3(1.0,0.12,0.15),uAlert);
   vec3 plinth=rc*(ringG*1.5+exp(-rs*0.08)*0.05);
 
   float Rc=(uT-8.6)*30.0;
-  float frr=(1.0-smoothstep(110.0,170.0,Rc))*step(0.0,Rc);
+  float frr=(1.0-ss(110.0,170.0,Rc))*step(0.0,Rc);
   float wr=0.20+fw;
-  float ringW=smoothstep(wr,0.0,abs(rs-Rc))+0.35*smoothstep(wr,0.0,abs(rs-Rc*0.80))
+  float ringW=ss(wr,0.0,abs(rs-Rc))+0.35*ss(wr,0.0,abs(rs-Rc*0.80))
              +0.10*exp(-abs(rs-Rc)*0.30)*step(rs,Rc);
   vec3 waveC=vec3(0.45,0.85,1.0)*ringW*frr*2.4;
   vec3 em=lc*lines*(1.0+fs.z*5.0+fs.y*4.0)+col*spill*0.5+tileC+plinth+waveC;
@@ -239,11 +243,11 @@ void main(){
   vec4 fs=fieldState(c);
   float red=fs.x;
   float kk=1.0+floor(s2*3.0);
-  float base=mix(0.45,5.6,pow(s1,2.5))*(0.6+0.9*smoothstep(0.0,55.0,abs(c.x)));
+  float base=mix(0.45,5.6,pow(s1,2.5))*(0.6+0.9*ss(0.0,55.0,abs(c.x)));
   float breathe=0.72+0.28*sin(TAU*(kk*uP+s1*9.0));
   float wave=0.5+0.5*sin(TAU*(c.y*0.045-2.0*uP)+c.x*0.07);
   float h=base*(0.55+0.75*wave)*breathe;
-  float jit=red*step(0.55,h21(c+floor(uP*180.0),3.0))*2.4*(0.3+s1);
+  float jit=red*(0.5+0.5*sin(TAU*((8.0+floor(s2*8.0))*uP+s1*7.0)))*1.7*(0.3+s1);
   h+=jit+fs.z*(3.0+5.0*s1)+fs.y*(2.0+6.0*s2)+fs.w*1.6*s1;
   h=max(h,0.12);
   float hc=h21(c,7.0);
@@ -252,7 +256,7 @@ void main(){
   vec3 col=mix(cb,cr,red);
   col=mix(col,vec3(1.0,0.92,0.88),clamp(fs.y*0.6+fs.z*0.7,0.0,1.0));
   vC=col;
-  vFl=pow(0.5+0.5*sin(TAU*(kk*uP+s2*13.0)),22.0)*step(0.55,s2)+fs.z*0.8+fs.y*0.5;
+  vFl=pow(max(0.5+0.5*sin(TAU*(kk*uP+s2*13.0)),0.0),8.0)*step(0.78,s2)+fs.z*0.8+fs.y*0.5;
   vH=h;
   vL=vec3(aPos.x,aPos.y*h,aPos.z);
   vec3 wp=vec3(c.x+0.5+aPos.x*0.74,aPos.y*h,c.y+0.5+aPos.z*0.74);
@@ -266,23 +270,26 @@ in vec3 vW; in vec3 vN; in vec3 vL; in vec3 vC; in float vH; in float vFl;
 out vec4 o;
 void main(){
   vec3 n=normalize(vN);
+  vec3 dL=fwidth(vL);
   vec3 tp=vW-uEye; float dist=length(tp); vec3 vd=tp/dist;
   vec3 col;
   if(abs(n.y)>0.5){
     float e=0.5-max(abs(vL.x),abs(vL.z));
-    float rim=smoothstep(0.09,0.02,e);
-    float panel=1.0-smoothstep(0.0,0.5,e)*0.5;
+    float rim=edgeG(e,0.07,max(dL.x,dL.z));
+    float panel=1.0-ss(0.0,0.5,e)*0.5;
     col=vC*(0.09*panel+1.5*rim+2.2*vFl);
   } else {
     float u=abs(n.x)>0.5?vL.z:vL.x;
+    float fwu=abs(n.x)>0.5?dL.z:dL.x;
     float ya=vL.y;
     float ve=0.5-abs(u);
-    float edgeG=smoothstep(0.08,0.01,ve);
-    float topG=smoothstep(0.45,0.0,vH-ya);
+    float edge=edgeG(ve,0.06,fwu);
+    float topG=ss(0.45,0.0,vH-ya);
     float g=pow(clamp(ya/max(vH,0.1),0.0,1.0),1.6);
-    float rows=smoothstep(0.80,0.96,fract(ya*2.5));
-    float win=step(0.40,h21(vec2(floor(u*3.0+1.5)+floor(vW.x*0.0),floor(ya*2.5)+floor(vW.z*13.0)+floor(vW.x*7.0)),11.0));
-    col=vC*(0.012+0.20*g+0.7*edgeG*(0.4+0.6*g)+1.1*topG+0.45*rows*win*(0.3+g)+1.0*vFl*g);
+    float rows=ss(0.80,0.96,fract(ya*2.5));
+    float win=step(0.40,h21(vec2(floor(u*3.0+1.5),floor(ya*2.5)+floor(vW.z*13.0)+floor(vW.x*7.0)),11.0));
+    float pat=mix(rows*win,0.28,ss(0.10,0.30,dL.y));
+    col=vC*(0.012+0.20*g+0.7*edge*(0.4+0.6*g)+1.1*topG+0.45*pat*(0.3+g)+1.0*vFl*g);
     col*=0.75+0.25*n.x*sign(uCR.x+1e-4);
   }
   if(vW.y<0.0) col*=0.62*exp(vW.y*0.16);
@@ -311,13 +318,13 @@ uniform float uInt;
 void main(){
   float u=vQ.x, v=vQ.y;
   float across=exp(-u*u*6.0)+0.6*exp(-u*u*60.0);
-  float along=pow(1.0-v,1.5)*smoothstep(0.0,0.02,v);
+  float along=pow(1.0-v,1.5)*ss(0.0,0.02,v);
   float k=vC.z;
   float pl=pow(fract(v*2.0-k*3.0*uP+vC.y),7.0);
   float kind=vC.x;
   vec3 col=kind<0.5?vec3(1.0,0.10,0.14):vec3(0.14,0.55,1.0);
   float amp=kind<0.5?(0.16+0.95*uAtk):(0.25+0.75*uDef);
-  float flick=kind<0.5?mix(1.0,step(0.35,h21(vec2(vC.y*77.0,floor(uP*180.0)),55.0)),0.6*uAtk):1.0;
+  float flick=kind<0.5?mix(1.0,0.72+0.28*sin(TAU*(9.0*uP+vC.y*13.0)),uAtk):1.0;
   float I=across*along*(0.30+1.6*pl)*amp*flick;
   I*=exp(-vDist*0.0045);
   vec3 c=mix(col,vec3(1.0,0.85,0.85),0.25*pl);
@@ -361,11 +368,11 @@ void main(){
   float hp1=fract(k*uP+off);
   float hp2=fract(k*uP+off+0.5);
   float b1=fract(hp1-vS), b2=fract(hp2-vS);
-  float p1=exp(-b1*16.0)*smoothstep(0.0,0.012,b1);
-  float p2=exp(-b2*16.0)*smoothstep(0.0,0.012,b2)*0.8;
+  float p1=exp(-b1*16.0)*ss(0.0,0.012,b1);
+  float p2=exp(-b2*16.0)*ss(0.0,0.012,b2)*0.8;
   float pulse=p1+p2;
   float across=exp(-vSide*vSide*4.5)+0.5*exp(-vSide*vSide*30.0);
-  float endF=smoothstep(0.0,0.05,vS)*smoothstep(1.0,0.93,vS);
+  float endF=ss(0.0,0.05,vS)*ss(1.0,0.93,vS);
   bool red=vKind<0.5;
   float env=red?(0.22+0.95*uAtk):(0.20+0.95*uDef);
   vec3 col=red?vec3(1.0,0.10,0.14):vec3(0.16,0.62,1.0);
@@ -389,20 +396,20 @@ void main(){
 const FS_EMB = HEAD + `
 uniform sampler2D uEmb; uniform float uInt;
 in vec2 vQ; out vec4 o;
-float ring(float r,float R,float w){return smoothstep(w,0.0,abs(r-R));}
+float ring(float r,float R,float w){return ss(w,0.0,abs(r-R));}
 void main(){
   vec2 v=vQ;
   float band=floor(v.y*34.0);
-  float tq=floor(uT*15.0);
+  float tq=floor(uT*10.0);
   float glt=uGlitch*step(0.86,h21(vec2(band,tq),71.0));
   v.x+=glt*(h21(vec2(band,tq),72.0)-0.5)*0.10;
-  float r=length(v); float a=atan(v.y,v.x);
+  float r=length(v); float a=atan(v.y,v.x+1e-5);
   vec2 uv=v*0.5+0.5;
   vec2 tuv=vec2(uv.x,1.0-uv.y);
   float ca=0.004*(1.0+uGlitch*3.0);
   vec3 e=vec3(texture(uEmb,tuv+vec2(ca,0.0)).r,texture(uEmb,tuv).g,texture(uEmb,tuv-vec2(ca,0.0)).b);
   vec3 e2=texture(uEmb,tuv).rgb;
-  float open=smoothstep(0.35,0.65,uAlert);
+  float open=ss(0.35,0.65,uAlert);
   float shield=e2.r;
   float lock=mix(e2.g,e2.b,open);
   vec3 cb=vec3(0.10,0.55,1.0), cr=vec3(1.0,0.10,0.15);
@@ -413,7 +420,7 @@ void main(){
   float ang=a/TAU;
   float r1=ring(r,0.975,0.006);
   float r2=ring(r,0.935,0.004)*(0.4+0.6*step(0.5,fract(ang*96.0-uP*6.0)));
-  float tk=step(0.72,fract(ang*72.0+uP*2.0))*smoothstep(0.022,0.0,abs(r-0.955));
+  float tk=step(0.72,fract(ang*72.0+uP*2.0))*ss(0.022,0.0,abs(r-0.955));
   float seg=ring(r,0.90,0.010)*step(0.45,fract(ang*3.0-uP*1.0));
   float seg2=ring(r,0.885,0.006)*step(0.6,fract(ang*5.0+uP*2.0));
   float rings=r1*1.0+r2*0.9+tk*1.4+seg*1.3+seg2*0.9;
@@ -437,28 +444,24 @@ void main(){
   vCol=mix(vec3(0.30,0.72,1.0),vec3(1.0,0.22,0.26),fs.x);
   vSeed=aS.x; vQ=aQ;
   float d=length(c-uEye);
-  vAl=(0.55+0.45*sin(TAU*(2.0*uP+aS.x*9.0)))*exp(-d*0.006);
+  float hpx=sc*0.9*uRes.y/(2.0*uTanH*d);
+  vAl=(0.55+0.45*sin(TAU*(2.0*uP+aS.x*9.0)))*exp(-d*0.006)*ss(6.0,16.0,hpx);
   gl_Position=uVP*vec4(wp,1.0);
 }`;
 const FS_TAG = HEAD + `
 uniform sampler2D uAtlas;
 in vec2 vQ; in vec3 vCol; in float vSeed; in float vAl; out vec4 o;
 void main(){
-  float I=0.0;
-  if(vQ.x>0.14){
-    float x=(vQ.x-0.14)/0.86;
-    float n=6.0;
-    float ci=floor(x*n); float lu=fract(x*n);
-    float chg=step(0.7,h21(vec2(ci,vSeed*50.0),61.0));
-    float g=floor(h21(vec2(ci,vSeed*100.0+chg*floor(uP*45.0)),60.0)*16.0);
-    vec2 auv=vec2((g+mix(0.12,0.88,lu))/16.0,(1.0-vQ.y)*0.5*0.92+0.02);
-    float glt=texture(uAtlas,auv).r*step(0.06,vQ.y)*step(vQ.y,0.94);
-    float under=smoothstep(0.05,0.0,abs(vQ.y-0.0));
-    I=glt*1.4+under*0.8;
-  } else {
-    float b=step(abs(vQ.x-0.06),0.045)*step(abs(vQ.y-0.5),0.28);
-    I=b*1.6;
-  }
+  float x=clamp((vQ.x-0.14)/0.86,0.0,0.9999);
+  float n=6.0;
+  float ci=floor(x*n); float lu=fract(x*n);
+  float chg=step(0.7,h21(vec2(ci,vSeed*50.0),61.0));
+  float g=floor(h21(vec2(ci,vSeed*100.0+chg*floor(uP*22.0)),60.0)*16.0);
+  vec2 auv=vec2((g+mix(0.12,0.88,lu))/16.0,(1.0-vQ.y)*0.5*0.92+0.02);
+  float gly=texture(uAtlas,auv).r*step(0.06,vQ.y)*step(vQ.y,0.94);
+  float under=ss(0.05,0.0,abs(vQ.y));
+  float b=step(abs(vQ.x-0.06),0.045)*step(abs(vQ.y-0.5),0.28);
+  float I=vQ.x>0.14?(gly*1.4+under*0.8):b*1.6;
   o=vec4(vCol*I*vAl,1.0);
 }`;
 
@@ -479,8 +482,12 @@ void main(){
   vCol=mix(base,vec3(1.0),0.15*aB.x);
   float size=aA.w;
   vBok=size>0.8?1.0:0.0;
-  vAl=sin(ph*3.14159265)*(0.55+0.45*sin(TAU*(3.0*uP+aB.z*9.0)));
-  vec3 wp=c+(uCR*aQ.x+uCU*aQ.y)*size;
+  float dd=length(c-uEye);
+  float pr=size*uRes.y/(2.0*uTanH*dd);
+  float k2=max(1.0,6.0/pr);
+  float en=vBok>0.5?1.0:min(1.0,(pr/6.0)*(pr/6.0));
+  vAl=sin(ph*3.14159265)*(0.55+0.45*sin(TAU*(3.0*uP+aB.z*9.0)))*en;
+  vec3 wp=c+(uCR*aQ.x+uCU*aQ.y)*size*k2;
   vQ=aQ;
   gl_Position=uVP*vec4(wp,1.0);
 }`;
@@ -492,9 +499,9 @@ void main(){
   float r=sqrt(r2);
   float I;
   if(vBok>0.5){
-    I=smoothstep(1.0,0.9,r)*(0.55+0.45*smoothstep(0.6,0.96,r))*0.085;
+    I=ss(1.0,0.9,r)*(0.55+0.45*ss(0.6,0.96,r))*0.085;
   } else {
-    I=exp(-r2*5.0)*0.5+exp(-r2*30.0)*2.2;
+    I=exp(-r2*4.0)*0.6+exp(-r2*16.0)*1.5;
   }
   o=vec4(vCol*I*vAl,1.0);
 }`;
@@ -511,13 +518,16 @@ vec3 sm(vec2 uv){
   float w=max(soft,br-uThr)/max(br,1e-4);
   return c*w;
 }
+float kw(vec3 c){return 1.0/(1.0+dot(c,vec3(0.2126,0.7152,0.0722)));}
 void main(){
   vec2 uv=vUv, p=uPx;
   vec3 a=sm(uv+p*vec2(-2,-2)),b=sm(uv+p*vec2(0,-2)),c=sm(uv+p*vec2(2,-2));
   vec3 d=sm(uv+p*vec2(-2,0)),e=sm(uv),f=sm(uv+p*vec2(2,0));
   vec3 g=sm(uv+p*vec2(-2,2)),h=sm(uv+p*vec2(0,2)),i=sm(uv+p*vec2(2,2));
   vec3 j=sm(uv+p*vec2(-1,-1)),k=sm(uv+p*vec2(1,-1)),l=sm(uv+p*vec2(-1,1)),m=sm(uv+p*vec2(1,1));
-  vec3 r=e*0.125+(a+c+g+i)*0.03125+(b+d+f+h)*0.0625+(j+k+l+m)*0.125;
+  vec3 g0=(a+b+d+e)*0.25,g1=(b+c+e+f)*0.25,g2=(d+e+g+h)*0.25,g3=(e+f+h+i)*0.25,g4=(j+k+l+m)*0.25;
+  float w0=0.125*kw(g0),w1=0.125*kw(g1),w2=0.125*kw(g2),w3=0.125*kw(g3),w4=0.5*kw(g4);
+  vec3 r=(g0*w0+g1*w1+g2*w2+g3*w3+g4*w4)/(w0+w1+w2+w3+w4);
   o=vec4(r,1.0);
 }`;
 const FS_DOWN = HEAD + `
@@ -549,7 +559,7 @@ uniform sampler2D uScene; uniform sampler2D uBloom; uniform sampler2D uBloomW;
 in vec2 vUv; out vec4 o;
 float hash12(vec2 p){vec3 p3=fract(vec3(p.xyx)*0.1031);p3+=dot(p3,p3.yzx+33.33);return fract((p3.x+p3.y)*p3.z);}
 vec3 aces(vec3 x){return clamp((x*(2.51*x+0.03))/(x*(2.43*x+0.59)+0.14),0.0,1.0);}
-float hudLine(float d,float px){return smoothstep(px*1.2,0.0,d);}
+float hudLine(float d,float px){return ss(px*1.2,0.0,d);}
 float hud(vec2 uv){
   vec2 p=(uv-0.5)*vec2(uAspect,1.0)*2.0;
   float px=2.0/uRes.y;
@@ -560,25 +570,25 @@ float hud(vec2 uv){
   if(q.x<0.0&&q.x>-arm) br=max(br,hudLine(abs(q.y)-t,px));
   // tick ladders on left / right
   float lx=abs(abs(p.x)-(uAspect-m*0.55));
-  float yy=p.y*26.0+uP*2.0;
-  float tick=step(abs(p.y),0.55)*hudLine(lx-0.006*(1.0+step(0.5,fract(yy*0.5))*1.5),px)*smoothstep(0.06,0.0,abs(fract(yy)-0.5)-0.44);
+  float yy=p.y*26.0;
+  float tick=step(abs(p.y),0.55)*hudLine(lx-0.006*(1.0+step(0.5,fract(yy*0.5))*1.5),px)*ss(0.06,0.0,abs(fract(yy)-0.5)-0.44);
   return clamp(br*0.55+tick*0.35,0.0,1.0);
 }
 void main(){
   vec2 uv=vUv;
-  float tq=floor(uT*15.0);
+  float tq=floor(uT*10.0);
   float glt=uGlitch;
   if(glt>0.001){
     float band=floor(uv.y*34.0);
     float hb=h21(vec2(band,tq),41.0);
-    uv.x+=step(1.0-0.20*glt,hb)*(h21(vec2(band,tq),42.0)-0.5)*0.07*glt;
+    uv.x+=step(1.0-0.16*glt,hb)*(h21(vec2(band,tq),42.0)-0.5)*0.045*glt;
     float b2=floor(uv.y*190.0);
     float h2=h21(vec2(b2,tq),43.0);
-    uv.x+=step(1.0-0.05*glt,h2)*(h21(vec2(b2,tq),44.0)-0.5)*0.14*glt;
+    uv.x+=step(1.0-0.04*glt,h2)*(h21(vec2(b2,tq),44.0)-0.5)*0.08*glt;
   }
   vec2 cc=uv-0.5;
   float r2=dot(cc*vec2(1.0,0.8),cc*vec2(1.0,0.8));
-  float ca=0.0007+0.006*r2+glt*0.0035;
+  float ca=0.0007+0.005*r2+glt*0.0022;
   vec3 s;
   s.r=texture(uScene,uv+cc*ca*2.0).r;
   s.g=texture(uScene,uv).g;
@@ -590,6 +600,7 @@ void main(){
     streak+=texture(uBloomW,uv+vec2(float(i)*0.010,0.0)).rgb*w; ws+=w;
   }
   streak/=ws;
+  s=clamp(s,vec3(0.0),vec3(64.0));
   vec3 col=s+bl+streak*vec3(0.55,0.75,1.0)*0.9;
   col*=0.95;
   col=aces(col);
@@ -598,14 +609,15 @@ void main(){
   col*=mix(vec3(1.0),vec3(1.06,0.92,0.94),uAlert*0.5);
   col=pow(col,vec3(1.0/2.2));
   // vignette
-  float vg=1.0-0.55*smoothstep(0.30,1.0,length(cc*vec2(1.1,0.95)*1.6));
+  float vg=1.0-0.55*ss(0.30,1.0,length(cc*vec2(1.1,0.95)*1.6));
   col*=vg;
   // hud
   vec3 hc=mix(vec3(0.35,0.70,1.0),vec3(1.0,0.30,0.35),uAlert);
   col+=hc*hud(vUv)*0.55;
   // dither + fine grain
-  float n=hash12(gl_FragCoord.xy+vec2(tq*17.0,tq*5.0));
-  col+=(n-0.5)*(1.6/255.0);
+  float fq=floor(uT*60.0);
+  float n=hash12(gl_FragCoord.xy+vec2(fq*17.0,fq*5.0));
+  col+=(n-0.5)*(1.2/255.0);
   o=vec4(col,1.0);
 }`;
 
@@ -769,7 +781,6 @@ const cubeData=(()=>{
     [[ 1,0,0],[[.5,0,-.5],[.5,1,-.5],[.5,1,.5],[.5,0,.5]]],
     [[-1,0,0],[[-.5,0,.5],[-.5,1,.5],[-.5,1,-.5],[-.5,0,-.5]]],
     [[0, 1,0],[[-.5,1,-.5],[-.5,1,.5],[.5,1,.5],[.5,1,-.5]]],
-    [[0,-1,0],[[-.5,0,.5],[-.5,0,-.5],[.5,0,-.5],[.5,0,.5]]],
     [[0,0, 1],[[.5,0,.5],[.5,1,.5],[-.5,1,.5],[-.5,0,.5]]],
     [[0,0,-1],[[-.5,0,-.5],[-.5,1,-.5],[.5,1,-.5],[.5,0,-.5]]]
   ];
@@ -921,14 +932,14 @@ const PROJ=perspective(FOV,ASPECT,0.4,900);
 function frameState(t){
   const p=t/LOOP, th=p*Math.PI*2;
   const alert=sstep(3.0,5.6,t)*(1-sstep(8.5,10.5,t));
-  const glitch=0.5*sstep(3.0,4.5,t)*(1-sstep(8.4,9.0,t))+0.6*Math.exp(-Math.pow((t-9.0)/0.5,2));
+  const burst=(c,w,a)=>a*Math.exp(-Math.pow((t-c)/w,2));
+  const glitch=Math.min(1,burst(3.3,0.13,0.6)+burst(4.9,0.11,0.45)+burst(6.5,0.11,0.55)+burst(8.2,0.14,0.7)+burst(8.8,0.22,0.9));
   const atk=0.25+0.75*sstep(2.2,4.5,t)*(1-sstep(8.6,10.5,t));
   const def=0.25+0.75*sstep(8.4,9.6,t)*(1-sstep(13.0,14.6,t));
-  const shake=glitch*0.10;
-  const q=Math.floor(t*30);
-  const sx=shake*Math.sin(q*12.9898), sy=shake*Math.sin(q*78.233);
-  const eye=[11*Math.sin(th)+sx, 11.2+1.4*Math.sin(2*th+0.7)+sy, -30+6*Math.cos(th)];
-  const tgt=[4*Math.sin(th+1.1), 3.8+0.8*Math.sin(2*th+2.0), 62];
+  const shake=glitch*0.07;
+  const sx=shake*Math.sin(t*31.4), sy=shake*Math.sin(t*26.7+1.3);
+  const eye=[7*Math.sin(th)+sx, 11.2+1.0*Math.sin(2*th+0.7)+sy, -30+4*Math.cos(th)];
+  const tgt=[3*Math.sin(th+1.1), 3.8+0.7*Math.sin(2*th+2.0), 62];
   const roll=0.012*Math.sin(2*th+0.4);
   const cam=lookAt(eye,tgt,[Math.sin(roll),Math.cos(roll),0]);
   return {t,p,alert,glitch,atk,def,eye,cam,vp:mul(PROJ,cam.m)};
@@ -973,7 +984,7 @@ function renderFrame(tIn){
 
   // reflected towers
   use(P.tower,S); gl.uniform1f(P.tower.u.uMirror,-1);
-  gl.bindVertexArray(vaoTower); gl.drawElementsInstanced(gl.TRIANGLES,36,gl.UNSIGNED_SHORT,0,towerCount);
+  gl.bindVertexArray(vaoTower); gl.drawElementsInstanced(gl.TRIANGLES,30,gl.UNSIGNED_SHORT,0,towerCount);
 
   // reflected light (beams + shield hologram)
   gl.enable(gl.BLEND); gl.blendFunc(gl.ONE,gl.ONE); gl.depthMask(false);
@@ -991,7 +1002,7 @@ function renderFrame(tIn){
 
   // towers
   use(P.tower,S); gl.uniform1f(P.tower.u.uMirror,1);
-  gl.bindVertexArray(vaoTower); gl.drawElementsInstanced(gl.TRIANGLES,36,gl.UNSIGNED_SHORT,0,towerCount);
+  gl.bindVertexArray(vaoTower); gl.drawElementsInstanced(gl.TRIANGLES,30,gl.UNSIGNED_SHORT,0,towerCount);
 
   // additive light
   gl.enable(gl.BLEND); gl.blendFunc(gl.ONE,gl.ONE); gl.depthMask(false);
