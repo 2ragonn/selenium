@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dynamic Colorful Equalizer Bars - Glowing Audio Visualizer (4K, 15s seamless loop)</title>
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #04040a; }
+  #stage {
+    position: fixed; left: 50%; top: 50%; width: 3840px; height: 2160px; display: block;
+    transform: translate(-50%, -50%) scale(var(--s, 1)); transform-origin: center center;
+    background: #04040a;
+  }
+</style>
+</head>
+<body>
+<canvas id="stage" width="3840" height="2160"></canvas>
+<script>
+(() => {
+'use strict';
+
+/* =====================================================================
+   Dynamic Colorful Equalizer Bars - Glowing Audio Visualizer
+   4K (3840x2160) - 15 second seamless loop - no audio, "silent beats"
+   Everything is a pure function of loop time, so frame N of loop K is
+   identical to frame N of loop K+1 (perfect loop at any frame rate).
+   Renderer: WebGL2 (HDR + bloom). Fallback: Canvas 2D.
+   ===================================================================== */
+
+const W = 3840, H = 2160;
+const LOOP = 15;                 // seconds
+const BPM = 128;                 // 128 BPM -> exactly 32 beats per 15 s loop
+const BEAT = 60 / BPM;
+const NBEATS = 32;
+const NB = 72;                   // number of equalizer bars
+const TAU = Math.PI * 2;
+
+const canvas = document.getElementById('stage');
+function fit() {
+  const s = Math.min(innerWidth / W, innerHeight / H);
+  document.documentElement.style.setProperty('--s', s.toString());
+}
+addEventListener('resize', fit); fit();
+
+/* ---------------- deterministic PRNG ---------------- */
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+const rand = mulberry32(20240915);
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const sq = v => v * v;
+const smoothstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+
+/* ---------------- silent beat programme ---------------- */
+const kickPat = new Float32Array(NBEATS);
+const snarePat = new Float32Array(NBEATS);
+const hatPat = new Float32Array(NBEATS * 2);
+for (let b = 0; b < NBEATS; b++) {
+  const pos = b % 4, bar = (b / 4) | 0;
+  kickPat[b] = [1.0, 0.72, 0.92, 0.78][pos];
+  if (bar === 3 || bar === 7) kickPat[b] = [1.0, 0.86, 0.96, 1.0][pos];        // fills
+  snarePat[b] = (pos === 1 || pos === 3) ? 1.0 : ((bar === 7 && pos === 2) ? 0.6 : 0.0);
+  hatPat[b * 2] = 0.9; hatPat[b * 2 + 1] = 0.55;
+  if (pos === 3) hatPat[b * 2 + 1] = 1.0;                                       // open hat
+}
+const MELN = 32;                                                                // 16 beats -> 2 cycles per loop
+const scaleX = [0.40, 0.46, 0.52, 0.58, 0.64, 0.70, 0.76, 0.82];
+const seq = [0,2,4,7, 4,2,5,3, 0,3,5,7, 6,4,2,1, 0,2,4,7, 5,3,6,4, 7,5,3,1, 2,4,6,0];
+const melX = new Float32Array(MELN), melG = new Float32Array(MELN);
+for (let k = 0; k < MELN; k++) {
+  melX[k] = scaleX[seq[k]];
+  melG[k] = (k % 8 === 3 || k % 8 === 6) ? 0 : 0.7 + 0.3 * rand();
+}
+
+/* per-bar character */
+const barPh = new Float32Array(NB), barK = new Float32Array(NB), barAmp = new Float32Array(NB);
+const kbA = new Float32Array(NB), sbA = new Float32Array(NB), hbA = new Float32Array(NB), baseA = new Float32Array(NB);
+for (let i = 0; i < NB; i++) {
+  const x = (i + 0.5) / NB;
+  barPh[i] = rand() * TAU;
+  barK[i] = 3 + Math.floor(rand() * 7);           // integer -> periodic
+  barAmp[i] = 0.82 + 0.36 * rand();
+  kbA[i] = Math.exp(-sq((x - 0.05) / 0.17)) * (0.72 + 0.28 * rand());
+  sbA[i] = Math.exp(-sq((x - 0.40) / 0.15));
+  hbA[i] = smoothstep(0.55, 0.95, x);
+  baseA[i] = 0.20 + 0.40 * Math.exp(-sq((x - 0.15) / 0.30)) + 0.16 * Math.exp(-sq((x - 0.60) / 0.22)) - 0.06 * x;
+}
+
+function envAt(t, period, count, pattern, decay, attack) {
+  const k0 = Math.floor(t / period);
+  let e = 0;
+  for (let k = k0; k > k0 - 3; k--) {
+    const tau = t - k * period;
+    const idx = ((k % count) + count) % count;
+    const s = pattern[idx];
+    if (!s) continue;
+    e += s * Math.exp(-tau * decay) * (1 - Math.exp(-tau * attack));
+  }
+  return e;
+}
+
+const NS = 13, SDT = 0.05;      // analytic peak-hold / decay sampling window
+const G = [];
+for (let j = 0; j < NS; j++) G.push({ tl: 0, E: 0, kick: 0, snare: 0, hat: 0, mx: new Float32Array(3), me: new Float32Array(3) });
+
+function fillGlobals(g, ts) {
+  g.tl = ts / LOOP;
+  g.E = 0.8 + 0.2 * Math.sin(TAU * g.tl - Math.PI / 2);
+  g.kick = envAt(ts, BEAT, NBEATS, kickPat, 7.0, 90);
+  g.snare = envAt(ts, BEAT, NBEATS, snarePat, 6.0, 90);
+  g.hat = envAt(ts, BEAT / 2, NBEATS * 2, hatPat, 11.0, 120);
+  const per = BEAT / 2, k0 = Math.floor(ts / per);
+  for (let m = 0; m < 3; m++) {
+    const k = k0 - m, tau = ts - k * per, idx = ((k % MELN) + MELN) % MELN;
+    g.mx[m] = melX[idx];
+    g.me[m] = melG[idx] * Math.exp(-tau * 4.5) * (1 - Math.exp(-tau * 60));
+  }
+}
+
+function rawH(i, x, g) {
+  const tl = g.tl;
+  const n1 = 0.5 + 0.5 * Math.sin(TAU * (3 * x + 2 * tl) + 0.7);
+  const n2 = 0.5 + 0.5 * Math.sin(TAU * (7 * x - 3 * tl) + 2.1);
+  const n3 = 0.5 + 0.5 * Math.sin(TAU * (12 * x + 5 * tl) + 4.0);
+  const n4 = 0.5 + 0.5 * Math.sin(TAU * (barK[i] * tl) + barPh[i]);
+  const noise = 0.38 * n1 + 0.24 * n2 + 0.16 * n3 + 0.22 * n4;
+  let mel = 0;
+  for (let m = 0; m < 3; m++) mel += g.me[m] * Math.exp(-sq((x - g.mx[m]) / 0.045));
+  let h = baseA[i] * (0.30 + 0.70 * noise) * g.E * barAmp[i]
+        + g.kick * kbA[i] * 0.80 * (0.6 + 0.4 * n4)
+        + g.snare * sbA[i] * 0.62 * (0.7 + 0.3 * n4)
+        + g.hat * hbA[i] * 0.42 * (0.6 + 0.4 * n4)
+        + mel * 0.55;
+  h = h / (1 + 0.22 * h);                       // soft-knee limiter: no flat walls on kicks
+  return clamp(h, 0.015, 1);
+}
+
+const barData = new Float32Array(NB * 4);   // h, peak, hit, 0
+const ringData = new Float32Array(12);      // age, strength, hue, 0  (x3)
+let gKick = 0, gSnare = 0, gHat = 0, gEnergy = 0;
+
+function computeBars(t) {
+  for (let j = 0; j < NS; j++) fillGlobals(G[j], t - j * SDT);
+  const g0 = G[0];
+  gKick = Math.min(1, g0.kick); gSnare = Math.min(1, g0.snare); gHat = Math.min(1, g0.hat); gEnergy = g0.E;
+  for (let i = 0; i < NB; i++) {
+    const x = (i + 0.5) / NB;
+    let hd = 0, pk = 0;
+    for (let j = 0; j < NS; j++) {
+      const h = rawH(i, x, G[j]), s = j * SDT;
+      if (j <= 4) { const v = h * (1 - 4 * s); if (v > hd) hd = v; }
+      const v2 = h - Math.max(0, s - 0.12) * 1.9; if (v2 > pk) pk = v2;
+    }
+    barData[i * 4] = hd;
+    barData[i * 4 + 1] = pk;
+    barData[i * 4 + 2] = clamp(g0.kick * kbA[i] + g0.snare * sbA[i] + g0.hat * hbA[i], 0, 1);
+    barData[i * 4 + 3] = 0;
+  }
+  const k0 = Math.floor(t / BEAT);
+  for (let r = 0; r < 3; r++) {
+    const k = k0 - r, tau = t - k * BEAT, idx = ((k % NBEATS) + NBEATS) % NBEATS;
+    const s = kickPat[idx];
+    ringData[r * 4] = tau;
+    ringData[r * 4 + 1] = s >= 0.9 ? 1.0 : 0.35 * s;
+    ringData[r * 4 + 2] = (k * BEAT) / LOOP + 0.25;
+    ringData[r * 4 + 3] = 0;
+  }
+}
+
+/* =====================================================================
+   WebGL2 renderer
+   ===================================================================== */
+const GLSL_COMMON = `
+const float TAU = 6.28318530718;
+float sq(float v){ return v * v; }
+vec3 pal(float u){
+  float s = fract(u) * 8.0;
+  vec3 c = mix(vec3(0.15,0.95,1.00), vec3(0.25,0.55,1.00), clamp(s,0.0,1.0));
+  c = mix(c, vec3(0.62,0.30,1.00), clamp(s-1.0,0.0,1.0));
+  c = mix(c, vec3(1.00,0.25,0.85), clamp(s-2.0,0.0,1.0));
+  c = mix(c, vec3(1.00,0.30,0.45), clamp(s-3.0,0.0,1.0));
+  c = mix(c, vec3(1.00,0.60,0.15), clamp(s-4.0,0.0,1.0));
+  c = mix(c, vec3(0.85,1.00,0.25), clamp(s-5.0,0.0,1.0));
+  c = mix(c, vec3(0.25,1.00,0.60), clamp(s-6.0,0.0,1.0));
+  c = mix(c, vec3(0.15,0.95,1.00), clamp(s-7.0,0.0,1.0));
+  return c * c;
+}`;
+
+const VS_FULL = `#version 300 es
+out vec2 v_uv;
+void main(){
+  vec2 p = vec2((gl_VertexID == 1) ? 3.0 : -1.0, (gl_VertexID == 2) ? 3.0 : -1.0);
+  v_uv = p * 0.5 + 0.5;
+  gl_Position = vec4(p, 0.0, 1.0);
+}`;
+
+const FS_SCENE = `#version 300 es
+precision highp float;
+#define NB ${NB}
+in vec2 v_uv;
+out vec4 o;
+uniform vec2 u_res;
+uniform float u_time, u_loop;
+uniform vec4 u_bars[NB];
+uniform float u_kick, u_snare, u_hat, u_energy, u_zoom;
+uniform vec4 u_rings[3];
+${GLSL_COMMON}
+const float FLOORY = -0.20;
+const float BARMAX = 0.58;
+const float XL = -0.80, XR = 0.80;
+const float BARW = 0.0158;
+const float SEGH = 0.026;
+
+float sdRB(vec2 p, vec2 b, float r){
+  vec2 d = abs(p) - b + r;
+  return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - r;
+}
+
+vec3 mainBars(vec2 p, float aa, float glowMul, float capMul){
+  float pitch = (XR - XL) / float(NB);
+  int ic = int(floor((p.x - XL) / pitch));
+  vec3 col = vec3(0.0);
+  float tl = u_time / u_loop;
+  for (int k = -1; k <= 1; k++) {
+    int i = ic + k;
+    if (i < 0 || i >= NB) continue;
+    vec4 b = u_bars[i];
+    float H = max(b.x * BARMAX, BARW);
+    float cx = XL + (float(i) + 0.5) * pitch;
+    float hw = BARW * 0.5;
+    float d = sdRB(p - vec2(cx, FLOORY + H * 0.5), vec2(hw, H * 0.5), hw);
+    float fill = 1.0 - smoothstep(-aa, aa, d);
+    float ty = clamp((p.y - FLOORY) / H, 0.0, 1.0);
+    float xn = (cx - XL) / (XR - XL);
+    float hue = xn * 0.55 + tl + 0.06 * b.x;
+    vec3 cb = pal(hue), ct = pal(hue + 0.12);
+    vec3 bc = mix(cb * 0.45, ct, ty);
+    bc = mix(bc, vec3(1.0), 0.38 * smoothstep(0.84, 1.0, ty));
+    float seg = fract((p.y - FLOORY) / SEGH);
+    float gap = smoothstep(0.78, 0.86, seg) * (1.0 - smoothstep(0.94, 1.0, seg));
+    bc *= 1.0 - 0.25 * gap;
+    float core = exp(-sq((p.x - cx) / (hw * 0.8)) * 2.0);
+    bc *= 0.85 + 0.35 * core;
+    float inten = 0.55 + 0.55 * b.x + 0.45 * b.z;
+    col += bc * fill * inten;
+    float halo = exp(-max(d, 0.0) / (0.005 + 0.012 * b.x)) * (1.0 - fill);
+    col += cb * halo * (0.18 + 0.45 * b.x + 0.4 * b.z) * glowMul;
+    float py = FLOORY + b.y * BARMAX + 0.016;
+    float dp = sdRB(p - vec2(cx, py), vec2(hw, 0.0032), 0.0032);
+    float pf = 1.0 - smoothstep(-aa, aa, dp);
+    col += mix(ct, vec3(1.0), 0.42) * pf * 1.7 * capMul;
+    col += ct * exp(-max(dp, 0.0) / 0.005) * 0.45 * (1.0 - pf) * glowMul * capMul;
+  }
+  return col;
+}
+
+vec3 ghostBars(vec2 p, float aa){
+  const int NG = 18;
+  float pitch = (XR - XL) / float(NG);
+  int ic = int(floor((p.x - XL) / pitch));
+  vec3 col = vec3(0.0);
+  float tl = u_time / u_loop;
+  for (int k = -1; k <= 1; k++) {
+    int i = ic + k;
+    if (i < 0 || i >= NG) continue;
+    int j0 = i * (NB / NG);
+    float h = 0.0;
+    for (int j = 0; j < NB / NG; j++) h += u_bars[j0 + j].x;
+    h /= float(NB / NG);
+    float H = (0.12 + 0.95 * h) * BARMAX * 1.15;
+    float cx = XL + (float(i) + 0.5) * pitch;
+    float hw = pitch * 0.36;
+    float d = sdRB(p - vec2(cx, FLOORY + 0.02 + H * 0.5), vec2(hw, H * 0.5), hw);
+    float fill = 1.0 - smoothstep(-aa, aa, d);
+    float ty = clamp((p.y - FLOORY - 0.02) / H, 0.0, 1.0);
+    float hue = (cx - XL) / (XR - XL) * 0.55 + tl + 0.5;
+    vec3 c = pal(hue);
+    col += c * fill * (0.03 + 0.07 * ty) * (0.7 + 0.6 * h);
+    col += c * exp(-max(d, 0.0) / 0.03) * 0.02;
+  }
+  return col;
+}
+
+vec3 background(vec2 p){
+  float tl = u_time / u_loop;
+  float ty = p.y + 0.5;
+  vec3 c = mix(vec3(0.010, 0.010, 0.024), vec3(0.022, 0.014, 0.045), 1.0 - clamp(abs(ty - 0.42) * 1.6, 0.0, 1.0));
+  vec2 c0 = vec2(0.45 * sin(TAU * (tl + 0.10)), 0.16 + 0.10 * cos(TAU * (2.0 * tl)));
+  vec2 c1 = vec2(-0.5 * cos(TAU * (tl + 0.35)), 0.05 + 0.14 * sin(TAU * (tl + 0.6)));
+  vec2 c2 = vec2(0.2 * sin(TAU * (2.0 * tl + 0.8)), -0.05 + 0.12 * sin(TAU * (3.0 * tl)));
+  c += pal(tl + 0.15) * exp(-dot(p - c0, p - c0) / 0.12) * 0.045 * (1.0 + 0.5 * u_kick);
+  c += pal(tl + 0.55) * exp(-dot(p - c1, p - c1) / 0.16) * 0.040 * (1.0 + 0.4 * u_snare);
+  c += pal(tl + 0.85) * exp(-dot(p - c2, p - c2) / 0.08) * 0.050 * (1.0 + 0.5 * u_kick);
+  c += pal(tl + 0.3) * exp(-abs(p.y - FLOORY) / 0.14) * 0.035 * (0.8 + 0.4 * u_energy);
+  if (p.y < FLOORY) c *= 0.72;
+  return c;
+}
+
+vec3 rings(vec2 p){
+  vec3 col = vec3(0.0);
+  for (int r = 0; r < 3; r++) {
+    vec4 rg = u_rings[r];
+    if (rg.y <= 0.0) continue;
+    float age = rg.x;
+    float R = 0.04 + age * 0.9;
+    vec2 d = (p - vec2(0.0, FLOORY)) * vec2(1.0, 3.4);
+    float dist = length(d) - R;
+    float w = 0.006 + age * 0.03;
+    float ring = exp(-dist * dist / (w * w)) * rg.y * exp(-age * 2.4);
+    col += pal(rg.z) * ring * 0.7;
+  }
+  return col;
+}
+
+void main(){
+  float aspect = u_res.x / u_res.y;
+  vec2 q = (v_uv - 0.5) * vec2(aspect, 1.0);
+  vec2 p = q / u_zoom;
+  float px = 1.0 / (u_res.y * u_zoom);
+  float aa = 0.75 * px;
+  float tl = u_time / u_loop;
+
+  vec3 col = background(p);
+
+  vec2 pg = q / mix(1.0, u_zoom, 0.5);
+  col += ghostBars(pg, 0.018) * 0.85;
+  if (pg.y < FLOORY + 0.02) {
+    float dg = FLOORY + 0.02 - pg.y;
+    col += ghostBars(vec2(pg.x, 2.0 * (FLOORY + 0.02) - pg.y), 0.02) * 0.5 * exp(-dg / 0.12);
+  }
+
+  col += rings(p);
+
+  // glowing floor under tall bars
+  float pitch = (XR - XL) / float(NB);
+  int ic = int(clamp(floor((p.x - XL) / pitch), 0.0, float(NB - 1)));
+  float hLocal = u_bars[ic].x * step(XL, p.x) * step(p.x, XR);
+  float flHue = (p.x - XL) / (XR - XL) * 0.55 + tl;
+  col += pal(flHue) * exp(-abs(p.y - FLOORY) / 0.035) * 0.35 * hLocal;
+
+  if (p.y >= FLOORY) {
+    col += mainBars(p, aa, 1.0, 1.0);
+  } else {
+    float depth = FLOORY - p.y;
+    float ripple = 0.0014 * sin(p.y * 160.0 + TAU * (2.0 * tl)) * smoothstep(0.0, 0.08, depth);
+    vec2 pr = vec2(p.x + ripple, 2.0 * FLOORY - p.y);
+    col += mainBars(pr, aa * 2.0 + depth * 0.012, 0.5, 0.0) * exp(-depth / 0.12) * 0.42;
+  }
+
+  float flMask = 1.0 - smoothstep(0.78, 0.98, abs(p.x) / (aspect * 0.5));
+  col += pal(flHue) * exp(-abs(p.y - FLOORY) / (1.2 * px)) * (0.5 + 0.9 * u_kick) * flMask;
+  col += pal(flHue) * exp(-abs(p.y - FLOORY) / 0.01) * 0.12 * flMask;
+
+  o = vec4(col, 1.0);
+}`;
+
+const VS_PART = `#version 300 es
+precision highp float;
+layout(location=0) in vec4 a_p;
+layout(location=1) in vec4 a_q;
+uniform vec2 u_res;
+uniform float u_time, u_loop, u_kick, u_zoom;
+out vec3 v_col;
+out float v_soft;
+out float v_rim;
+${GLSL_COMMON}
+void main(){
+  float tl = u_time / u_loop;
+  float depth = a_q.w;
+  float y = fract(a_p.y + a_q.y * tl);
+  float sway = 0.02 + 0.05 * depth;
+  float x = a_p.x + sway * sin(TAU * (a_q.x * tl) + a_p.w);
+  float aspect = u_res.x / u_res.y;
+  vec2 q = vec2((x - 0.5) * aspect * 1.08, (y - 0.5) * 1.08);
+  q *= mix(1.0, u_zoom, depth);
+  gl_Position = vec4(q / vec2(aspect * 0.5, 0.5), 0.0, 1.0);
+  float edge = smoothstep(0.0, 0.10, y) * (1.0 - smoothstep(0.90, 1.0, y));
+  float pulse = 1.0 + 0.35 * u_kick * depth;
+  gl_PointSize = a_p.z * pulse * (u_res.y / 2160.0);
+  float bright = mix(0.30, 0.14, depth) * (0.8 + 0.5 * u_kick) * edge;
+  bright *= 0.75 + 0.25 * sin(TAU * (2.0 * a_q.x * tl) + a_p.w * 3.0);
+  v_col = mix(pal(a_q.z + tl), vec3(1.0), 0.25) * bright;
+  v_soft = mix(0.9, 0.25, depth);
+  v_rim = depth;
+}`;
+
+const FS_PART = `#version 300 es
+precision highp float;
+in vec3 v_col;
+in float v_soft;
+in float v_rim;
+out vec4 o;
+void main(){
+  vec2 d = gl_PointCoord - 0.5;
+  float r = length(d) * 2.0;
+  if (r > 1.0) discard;
+  float disc = 1.0 - smoothstep(1.0 - v_soft, 1.0, r);
+  float rim = smoothstep(0.6, 0.92, r) * (1.0 - smoothstep(0.92, 1.0, r));
+  float a = disc * (0.65 + 0.6 * rim * v_rim);
+  o = vec4(v_col * a, 1.0);
+}`;
+
+const FS_DOWN = `#version 300 es
+precision highp float;
+in vec2 v_uv;
+out vec4 o;
+uniform sampler2D u_tex;
+uniform vec2 u_texel;
+uniform float u_thresh;
+void main(){
+  vec2 t = u_texel;
+  vec3 c = texture(u_tex, v_uv).rgb * 4.0;
+  c += texture(u_tex, v_uv + vec2(-t.x, -t.y)).rgb;
+  c += texture(u_tex, v_uv + vec2( t.x, -t.y)).rgb;
+  c += texture(u_tex, v_uv + vec2(-t.x,  t.y)).rgb;
+  c += texture(u_tex, v_uv + vec2( t.x,  t.y)).rgb;
+  c /= 8.0;
+  if (u_thresh > 0.0) {
+    float l = max(c.r, max(c.g, c.b));
+    c *= smoothstep(u_thresh, u_thresh + 0.7, l);
+  }
+  o = vec4(c, 1.0);
+}`;
+
+const FS_UP = `#version 300 es
+precision highp float;
+in vec2 v_uv;
+out vec4 o;
+uniform sampler2D u_tex, u_tex2;
+uniform vec2 u_texel;
+void main(){
+  vec2 t = u_texel;
+  vec3 c = texture(u_tex, v_uv + vec2(-2.0 * t.x, 0.0)).rgb;
+  c += texture(u_tex, v_uv + vec2(-t.x, t.y)).rgb * 2.0;
+  c += texture(u_tex, v_uv + vec2(0.0, 2.0 * t.y)).rgb;
+  c += texture(u_tex, v_uv + vec2(t.x, t.y)).rgb * 2.0;
+  c += texture(u_tex, v_uv + vec2(2.0 * t.x, 0.0)).rgb;
+  c += texture(u_tex, v_uv + vec2(t.x, -t.y)).rgb * 2.0;
+  c += texture(u_tex, v_uv + vec2(0.0, -2.0 * t.y)).rgb;
+  c += texture(u_tex, v_uv + vec2(-t.x, -t.y)).rgb * 2.0;
+  c /= 12.0;
+  o = vec4(c + texture(u_tex2, v_uv).rgb, 1.0);
+}`;
+
+const FS_COMP = `#version 300 es
+precision highp float;
+in vec2 v_uv;
+out vec4 o;
+uniform sampler2D u_scene, u_bloom;
+uniform vec2 u_res;
+uniform float u_time, u_kick, u_bloomStr;
+vec3 aces(vec3 x){
+  const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
+  return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+float hash(vec2 p){
+  p = fract(p * vec2(123.34, 456.21));
+  p += dot(p, p + 45.32);
+  return fract(p.x * p.y);
+}
+void main(){
+  vec2 uv = v_uv;
+  vec2 dir = uv - 0.5;
+  float ca = 0.0010 + 0.0028 * u_kick;
+  vec3 s;
+  s.r = texture(u_scene, uv + dir * ca).r;
+  s.g = texture(u_scene, uv).g;
+  s.b = texture(u_scene, uv - dir * ca).b;
+  vec3 bl;
+  bl.r = texture(u_bloom, uv + dir * ca * 1.5).r;
+  bl.g = texture(u_bloom, uv).g;
+  bl.b = texture(u_bloom, uv - dir * ca * 1.5).b;
+  vec3 c = s + bl * u_bloomStr;
+  c *= 1.0 + 0.10 * u_kick;
+  c = aces(c);
+  float vig = 1.0 - 0.45 * smoothstep(0.35, 1.0, length(dir * vec2(1.0, 1.25)) * 1.5);
+  c *= vig;
+  float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+  c = mix(vec3(l), c, 1.12);
+  c = pow(max(c, 0.0), vec3(1.0 / 2.2));
+  float g = hash(uv * u_res + vec2(fract(u_time * 13.7) * 77.0, fract(u_time * 7.3) * 91.0));
+  c += (g - 0.5) * 0.022;
+  o = vec4(c, 1.0);
+}`;
+
+function startGL() {
+  const gl = canvas.getContext('webgl2', {
+    antialias: false, alpha: false, depth: false, stencil: false,
+    premultipliedAlpha: false, preserveDrawingBuffer: true, powerPreference: 'high-performance'
+  });
+  if (!gl) return false;
+  const useFloat = !!gl.getExtension('EXT_color_buffer_float');
+
+  function compile(type, src) {
+    const sh = gl.createShader(type);
+    gl.shaderSource(sh, src); gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh));
+    return sh;
+  }
+  function program(vs, fs, uniforms) {
+    const p = gl.createProgram();
+    gl.attachShader(p, compile(gl.VERTEX_SHADER, vs));
+    gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs));
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+    const u = {};
+    for (const n of uniforms) u[n] = gl.getUniformLocation(p, n);
+    return { p, u };
+  }
+  let sceneP, partP, downP, upP, compP;
+  try {
+    sceneP = program(VS_FULL, FS_SCENE, ['u_res', 'u_time', 'u_loop', 'u_bars', 'u_kick', 'u_snare', 'u_hat', 'u_energy', 'u_zoom', 'u_rings']);
+    partP = program(VS_PART, FS_PART, ['u_res', 'u_time', 'u_loop', 'u_kick', 'u_zoom']);
+    downP = program(VS_FULL, FS_DOWN, ['u_tex', 'u_texel', 'u_thresh']);
+    upP = program(VS_FULL, FS_UP, ['u_tex', 'u_tex2', 'u_texel']);
+    compP = program(VS_FULL, FS_COMP, ['u_scene', 'u_bloom', 'u_res', 'u_time', 'u_kick', 'u_bloomStr']);
+  } catch (e) { console.error(e); return false; }
+
+  function makeTarget(w, h, flt) {
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    if (flt) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.HALF_FLOAT, null);
+    else gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    const fb = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+      gl.deleteFramebuffer(fb); gl.deleteTexture(tex);
+      if (flt) return makeTarget(w, h, false);
+      throw new Error('FBO incomplete');
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return { tex, fb, w, h };
+  }
+  let scene, down = [], up = [];
+  const LEVELS = 6;
+  try {
+    scene = makeTarget(W, H, useFloat);
+    for (let i = 0; i < LEVELS; i++) {
+      const w = Math.max(1, W >> (i + 1)), h = Math.max(1, H >> (i + 1));
+      down.push(makeTarget(w, h, useFloat));
+      up.push(makeTarget(w, h, useFloat));
+    }
+  } catch (e) { console.error(e); return false; }
+
+  const emptyVao = gl.createVertexArray();
+
+  /* particles */
+  const NP = 340;
+  const pdata = new Float32Array(NP * 8);
+  for (let i = 0; i < NP; i++) {
+    const depth = Math.pow(rand(), 1.6);
+    pdata[i * 8 + 0] = rand();
+    pdata[i * 8 + 1] = rand();
+    pdata[i * 8 + 2] = 4 + 8 * rand() + depth * depth * 52;
+    pdata[i * 8 + 3] = rand() * TAU;
+    pdata[i * 8 + 4] = 1 + Math.floor(rand() * 3);
+    pdata[i * 8 + 5] = rand() < 0.75 ? 1 : 2;
+    pdata[i * 8 + 6] = rand();
+    pdata[i * 8 + 7] = depth;
+  }
+  const partVao = gl.createVertexArray();
+  gl.bindVertexArray(partVao);
+  const pbuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, pbuf);
+  gl.bufferData(gl.ARRAY_BUFFER, pdata, gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 32, 0);
+  gl.enableVertexAttribArray(1);
+  gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 32, 16);
+  gl.bindVertexArray(null);
+
+  function fullscreen() { gl.bindVertexArray(emptyVao); gl.drawArrays(gl.TRIANGLES, 0, 3); }
+
+  function render(t) {
+    computeBars(t);
+    const zoom = 1 + 0.018 * gKick;
+
+    // 1. scene (HDR)
+    gl.bindFramebuffer(gl.FRAMEBUFFER, scene.fb);
+    gl.viewport(0, 0, W, H);
+    gl.useProgram(sceneP.p);
+    gl.uniform2f(sceneP.u.u_res, W, H);
+    gl.uniform1f(sceneP.u.u_time, t);
+    gl.uniform1f(sceneP.u.u_loop, LOOP);
+    gl.uniform4fv(sceneP.u.u_bars, barData);
+    gl.uniform1f(sceneP.u.u_kick, gKick);
+    gl.uniform1f(sceneP.u.u_snare, gSnare);
+    gl.uniform1f(sceneP.u.u_hat, gHat);
+    gl.uniform1f(sceneP.u.u_energy, gEnergy);
+    gl.uniform1f(sceneP.u.u_zoom, zoom);
+    gl.uniform4fv(sceneP.u.u_rings, ringData);
+    fullscreen();
+
+    // 2. bokeh particles (additive)
+    gl.useProgram(partP.p);
+    gl.uniform2f(partP.u.u_res, W, H);
+    gl.uniform1f(partP.u.u_time, t);
+    gl.uniform1f(partP.u.u_loop, LOOP);
+    gl.uniform1f(partP.u.u_kick, gKick);
+    gl.uniform1f(partP.u.u_zoom, zoom);
+    gl.enable(gl.BLEND);
+    gl.blendFuncSeparate(gl.ONE, gl.ONE, gl.ZERO, gl.ONE);
+    gl.bindVertexArray(partVao);
+    gl.drawArrays(gl.POINTS, 0, NP);
+    gl.disable(gl.BLEND);
+
+    // 3. bloom: downsample chain
+    gl.useProgram(downP.p);
+    gl.activeTexture(gl.TEXTURE0);
+    let src = scene;
+    for (let i = 0; i < LEVELS; i++) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, down[i].fb);
+      gl.viewport(0, 0, down[i].w, down[i].h);
+      gl.bindTexture(gl.TEXTURE_2D, src.tex);
+      gl.uniform1i(downP.u.u_tex, 0);
+      gl.uniform2f(downP.u.u_texel, 1 / src.w, 1 / src.h);
+      gl.uniform1f(downP.u.u_thresh, i === 0 ? 0.5 : 0);
+      fullscreen();
+      src = down[i];
+    }
+    // 4. bloom: upsample + accumulate
+    gl.useProgram(upP.p);
+    let prev = down[LEVELS - 1];
+    for (let i = LEVELS - 2; i >= 0; i--) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, up[i].fb);
+      gl.viewport(0, 0, up[i].w, up[i].h);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, prev.tex);
+      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, down[i].tex);
+      gl.uniform1i(upP.u.u_tex, 0);
+      gl.uniform1i(upP.u.u_tex2, 1);
+      gl.uniform2f(upP.u.u_texel, 1 / prev.w, 1 / prev.h);
+      fullscreen();
+      prev = up[i];
+    }
+    // 5. composite to screen
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, W, H);
+    gl.useProgram(compP.p);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, scene.tex);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, prev.tex);
+    gl.uniform1i(compP.u.u_scene, 0);
+    gl.uniform1i(compP.u.u_bloom, 1);
+    gl.uniform2f(compP.u.u_res, W, H);
+    gl.uniform1f(compP.u.u_time, t);
+    gl.uniform1f(compP.u.u_kick, gKick);
+    gl.uniform1f(compP.u.u_bloomStr, 0.42);
+    fullscreen();
+  }
+  return render;
+}
+
+/* =====================================================================
+   Canvas 2D fallback (used only if WebGL2 is unavailable)
+   ===================================================================== */
+function startCanvas2D() {
+  let ctx = canvas.getContext('2d');
+  if (!ctx) {
+    // the canvas may already hold a (failed) WebGL context: swap in a fresh one
+    const fresh = canvas.cloneNode(false);
+    canvas.parentNode.replaceChild(fresh, canvas);
+    ctx = fresh.getContext('2d');
+    if (!ctx) return false;
+  }
+  const glowC = document.createElement('canvas');
+  glowC.width = W / 4; glowC.height = H / 4;
+  const gctx = glowC.getContext('2d');
+  const stops = [[38,242,255],[64,140,255],[158,77,255],[255,64,217],[255,77,115],[255,153,38],[217,255,64],[64,255,153]];
+  function pal(u) {
+    const s = ((u % 1) + 1) % 1 * 8, i = Math.floor(s), f = s - i;
+    const a = stops[i % 8], b = stops[(i + 1) % 8];
+    return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
+  }
+  const rgb = (c, a) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${a})`;
+  const FLOOR = H * 0.70, BARMAX = H * 0.58, XL = W / 2 - 0.80 * H, PITCH = (1.6 * H) / NB, BW = 0.0158 * H;
+  const parts = [];
+  for (let i = 0; i < 150; i++) parts.push([rand(), rand(), 4 + rand() * 22, rand() * TAU, 1 + Math.floor(rand() * 3), rand()]);
+
+  function drawBars(c, scale, alpha, tl, glow) {
+    for (let i = 0; i < NB; i++) {
+      const h = barData[i * 4], pk = barData[i * 4 + 1], hit = barData[i * 4 + 2];
+      const x = (XL + (i + 0.5) * PITCH) * scale, bw = BW * scale, hh = Math.max(h * BARMAX, BW) * scale;
+      const hue = i / NB * 0.55 + tl + 0.06 * h;
+      const cb = pal(hue), ct = pal(hue + 0.12);
+      const fy = FLOOR * scale;
+      const grd = c.createLinearGradient(0, fy, 0, fy - hh);
+      grd.addColorStop(0, rgb(cb.map(v => v * 0.45), alpha));
+      grd.addColorStop(0.8, rgb(ct, alpha));
+      grd.addColorStop(1, rgb(ct.map(v => 255 - (255 - v) * 0.35), alpha));
+      c.fillStyle = grd;
+      c.beginPath(); c.roundRect(x - bw / 2, fy - hh, bw, hh, bw / 2); c.fill();
+      if (!glow) {
+        c.fillStyle = `rgba(255,255,255,${0.25 + 0.5 * hit})`;
+        c.beginPath(); c.roundRect(x - bw / 2, fy - pk * BARMAX * scale - 0.016 * H * scale, bw, 0.0064 * H * scale, bw / 2); c.fill();
+      } else {
+        c.fillStyle = rgb(ct, alpha);
+        c.beginPath(); c.roundRect(x - bw / 2, fy - pk * BARMAX * scale - 0.016 * H * scale, bw, 0.0064 * H * scale, bw / 2); c.fill();
+      }
+    }
+  }
+  function render(t) {
+    computeBars(t);
+    const tl = t / LOOP;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    const bg = ctx.createLinearGradient(0, 0, 0, H);
+    bg.addColorStop(0, '#07071a'); bg.addColorStop(0.55, '#0d0a24'); bg.addColorStop(1, '#050510');
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+    for (let k = 0; k < 3; k++) {
+      const cx = W / 2 + Math.sin(TAU * ((k + 1) * tl + k * 0.3)) * W * 0.3, cy = H * 0.35 + Math.cos(TAU * (tl + k * 0.4)) * H * 0.15;
+      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, H * 0.55);
+      g.addColorStop(0, rgb(pal(tl + k * 0.33), 0.16 + 0.1 * gKick)); g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    }
+    // glow layer at quarter res
+    gctx.setTransform(1, 0, 0, 1, 0, 0);
+    gctx.clearRect(0, 0, glowC.width, glowC.height);
+    drawBars(gctx, 0.25, 1, tl, true);
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.filter = 'blur(28px)';
+    ctx.globalAlpha = 0.9 + 0.4 * gKick;
+    ctx.drawImage(glowC, 0, 0, W, H);
+    ctx.filter = 'none';
+    ctx.globalAlpha = 1;
+    // reflection
+    ctx.save();
+    ctx.translate(0, FLOOR * 2); ctx.scale(1, -1);
+    ctx.globalAlpha = 0.35;
+    drawBars(ctx, 1, 1, tl, false);
+    ctx.restore();
+    ctx.globalCompositeOperation = 'source-over';
+    const fade = ctx.createLinearGradient(0, FLOOR, 0, FLOOR + H * 0.22);
+    fade.addColorStop(0, 'rgba(6,6,20,0.2)'); fade.addColorStop(1, 'rgba(6,6,20,1)');
+    ctx.fillStyle = fade; ctx.fillRect(0, FLOOR, W, H - FLOOR);
+    // crisp bars
+    ctx.globalCompositeOperation = 'lighter';
+    drawBars(ctx, 1, 1, tl, false);
+    // floor line
+    const fl = ctx.createLinearGradient(0, 0, W, 0);
+    for (let s = 0; s <= 8; s++) fl.addColorStop(s / 8, rgb(pal(s / 8 * 0.55 + tl), 0.8));
+    ctx.fillStyle = fl; ctx.globalAlpha = 0.6 + 0.4 * gKick; ctx.fillRect(W * 0.05, FLOOR - 2, W * 0.9, 4);
+    ctx.globalAlpha = 1;
+    // particles
+    for (const p of parts) {
+      const y = ((p[1] + tl) % 1), x = p[0] + 0.04 * Math.sin(TAU * p[4] * tl + p[3]);
+      const e = smoothstep(0, 0.1, y) * (1 - smoothstep(0.9, 1, y));
+      ctx.fillStyle = rgb(pal(p[5] + tl), 0.25 * e);
+      ctx.beginPath(); ctx.arc(x * W, (1 - y) * H, p[2] * (1 + 0.3 * gKick), 0, TAU); ctx.fill();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+    const vg = ctx.createRadialGradient(W / 2, H / 2, H * 0.35, W / 2, H / 2, H * 0.95);
+    vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.55)');
+    ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
+  }
+  return render;
+}
+
+/* ---------------- boot + loop ---------------- */
+let render = null;
+try { render = startGL(); } catch (e) { console.error(e); render = null; }
+if (!render) render = startCanvas2D();
+
+let t0 = null, manual = null;
+const qp = new URLSearchParams(location.search);
+if (qp.has('t')) manual = ((parseFloat(qp.get('t')) % LOOP) + LOOP) % LOOP;
+
+function frame(ts) {
+  if (manual === null) {
+    if (t0 === null) t0 = ts;
+    render(((ts - t0) / 1000) % LOOP);
+  }
+  requestAnimationFrame(frame);
+}
+if (manual !== null) render(manual);
+requestAnimationFrame(frame);
+
+/* helpers for frame-accurate offline rendering */
+window.ANIMATION_DURATION = LOOP;
+window.setTime = function (t) { manual = ((t % LOOP) + LOOP) % LOOP; render(manual); };
+window.play = function () { manual = null; t0 = null; };
+})();
+</script>
+</body>
+</html>
