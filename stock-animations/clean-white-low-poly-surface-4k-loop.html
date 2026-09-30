@@ -1,0 +1,834 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Clean White Low Poly Surface – 4K Seamless Loop</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #f3f6fb; cursor: none; }
+  /* Drawing buffer is a true 3840x2160. The element is letter-boxed to the viewport,
+     and is exactly 1:1 when the viewport itself is 3840x2160. */
+  #stage {
+    position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: min(100vw, 177.7778vh); height: min(100vh, 56.25vw); display: block;
+  }
+</style>
+</head>
+<body>
+<canvas id="stage" width="3840" height="2160"></canvas>
+
+<script>
+/* ==========================================================================
+   CLEAN WHITE LOW POLY SURFACE — elegant bright 3D geometric triangles
+   shifting slowly.  3840 x 2160 · 15.000 s · perfectly seamless loop.
+
+   Everything is analytic in time: every motion is a sum of sine terms whose
+   angular speed is an integer multiple of 2π/15 s, therefore frame(t = 15 s)
+   is bit-identical to frame(t = 0 s).  Autoplays on load.
+
+   Hooks for capture tools:
+     window.DURATION           -> 15
+     window.renderAt(seconds)  -> draws exactly that moment (deterministic)
+     window.play()             -> resumes real-time playback
+   ========================================================================== */
+(() => {
+'use strict';
+
+const DURATION = 15;
+const TAU = Math.PI * 2;
+const canvas = document.getElementById('stage');
+const gl = canvas.getContext('webgl2', {
+  antialias: true, alpha: false, depth: true, stencil: false,
+  preserveDrawingBuffer: true, powerPreference: 'high-performance'
+});
+if (!gl) {
+  document.body.insertAdjacentHTML('beforeend',
+    '<div style="position:fixed;inset:0;display:grid;place-items:center;font:20px system-ui;color:#456">WebGL2 is required to play this animation.</div>');
+  return;
+}
+const RW = canvas.width, RH = canvas.height, ASPECT = RW / RH;
+
+/* -------------------------------------------------------------------------
+   Small maths helpers (column-major matrices)
+   ------------------------------------------------------------------------- */
+const v3 = {
+  sub: (a, b) => [a[0]-b[0], a[1]-b[1], a[2]-b[2]],
+  add: (a, b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2]],
+  dot: (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2],
+  cross: (a, b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]],
+  norm: a => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0]/l, a[1]/l, a[2]/l]; },
+  scale: (a, s) => [a[0]*s, a[1]*s, a[2]*s]
+};
+function perspective(fovy, aspect, n, f) {
+  const t = 1 / Math.tan(fovy / 2), nf = 1 / (n - f);
+  return [t/aspect,0,0,0, 0,t,0,0, 0,0,(f+n)*nf,-1, 0,0,2*f*n*nf,0];
+}
+function viewMatrix(e, r, u, f) {
+  return [r[0],u[0],-f[0],0, r[1],u[1],-f[1],0, r[2],u[2],-f[2],0,
+          -v3.dot(r,e), -v3.dot(u,e), v3.dot(f,e), 1];
+}
+function mul4(a, b) {
+  const o = new Array(16);
+  for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) {
+    let s = 0;
+    for (let k = 0; k < 4; k++) s += a[k*4 + r] * b[c*4 + k];
+    o[c*4 + r] = s;
+  }
+  return o;
+}
+function mul3(a, b) {
+  const o = new Array(9);
+  for (let c = 0; c < 3; c++) for (let r = 0; r < 3; r++) {
+    let s = 0;
+    for (let k = 0; k < 3; k++) s += a[k*3 + r] * b[c*3 + k];
+    o[c*3 + r] = s;
+  }
+  return o;
+}
+const rotX = a => { const c = Math.cos(a), s = Math.sin(a); return [1,0,0, 0,c,s, 0,-s,c]; };
+const rotY = a => { const c = Math.cos(a), s = Math.sin(a); return [c,0,-s, 0,1,0, s,0,c]; };
+const rotZ = a => { const c = Math.cos(a), s = Math.sin(a); return [c,s,0, -s,c,0, 0,0,1]; };
+
+/* deterministic PRNG so the scene is identical on every load */
+function rng(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/* -------------------------------------------------------------------------
+   GLSL — shared chunks
+   ------------------------------------------------------------------------- */
+const GLSL_COMMON = `
+const float TAU = 6.283185307179586;
+const vec3  KEY  = vec3(-0.7360, 0.6530,  0.1780);   // main soft key light (upper-left)
+const vec3  FILL = vec3( 0.6100, 0.3900,  0.6900);   // cool front-right fill
+const vec3  SUN  = vec3(-0.6900, 0.1100, -0.7150);   // glowing haze near the horizon
+
+float hash21(vec2 p){
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+
+vec3 skyCol(vec3 rd){
+  float y = rd.y;
+  vec3 hz  = vec3(0.972, 0.984, 1.000);
+  vec3 top = vec3(0.850, 0.905, 0.982);
+  vec3 c = mix(hz, top, smoothstep(0.02, 0.30, y));
+  c = mix(c, vec3(0.962, 0.976, 0.998), smoothstep(0.0, -0.30, y));
+  float sg = max(dot(rd, SUN), 0.0);
+  c += vec3(1.00, 0.975, 0.930) * (0.22 * pow(sg, 5.0) + 0.55 * pow(sg, 48.0));
+  return c;
+}
+
+float fogAmt(float d){
+  return 1.0 - exp(-pow(d / 125.0, 1.9));
+}
+`;
+
+/* wave field that drives the low-poly surface — every t-term is n * 2π/15 */
+const GLSL_HEIGHT = `
+float heightAt(vec2 p, float T){
+  float lod = 1.0 - smoothstep(18.0, 95.0, 15.5 - p.y);       // fine detail fades with distance
+  vec2 q = p + vec2(1.4 * sin(0.110 * p.y + T + 0.6), 1.1 * sin(0.100 * p.x - T + 2.1));
+  float h = 0.0;
+  // still landscape (never moves)…
+  h += 1.55 * sin( 0.150 * p.x + 0.108 * p.y + 0.5);
+  h += 1.05 * sin(-0.112 * p.x + 0.196 * p.y + 2.2);
+  // …and slowly travelling swells that make the triangles shift (angular speed = n·2π/15 s)
+  h += 1.25 * sin( 0.205 * q.x + 0.140 * q.y +       T + 0.0);
+  h += 0.95 * sin(-0.150 * q.x + 0.262 * q.y -       T + 1.7);
+  h += (0.62 * sin( 0.470 * q.x - 0.340 * q.y + 2.0 * T + 0.9)
+      + 0.36 * sin( 0.690 * q.x + 0.580 * q.y - 2.0 * T + 2.6)
+      + 0.15 * sin( 1.060 * q.x - 0.950 * q.y + 3.0 * T + 4.0)) * lod;
+  h += 1.0  * sin( 0.052 * p.x + 0.038 * p.y +       T + 0.4);   // slow swell
+  return h;
+}
+`;
+
+/* -------------------------------------------------------------------------
+   Shader programs
+   ------------------------------------------------------------------------- */
+function compile(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+    console.error(gl.getShaderInfoLog(s) + '\n' + src.split('\n').map((l, i) => (i + 1) + ': ' + l).join('\n'));
+    throw new Error('shader compile failed');
+  }
+  return s;
+}
+function program(vs, fs) {
+  const p = gl.createProgram();
+  gl.attachShader(p, compile(gl.VERTEX_SHADER, vs));
+  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  const u = {};
+  const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) {
+    const info = gl.getActiveUniform(p, i);
+    const name = info.name.replace(/\[0\]$/, '');
+    u[name] = gl.getUniformLocation(p, info.name);
+  }
+  return { p, u };
+}
+
+/* ---- background / sky ---- */
+const progBG = program(`#version 300 es
+in vec2 aPos; out vec2 vUv;
+void main(){ vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.9999, 1.0); }`,
+`#version 300 es
+precision highp float;
+in vec2 vUv; out vec4 outC;
+uniform vec3 uFwd, uRight, uUp; uniform float uTanY, uAspect;
+${GLSL_COMMON}
+void main(){
+  vec2 s = vUv * 2.0 - 1.0;
+  vec3 rd = normalize(uFwd + uRight * (s.x * uTanY * uAspect) + uUp * (s.y * uTanY));
+  vec3 c = skyCol(rd);
+  c += (hash21(gl_FragCoord.xy) - 0.5) / 255.0;
+  outC = vec4(c, 1.0);
+}`);
+
+/* ---- low-poly surface ---- */
+const progTerrain = program(`#version 300 es
+precision highp float;
+in vec2 aA; in vec2 aB; in vec2 aC; in float aR;
+uniform mat4 uVP; uniform float uT;
+out vec3 vW; out vec3 vBary;
+flat out vec3 vN; flat out float vR; flat out float vHc;
+${GLSL_COMMON}
+${GLSL_HEIGHT}
+vec3 lift(vec2 p){
+  float a = hash21(p) * TAU, b = hash21(p + 31.7) * TAU;
+  float cellSz = clamp(1.42 * pow((15.5 - p.y) / 22.0, 0.72), 0.85, 14.0);
+  vec2 q = p + 0.27 * cellSz * vec2(cos(uT + a), sin(uT + b));   // vertices drift on slow little orbits
+  return vec3(q.x, heightAt(q, uT), q.y);
+}
+void main(){
+  vec3 A = lift(aA), B = lift(aB), C = lift(aC);
+  vec3 n = normalize(cross(B - A, C - A));
+  if (n.y < 0.0) n = -n;
+  int k = gl_VertexID % 3;
+  vec3 P = (k == 0) ? A : ((k == 1) ? B : C);
+  vBary = vec3(k == 0 ? 1.0 : 0.0, k == 1 ? 1.0 : 0.0, k == 2 ? 1.0 : 0.0);
+  vN = n; vR = aR; vHc = (A.y + B.y + C.y) / 3.0; vW = P;
+  gl_Position = uVP * vec4(P, 1.0);
+}`,
+`#version 300 es
+precision highp float;
+in vec3 vW; in vec3 vBary;
+flat in vec3 vN; flat in float vR; flat in float vHc;
+uniform vec3 uCam; uniform float uPh; uniform vec2 uRes;
+uniform vec4 uOcc[10];
+uniform float uT;
+out vec4 outC;
+${GLSL_COMMON}
+${GLSL_HEIGHT}
+void main(){
+  vec3 N = normalize(vN);
+  vec3 toC = uCam - vW;
+  float dist = length(toC);
+  vec3 V = toC / dist;
+  float ndv = clamp(dot(N, V), 0.0, 1.0);
+
+  /* --- soft studio lighting, facet by facet --- */
+  float d1  = dot(N, KEY);
+  float key = smoothstep(0.02, 0.92, d1);
+  float fil = smoothstep(-0.10, 0.85, dot(N, FILL));
+  float sky = 0.5 + 0.5 * N.y;
+  float s = clamp(0.08 * sky + 0.62 * key + 0.16 * fil + (vR - 0.5) * 0.17, 0.0, 1.0);
+
+  vec3 cS = vec3(0.700, 0.770, 0.875);      // cool porcelain shadow
+  vec3 cM = vec3(0.882, 0.912, 0.958);      // soft pearl grey
+  vec3 cL = vec3(0.992, 0.992, 0.992);      // warm white
+  vec3 col = mix(cS, cM, smoothstep(0.05, 0.55, s));
+  col = mix(col, cL, smoothstep(0.60, 1.00, s));
+  col *= 0.972 + 0.056 * vR;                // every facet sits a touch differently
+
+  /* valleys hold a little cool ambient occlusion */
+  float ao = smoothstep(-3.6, 3.2, vHc);
+  col = mix(col * vec3(0.90, 0.94, 1.0), col, ao);
+
+  /* soft shadows cast by the ridges themselves (marched through the analytic height field) */
+  float vis = 1.0;
+  for (int i = 1; i <= 9; i++) {
+    float t = 0.5 + float(i) * float(i) * 0.24;
+    vec3 pr = vW + KEY * t;
+    float hh = heightAt(pr.xz, uT);
+    vis = min(vis, clamp(4.5 * (pr.y - hh + 0.12) / (0.6 + t * 0.32), 0.0, 1.0));
+  }
+  vis = mix(1.0, vis, 1.0 - smoothstep(60.0, 130.0, dist));
+  col = mix(col, col * vec3(0.80, 0.86, 0.95), (1.0 - vis) * (0.30 + 0.70 * key) * 0.85);
+
+  /* soft shadows cast by the floating crystals */
+  float occ = 0.0;
+  for (int i = 0; i < 10; i++) {
+    vec4 o = uOcc[i];
+    if (o.w > 0.0) {
+      vec3 oc = o.xyz - vW;
+      float t = dot(oc, KEY);
+      if (t > 0.0) {
+        float d = length(oc - KEY * t);
+        occ = max(occ, 1.0 - smoothstep(o.w * 0.30, o.w * 1.20 + t * 0.12, d));
+      }
+    }
+  }
+  col = mix(col, col * vec3(0.80, 0.86, 0.96), occ * (0.35 + 0.65 * key) * 0.9);
+
+  /* pearlescent tint that drifts once per loop */
+  vec3 pearl = 0.5 + 0.5 * cos(TAU * (vec3(0.0, 0.33, 0.67) + ndv * 0.8 + vR * 0.35 + uPh));
+  col += (pearl - 0.5) * 0.024 * (0.35 + 0.65 * (1.0 - s));
+
+  /* glassy specular glints + grazing sky reflection */
+  vec3 H1 = normalize(KEY + V);
+  float nh = max(dot(N, H1), 0.0);
+  float spec = pow(nh, 70.0) * 0.32 + pow(nh, 14.0) * 0.05;
+  vec3 R = reflect(-V, N);
+  float fr = pow(1.0 - ndv, 4.0);
+  col = mix(col, skyCol(R), fr * 0.40);
+  float sunR = max(dot(R, SUN), 0.0);
+  col += vec3(1.0, 0.97, 0.92) * (pow(sunR, 10.0) * 0.08 + pow(sunR, 70.0) * 0.26);
+
+  /* slow luminous sheen bands crossing the surface (start & end off-screen) */
+  vec2 sc = gl_FragCoord.xy / uRes;
+  float u = sc.x * 0.92 + sc.y * 0.38;
+  float b1 = exp(-pow((u - mix(-0.55, 1.95, uPh)) / 0.17, 2.0));
+  float b2 = exp(-pow((u - mix(-0.55, 1.95, fract(uPh + 0.5))) / 0.085, 2.0));
+  float band = b1 * 0.85 + b2 * 0.45;
+  col = mix(col, vec3(1.0), band * 0.26);
+  spec *= 1.0 + 2.4 * band;
+  col += vec3(1.0, 0.985, 0.955) * spec;
+
+  /* crisp glass-bevel hairlines between facets */
+  vec3 fw = fwidth(vBary);
+  vec3 ea = smoothstep(vec3(0.0), fw * 1.35, vBary);
+  float edge = 1.0 - min(min(ea.x, ea.y), ea.z);
+
+  float f = fogAmt(dist);
+  vec3 line = mix(vec3(0.78, 0.84, 0.93), vec3(1.0), smoothstep(0.15, 0.7, s));
+  col = mix(col, line, edge * 0.55 * (1.0 - f));
+  col = mix(col, skyCol(-V), f);
+
+  col += (hash21(gl_FragCoord.xy + 7.0) - 0.5) / 255.0;
+  outC = vec4(col, 1.0);
+}`);
+
+/* ---- floating faceted crystals ---- */
+const progCrystal = program(`#version 300 es
+precision highp float;
+in vec3 aPos; in vec3 aNrm; in vec3 aBary;
+uniform mat4 uVP; uniform mat3 uRot; uniform vec3 uPos; uniform float uScale;
+out vec3 vW; out vec3 vBary; flat out vec3 vN;
+void main(){
+  vec3 w = uRot * (aPos * uScale) + uPos;
+  vW = w; vBary = aBary; vN = uRot * aNrm;
+  gl_Position = uVP * vec4(w, 1.0);
+}`,
+`#version 300 es
+precision highp float;
+in vec3 vW; in vec3 vBary; flat in vec3 vN;
+uniform vec3 uCam; uniform float uPh; uniform float uBack; uniform float uSeed;
+out vec4 outC;
+${GLSL_COMMON}
+
+vec3 envCol(vec3 r){
+  float y = r.y;
+  vec3 c = mix(vec3(0.930, 0.955, 0.995), vec3(1.0), smoothstep(-0.1, 0.8, y));
+  c = mix(c, vec3(0.78, 0.84, 0.94), smoothstep(0.0, -0.9, y) * 0.75);
+  float k = max(dot(r, KEY), 0.0);
+  c += vec3(1.0, 0.98, 0.94) * (pow(k, 14.0) * 0.6 + pow(k, 90.0) * 1.2);
+  float f = max(dot(r, FILL), 0.0);
+  c += vec3(0.90, 0.95, 1.0) * pow(f, 30.0) * 0.5;
+  return c;
+}
+
+void main(){
+  vec3 N = normalize(vN);
+  if (uBack > 0.5) N = -N;
+  vec3 toC = uCam - vW;
+  float dist = length(toC);
+  vec3 V = toC / dist;
+  float ndv = clamp(dot(N, V), 0.0, 1.0);
+  float fres = pow(1.0 - ndv, 2.2);
+  vec3 R = reflect(-V, N);
+
+  float lit = smoothstep(-0.4, 0.9, dot(N, KEY));
+  vec3 base = mix(vec3(0.690, 0.775, 0.910), vec3(0.985, 0.990, 1.000), lit);
+  vec3 pearl = 0.5 + 0.5 * cos(TAU * (vec3(0.0, 0.33, 0.67) + ndv * 0.7 + uSeed + uPh));
+  base += (pearl - 0.5) * 0.06;
+
+  vec3 col = mix(base, envCol(R), 0.20 + 0.50 * fres);
+  vec3 H1 = normalize(KEY + V);
+  col += vec3(1.0, 0.985, 0.95) * pow(max(dot(N, H1), 0.0), 110.0) * 1.0;
+
+  vec3 fw = fwidth(vBary);
+  vec3 ea = smoothstep(vec3(0.0), fw * 1.5, vBary);
+  float edge = 1.0 - min(min(ea.x, ea.y), ea.z);
+  col = mix(col, vec3(1.0), edge * 0.85);
+  col = mix(col, vec3(0.50, 0.63, 0.86), edge * 0.16 * (1.0 - lit));
+
+  float alpha = (uBack > 0.5) ? 0.55 : mix(0.72, 0.97, fres);
+  alpha = clamp(alpha + edge * 0.30, 0.0, 1.0);
+
+  float f = fogAmt(dist);
+  col = mix(col, skyCol(-V), f);
+  alpha *= 1.0 - 0.55 * f;
+  col += (hash21(gl_FragCoord.xy + 3.0) - 0.5) / 255.0;
+  outC = vec4(col, alpha);
+}`);
+
+/* ---- tiny drifting triangular specks (world space) ---- */
+const SDF_TRI = `
+float sdTri(vec2 p, float r){
+  const float k = 1.7320508;
+  p.x = abs(p.x) - r;
+  p.y = p.y + r / k;
+  if (p.x + k * p.y > 0.0) p = vec2(p.x - k * p.y, -k * p.x - p.y) * 0.5;
+  p.x -= clamp(p.x, -2.0 * r, 0.0);
+  return -length(p) * sign(p.y);
+}`;
+const progDust = program(`#version 300 es
+precision highp float;
+in vec2 aQ;                        // quad corner (-1..1)
+in vec4 aA; in vec4 aB; in vec4 aC;
+uniform mat4 uVP; uniform float uT; uniform float uPh; uniform vec2 uRes;
+out vec2 vP; out vec4 vP2; out float vFade;
+void main(){
+  // aA = x, y0n, z, sizePx    aB = rotPhase, alpha, blur, rotDir    aC = ampX, ampZ, phi, tint
+  float yn = fract(aA.y + uPh);                                  // exactly one wrap per loop
+  vec3 pos = vec3(aA.x + aC.x * sin(2.0 * uT + aC.z),
+                  -1.5 + yn * 13.0,
+                  aA.z + aC.y * cos(uT + aC.z * 1.3));
+  vec4 cp = uVP * vec4(pos, 1.0);
+  float ang = aB.x + aB.w * uT;
+  float cs = cos(ang), sn = sin(ang);
+  vec2 q = vec2(cs * aQ.x - sn * aQ.y, sn * aQ.x + cs * aQ.y);
+  vec2 off = q * (aA.w / 2160.0) * 2.0;                          // size given in 4K pixels
+  off.x *= uRes.y / uRes.x;
+  cp.xy += off * cp.w * (1.0 / 1.0);
+  gl_Position = cp;
+  vP = aQ;
+  vP2 = vec4(aB.y, aB.z, ang, aC.w);
+  vFade = smoothstep(0.0, 0.12, yn) * smoothstep(1.0, 0.85, yn);
+}`,
+`#version 300 es
+precision highp float;
+in vec2 vP; in vec4 vP2; in float vFade;
+out vec4 outC;
+${SDF_TRI}
+void main(){
+  float d = sdTri(vP * 1.05 + vec2(0.0, 0.0), 0.62);
+  float b = vP2.y;
+  float a = (1.0 - smoothstep(-b, b + 0.02, d)) * vP2.x * vFade;
+  vec3 c = mix(vec3(1.0), vec3(0.66, 0.77, 0.94), vP2.w);
+  outC = vec4(c, a);
+}`);
+
+/* ---- large out-of-focus glass triangles (screen space bokeh) ---- */
+const progBokeh = program(`#version 300 es
+precision highp float;
+in vec2 aQ;
+in vec4 aA; in vec4 aB;
+uniform float uT; uniform vec2 uRes;
+out vec2 vP; out vec4 vP2;
+void main(){
+  // aA = cx, cy (ndc), sizePx, rot0    aB = alpha, ampX, ampY, phi
+  vec2 c = aA.xy + vec2(aB.y * sin(uT + aB.w), aB.z * cos(uT + aB.w * 1.7 + 0.5));
+  float ang = aA.w + 0.5 * sin(uT + aB.w * 2.3);
+  float cs = cos(ang), sn = sin(ang);
+  vec2 q = vec2(cs * aQ.x - sn * aQ.y, sn * aQ.x + cs * aQ.y);
+  vec2 off = q * (aA.z / 2160.0) * 2.0;
+  off.x *= uRes.y / uRes.x;
+  gl_Position = vec4(c + off, 0.0, 1.0);
+  vP = aQ; vP2 = vec4(aB.x, aA.z, fract(aB.w), 0.0);
+}`,
+`#version 300 es
+precision highp float;
+in vec2 vP; in vec4 vP2;
+out vec4 outC;
+${SDF_TRI}
+void main(){
+  float d = sdTri(vP * 1.02, 0.60);
+  float soft = 0.05 + 0.06 * vP2.z;
+  float body = 1.0 - smoothstep(-soft, soft, d);
+  float rim  = exp(-pow((d + soft * 0.9) / (soft * 1.1), 2.0));
+  vec3 tint = mix(vec3(0.80, 0.87, 0.98), vec3(0.92, 0.90, 0.99), vP2.z);
+  vec3 c = mix(tint, vec3(1.0), rim * 0.85);
+  float a = vP2.x * (0.55 * body + 0.75 * rim);
+  outC = vec4(c, a);
+}`);
+
+/* ---- final polish: vignette, soft light bloom, drifting light shafts ---- */
+const progPost = program(`#version 300 es
+in vec2 aPos; out vec2 vUv;
+void main(){ vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }`,
+`#version 300 es
+precision highp float;
+in vec2 vUv; out vec4 outC;
+uniform float uT; uniform float uPh; uniform vec2 uRes;
+${GLSL_COMMON}
+void main(){
+  vec2 uv = vUv;
+  vec2 c = (uv - 0.5) * vec2(uRes.x / uRes.y, 1.0);
+  float r = length(c);
+
+  // cool, gentle corner vignette (keeps the frame white but gives it depth)
+  float vig = smoothstep(0.62, 1.18, r);
+  vec3 vc = vec3(0.70, 0.78, 0.90);
+  float va = vig * 0.16;
+
+  // warm bloom from the upper-left "sun", pulsing once per loop
+  vec2 sp = vec2(0.18, 0.86);
+  float sd = length((uv - sp) * vec2(uRes.x / uRes.y, 1.0));
+  float bloom = exp(-sd * 2.6) * (0.055 + 0.012 * sin(uT));
+
+  // very soft diagonal light shafts that glide slowly (integer harmonics only)
+  vec2 dir = normalize(vec2(0.62, -0.78));
+  float p = dot(uv * vec2(uRes.x / uRes.y, 1.0), dir);
+  float shafts = 0.5 + 0.5 * sin(p * 5.2 + uT + 1.7 * sin(p * 2.1 - uT));
+  shafts = pow(shafts, 3.0) * exp(-sd * 1.35) * 0.07;
+
+  vec3 add = vec3(1.0, 0.975, 0.93) * (bloom + shafts);
+  add += hash21(gl_FragCoord.xy + 11.0) / 255.0;          // dither
+  outC = vec4(add + vc * va, va);                          // premultiplied
+}`);
+
+/* -------------------------------------------------------------------------
+   Geometry: jittered, near-Delaunay triangulated surface
+   ------------------------------------------------------------------------- */
+function buildTerrain() {
+  const R = rng(20240607);
+  const CAMZ = 15.5;                       // matches the camera's mean z
+  const NX = 128;                          // columns
+  const g = d => Math.min(Math.max(1.42 * Math.pow(d / 22, 0.72), 0.85), 14);   // cell size vs. distance
+  const dRows = [5];
+  while (dRows[dRows.length - 1] < 340) { const d = dRows[dRows.length - 1]; dRows.push(d + 0.92 * g(d)); }
+  const NZ = dRows.length - 1;
+  const px = new Float32Array((NX + 1) * (NZ + 1)), pz = new Float32Array((NX + 1) * (NZ + 1));
+  const idx = (i, j) => j * (NX + 1) + i;
+  for (let j = 0; j <= NZ; j++) {
+    const d = dRows[j], dx = 1.0 * g(d), dz = 0.92 * g(d);
+    for (let i = 0; i <= NX; i++) {
+      const jx = (R() - 0.5) * 0.62 * dx, jz = (R() - 0.5) * 0.62 * dz;
+      px[idx(i, j)] = (i - NX / 2) * dx + jx;
+      pz[idx(i, j)] = CAMZ - d + jz;
+    }
+  }
+  const faces = [];
+  const d2 = (a, b) => (px[a]-px[b])**2 + (pz[a]-pz[b])**2;
+  for (let j = 0; j < NZ; j++) for (let i = 0; i < NX; i++) {
+    const a = idx(i, j), b = idx(i+1, j), c = idx(i, j+1), d = idx(i+1, j+1);
+    if (d2(a, d) < d2(b, c)) { faces.push([a, b, d], [a, d, c]); }
+    else                     { faces.push([a, b, c], [b, d, c]); }
+  }
+  const data = new Float32Array(faces.length * 3 * 7);
+  let o = 0;
+  for (const f of faces) {
+    const r = R();
+    for (let k = 0; k < 3; k++) {
+      for (let m = 0; m < 3; m++) { data[o++] = px[f[m]]; data[o++] = pz[f[m]]; }
+      data[o++] = r;
+    }
+  }
+  return { data, count: faces.length * 3 };
+}
+
+const terrain = buildTerrain();
+const vaoTerrain = gl.createVertexArray();
+gl.bindVertexArray(vaoTerrain);
+{
+  const b = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, b);
+  gl.bufferData(gl.ARRAY_BUFFER, terrain.data, gl.STATIC_DRAW);
+  const stride = 7 * 4;
+  const loc = n => gl.getAttribLocation(progTerrain.p, n);
+  [['aA', 2, 0], ['aB', 2, 8], ['aC', 2, 16], ['aR', 1, 24]].forEach(([n, sz, off]) => {
+    gl.enableVertexAttribArray(loc(n));
+    gl.vertexAttribPointer(loc(n), sz, gl.FLOAT, false, stride, off);
+  });
+}
+
+/* fullscreen triangle */
+const vaoFull = gl.createVertexArray();
+gl.bindVertexArray(vaoFull);
+{
+  const b = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, b);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+  const l = gl.getAttribLocation(progBG.p, 'aPos');
+  gl.enableVertexAttribArray(l);
+  gl.vertexAttribPointer(l, 2, gl.FLOAT, false, 0, 0);
+}
+const vaoFullPost = gl.createVertexArray();
+gl.bindVertexArray(vaoFullPost);
+{
+  const b = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, b);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+  const l = gl.getAttribLocation(progPost.p, 'aPos');
+  gl.enableVertexAttribArray(l);
+  gl.vertexAttribPointer(l, 2, gl.FLOAT, false, 0, 0);
+}
+
+/* ---- polyhedra ---- */
+function polyMesh(verts, faces) {
+  const out = [];
+  for (const f of faces) {
+    const a = verts[f[0]], b = verts[f[1]], c = verts[f[2]];
+    let n = v3.norm(v3.cross(v3.sub(b, a), v3.sub(c, a)));
+    const cen = v3.scale(v3.add(v3.add(a, b), c), 1 / 3);
+    if (v3.dot(n, cen) < 0) n = v3.scale(n, -1);
+    const bary = [[1,0,0],[0,1,0],[0,0,1]];
+    [a, b, c].forEach((p, k) => out.push(p[0], p[1], p[2], n[0], n[1], n[2], bary[k][0], bary[k][1], bary[k][2]));
+  }
+  return new Float32Array(out);
+}
+const PHI = (1 + Math.sqrt(5)) / 2;
+const icoV = [[-1,PHI,0],[1,PHI,0],[-1,-PHI,0],[1,-PHI,0],[0,-1,PHI],[0,1,PHI],[0,-1,-PHI],[0,1,-PHI],[PHI,0,-1],[PHI,0,1],[-PHI,0,-1],[-PHI,0,1]]
+  .map(v3.norm);
+const icoF = [[0,11,5],[0,5,1],[0,1,7],[0,7,10],[0,10,11],[1,5,9],[5,11,4],[11,10,2],[10,7,6],[7,1,8],
+              [3,9,4],[3,4,2],[3,2,6],[3,6,8],[3,8,9],[4,9,5],[2,4,11],[6,2,10],[8,6,7],[9,8,1]];
+const octV = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
+const octF = [[0,2,4],[2,1,4],[1,3,4],[3,0,4],[2,0,5],[1,2,5],[3,1,5],[0,3,5]];
+const tetV = [[1,1,1],[1,-1,-1],[-1,1,-1],[-1,-1,1]].map(v3.norm);
+const tetF = [[0,1,2],[0,3,1],[0,2,3],[1,3,2]];
+const biV = [[0,1.75,0],[0,-1.75,0]];
+for (let i = 0; i < 6; i++) { const a = i / 6 * TAU; biV.push([0.78 * Math.cos(a), 0.0, 0.78 * Math.sin(a)]); }
+const biF = [];
+for (let i = 0; i < 6; i++) { const a = 2 + i, b = 2 + (i + 1) % 6; biF.push([0, a, b], [1, b, a]); }
+const shardV = [[0,2.1,0],[0,-1.3,0],[0.9,0.2,0],[-0.5,0.2,0.85],[-0.5,0.2,-0.85]];
+const shardF = [[0,2,3],[0,3,4],[0,4,2],[1,3,2],[1,4,3],[1,2,4]];
+
+const SHAPES = {
+  ico:   polyMesh(icoV, icoF),
+  oct:   polyMesh(octV, octF),
+  tet:   polyMesh(tetV, tetF),
+  bipy:  polyMesh(biV, biF),
+  shard: polyMesh(shardV, shardF)
+};
+const shapeVAO = {};
+for (const k in SHAPES) {
+  const vao = gl.createVertexArray();
+  gl.bindVertexArray(vao);
+  const b = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, b);
+  gl.bufferData(gl.ARRAY_BUFFER, SHAPES[k], gl.STATIC_DRAW);
+  const stride = 9 * 4;
+  [['aPos', 0], ['aNrm', 12], ['aBary', 24]].forEach(([n, off]) => {
+    const l = gl.getAttribLocation(progCrystal.p, n);
+    gl.enableVertexAttribArray(l);
+    gl.vertexAttribPointer(l, 3, gl.FLOAT, false, stride, off);
+  });
+  shapeVAO[k] = { vao, count: SHAPES[k].length / 9 };
+}
+
+/* crystal layout — base position, size, drift amplitudes & tumble (all integer harmonics) */
+const CRYSTALS = [
+  // type,   x,     y,    z,    scale, ax, ay, az,   spin(rev/loop), swayA, swayB, seed
+  ['ico',    6.0,   7.0,  -2.0,  2.20,  1.2, 0.60, 0.9,   1,  0.55, 0.40, 0.05],
+  ['oct',  -10.5,   8.0, -12.0,  2.70,  1.0, 0.70, 1.1,  -1,  0.50, 0.45, 0.30],
+  ['tet',   14.0,  10.0, -20.0,  3.00,  1.1, 0.80, 1.0,   1,  0.60, 0.30, 0.55],
+  ['bipy',  -3.4,   5.0,   4.0,  0.95,  0.6, 0.35, 0.5,  -1,  0.40, 0.40, 0.80],
+  ['ico',  -21.0,  10.5, -31.0,  3.60,  1.5, 0.90, 1.4,   1,  0.45, 0.35, 0.15],
+  ['shard', 24.0,  12.5, -39.0,  4.00,  1.4, 0.90, 1.2,  -1,  0.55, 0.30, 0.65],
+  ['tet',    1.2,  10.4, -15.0,  1.25,  0.8, 0.55, 0.7,  -1,  0.70, 0.50, 0.42],
+  ['oct',   18.5,   6.6,   0.0,  1.05,  0.7, 0.40, 0.6,  -1,  0.55, 0.35, 0.60],
+  ['shard',-12.8,   5.8,  -1.0,  1.10,  0.7, 0.40, 0.6,   1,  0.45, 0.50, 0.12],
+  ['oct',   -3.0,  13.5, -50.0,  4.50,  1.2, 0.80, 1.1,   1,  0.40, 0.30, 0.90]
+];
+
+/* ---- dust / speck instances ---- */
+const dustInst = [];
+{
+  const R = rng(777);
+  for (let i = 0; i < 380; i++) {
+    const z = -75 + R() * 88;
+    const spread = 14 + (13 - z) * 0.52;
+    const x = (R() * 2 - 1) * spread;
+    const soft = R() < 0.12;                                       // out-of-focus specks
+    const size = soft ? 34 + R() * 44 : 5 + Math.pow(R(), 2.4) * 22;   // px at 4K
+    const nearBoost = z > 2 ? 1.6 : 1.0;
+    dustInst.push(
+      x, R(), z, size * nearBoost,
+      R() * TAU, soft ? 0.16 + R() * 0.16 : 0.30 + R() * 0.45, soft ? 0.30 + R() * 0.25 : 0.05 + (z > 2 ? 0.25 : 0.0) + R() * 0.05, R() < 0.5 ? 1 : -1,
+      0.3 + R() * 0.9, 0.3 + R() * 0.9, R() * TAU, R() < 0.6 ? 0.0 : 0.45 + R() * 0.3
+    );
+  }
+}
+const dustData = new Float32Array(dustInst);
+const quadData = new Float32Array([-1,-1, 1,-1, -1,1, 1,1]);
+
+function instancedVAO(prog, inst, attrs, stride) {
+  const vao = gl.createVertexArray();
+  gl.bindVertexArray(vao);
+  const qb = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, qb);
+  gl.bufferData(gl.ARRAY_BUFFER, quadData, gl.STATIC_DRAW);
+  const ql = gl.getAttribLocation(prog.p, 'aQ');
+  gl.enableVertexAttribArray(ql);
+  gl.vertexAttribPointer(ql, 2, gl.FLOAT, false, 0, 0);
+  const ib = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, ib);
+  gl.bufferData(gl.ARRAY_BUFFER, inst, gl.STATIC_DRAW);
+  attrs.forEach(([n, off]) => {
+    const l = gl.getAttribLocation(prog.p, n);
+    gl.enableVertexAttribArray(l);
+    gl.vertexAttribPointer(l, 4, gl.FLOAT, false, stride, off);
+    gl.vertexAttribDivisor(l, 1);
+  });
+  return vao;
+}
+const vaoDust = instancedVAO(progDust, dustData, [['aA', 0], ['aB', 16], ['aC', 32]], 48);
+const DUST_N = dustData.length / 12;
+
+/* bokeh triangles: cx, cy, sizePx, rot0 | alpha, ampX, ampY, phi */
+const bokehData = new Float32Array([
+  -0.78,  0.42, 820, 0.30,   0.20, 0.050, 0.040, 0.4,
+   0.62,  0.58, 560, 1.90,   0.16, 0.040, 0.050, 1.9,
+   0.86, -0.36, 900, 3.20,   0.18, 0.060, 0.040, 3.1,
+  -0.34, -0.80, 700, 0.90,   0.20, 0.045, 0.030, 4.4,
+   0.10,  0.90, 420, 2.60,   0.14, 0.050, 0.040, 5.3,
+  -0.94, -0.52, 540, 2.10,   0.15, 0.040, 0.050, 2.7,
+   0.36, -0.90, 380, 4.10,   0.16, 0.030, 0.040, 0.9,
+   0.98,  0.86, 480, 5.20,   0.14, 0.040, 0.030, 3.9
+]);
+const vaoBokeh = instancedVAO(progBokeh, bokehData, [['aA', 0], ['aB', 16]], 32);
+const BOKEH_N = bokehData.length / 8;
+
+/* -------------------------------------------------------------------------
+   Frame
+   ------------------------------------------------------------------------- */
+gl.viewport(0, 0, RW, RH);
+const FOVY = 32 * Math.PI / 180;
+const TAN_Y = Math.tan(FOVY / 2);
+const occ = new Float32Array(40);
+
+function draw(t) {
+  const ph = (((t % DURATION) + DURATION) % DURATION) / DURATION;     // 0..1
+  const T = ph * TAU;
+
+  /* camera: slow gliding orbit, horizon locked near the top third */
+  const cam = [2.2 * Math.sin(T), 10.2 + 0.50 * Math.sin(T + 1.0), 15.5 + 1.2 * Math.cos(T)];
+  const yaw = 0.055 * Math.sin(T + 0.6), pitch = -0.185 + 0.010 * Math.sin(T + 2.0);
+  const fwd = v3.norm([Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch)]);
+  const right = v3.norm(v3.cross(fwd, [0, 1, 0]));
+  const up = v3.cross(right, fwd);
+  const VP = mul4(perspective(FOVY, ASPECT, 0.5, 400), viewMatrix(cam, right, up, fwd));
+
+  gl.clearColor(0.97, 0.98, 1.0, 1);
+  gl.clearDepth(1);
+  gl.depthMask(true);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+  /* sky */
+  gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND); gl.disable(gl.CULL_FACE);
+  gl.useProgram(progBG.p);
+  gl.uniform3fv(progBG.u.uFwd, fwd); gl.uniform3fv(progBG.u.uRight, right); gl.uniform3fv(progBG.u.uUp, up);
+  gl.uniform1f(progBG.u.uTanY, TAN_Y); gl.uniform1f(progBG.u.uAspect, ASPECT);
+  gl.bindVertexArray(vaoFull);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+  /* crystals — placement first (also feeds the surface shadows) */
+  const placed = CRYSTALS.map((c, i) => {
+    const [type, x, y, z, sc, ax, ay, az, spin, swA, swB, seed] = c;
+    const ph0 = i * 1.37;
+    const pos = [
+      x + ax * Math.sin(T + ph0),
+      y + ay * Math.sin(T * 2 + ph0 * 1.3),
+      z + az * Math.cos(T + ph0 * 0.7)
+    ];
+    const rot = mul3(rotY(spin * T + ph0), mul3(rotX(swA * Math.sin(T + ph0 + 0.5)), rotZ(swB * Math.sin(2 * T + ph0))));
+    return { type, pos, sc, rot, seed, depth: v3.dot(v3.sub(pos, cam), fwd) };
+  });
+  occ.fill(0);
+  placed.slice(0, 10).forEach((c, i) => {
+    occ[i*4] = c.pos[0]; occ[i*4+1] = c.pos[1]; occ[i*4+2] = c.pos[2]; occ[i*4+3] = c.sc * 0.85;
+  });
+
+  /* low-poly surface */
+  gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LESS);
+  gl.useProgram(progTerrain.p);
+  gl.uniformMatrix4fv(progTerrain.u.uVP, false, VP);
+  gl.uniform1f(progTerrain.u.uT, T); gl.uniform1f(progTerrain.u.uPh, ph);
+  gl.uniform3fv(progTerrain.u.uCam, cam); gl.uniform2f(progTerrain.u.uRes, RW, RH);
+  gl.uniform4fv(progTerrain.u.uOcc, occ);
+  gl.bindVertexArray(vaoTerrain);
+  gl.drawArrays(gl.TRIANGLES, 0, terrain.count);
+
+  /* glass crystals, far → near, back faces then front faces */
+  gl.enable(gl.BLEND);
+  gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+  gl.depthMask(false); gl.depthFunc(gl.LEQUAL);
+  gl.enable(gl.CULL_FACE);
+  gl.useProgram(progCrystal.p);
+  gl.uniformMatrix4fv(progCrystal.u.uVP, false, VP);
+  gl.uniform3fv(progCrystal.u.uCam, cam); gl.uniform1f(progCrystal.u.uPh, ph);
+  placed.sort((a, b) => b.depth - a.depth);
+  for (const c of placed) {
+    gl.uniformMatrix3fv(progCrystal.u.uRot, false, c.rot);
+    gl.uniform3fv(progCrystal.u.uPos, c.pos);
+    gl.uniform1f(progCrystal.u.uScale, c.sc);
+    gl.uniform1f(progCrystal.u.uSeed, c.seed);
+    const s = shapeVAO[c.type];
+    gl.bindVertexArray(s.vao);
+    gl.cullFace(gl.FRONT); gl.uniform1f(progCrystal.u.uBack, 1);
+    gl.drawArrays(gl.TRIANGLES, 0, s.count);
+    gl.cullFace(gl.BACK);  gl.uniform1f(progCrystal.u.uBack, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, s.count);
+  }
+  gl.disable(gl.CULL_FACE);
+
+  /* drifting specks */
+  gl.useProgram(progDust.p);
+  gl.uniformMatrix4fv(progDust.u.uVP, false, VP);
+  gl.uniform1f(progDust.u.uT, T); gl.uniform1f(progDust.u.uPh, ph);
+  gl.uniform2f(progDust.u.uRes, RW, RH);
+  gl.bindVertexArray(vaoDust);
+  gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, DUST_N);
+
+  /* foreground bokeh glass */
+  gl.disable(gl.DEPTH_TEST);
+  gl.useProgram(progBokeh.p);
+  gl.uniform1f(progBokeh.u.uT, T); gl.uniform2f(progBokeh.u.uRes, RW, RH);
+  gl.bindVertexArray(vaoBokeh);
+  gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, BOKEH_N);
+
+  /* polish */
+  gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+  gl.useProgram(progPost.p);
+  gl.uniform1f(progPost.u.uT, T); gl.uniform1f(progPost.u.uPh, ph);
+  gl.uniform2f(progPost.u.uRes, RW, RH);
+  gl.bindVertexArray(vaoFullPost);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.disable(gl.BLEND);
+  gl.depthMask(true);
+}
+
+/* -------------------------------------------------------------------------
+   Timing — autoplay, driven by the rAF timestamp so frame-stepping / virtual
+   time capture tools stay in sync. Loops every 15 s.
+   ------------------------------------------------------------------------- */
+let t0 = null, manual = null;
+function frame(ts) {
+  if (t0 === null) t0 = ts;
+  draw(manual !== null ? manual : ((ts - t0) / 1000) % DURATION);
+  requestAnimationFrame(frame);
+}
+window.DURATION = DURATION;
+window.renderAt = s => { manual = s; draw(s); };
+window.play = () => { manual = null; t0 = null; };
+draw(0);
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
