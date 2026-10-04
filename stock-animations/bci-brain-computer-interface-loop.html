@@ -1,0 +1,978 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Brain-Computer Interface – Neural Control Loop (4K / 15s seamless loop)</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  html,body{margin:0;padding:0;width:100%;height:100%;background:#02030a;overflow:hidden;cursor:none}
+  #stage{position:absolute;left:0;top:0;width:3840px;height:2160px;transform-origin:0 0;overflow:hidden}
+  canvas{display:block;width:3840px;height:2160px}
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="c" width="3840" height="2160"></canvas></div>
+<script>
+(()=>{
+'use strict';
+/* ==========================================================================
+   BRAIN-COMPUTER INTERFACE  ·  4K · 15 s · seamless loop · no text, no logos
+   Story (all wordless): a paralysed hand tries to move -> the intent leaves the
+   motor cortex -> the nerve pathway is broken (sparks) -> an electrode array
+   under the skull picks the spikes up -> a cable carries them to a decoder ->
+   the on-screen cursor moves & clicks while the real hand stays still.
+   Every motion is periodic in 15 s (or a divisor of it) => perfect loop.
+   Hooks for frame-exact capture:  window.__renderAt(seconds)  /  window.__DURATION
+   ========================================================================== */
+const W=3840,H=2160,DUR=15,TAU=Math.PI*2;
+const cv=document.getElementById('c');
+const ctx=cv.getContext('2d',{alpha:false});
+const stage=document.getElementById('stage');
+function fit(){
+  const s=Math.min(innerWidth/W,innerHeight/H);
+  stage.style.transform='translate('+((innerWidth-W*s)/2)+'px,'+((innerHeight-H*s)/2)+'px) scale('+s+')';
+}
+addEventListener('resize',fit);fit();
+
+/* ----------------------------- small utilities --------------------------- */
+const clamp=(v,a=0,b=1)=>v<a?a:v>b?b:v;
+const lerp=(a,b,t)=>a+(b-a)*t;
+const sstep=(a,b,v)=>{const t=clamp((v-a)/(b-a));return t*t*(3-2*t)};
+const sstep5=(a,b,v)=>{const t=clamp((v-a)/(b-a));return t*t*t*(t*(t*6-15)+10)};
+const frac=v=>v-Math.floor(v);
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+const rnd=mulberry32(20260607);
+function gauss(){let u=0,v=0;while(!u)u=rnd();while(!v)v=rnd();return Math.sqrt(-2*Math.log(u))*Math.cos(TAU*v)}
+function ihash(a,b){let h=(Math.imul(a|0,374761393)+Math.imul(b|0,668265263))|0;h=Math.imul(h^(h>>>13),1274126177);return((h^(h>>>16))>>>0)/4294967296}
+
+/* ------------------------------ 3D noise --------------------------------- */
+const perm=new Uint8Array(512);
+(()=>{const p=[];for(let i=0;i<256;i++)p.push(i);const r=mulberry32(11);for(let i=255;i>0;i--){const j=Math.floor(r()*(i+1));const t=p[i];p[i]=p[j];p[j]=t}for(let i=0;i<512;i++)perm[i]=p[i&255]})();
+const fd=t=>t*t*t*(t*(t*6-15)+10);
+function gr(h,x,y,z){h&=15;const u=h<8?x:y,v=h<4?y:(h===12||h===14?x:z);return((h&1)?-u:u)+((h&2)?-v:v)}
+function noise3(x,y,z){
+  const X=Math.floor(x)&255,Y=Math.floor(y)&255,Z=Math.floor(z)&255;
+  x-=Math.floor(x);y-=Math.floor(y);z-=Math.floor(z);
+  const u=fd(x),v=fd(y),w=fd(z);
+  const A=perm[X]+Y,AA=perm[A]+Z,AB=perm[A+1]+Z,B=perm[X+1]+Y,BA=perm[B]+Z,BB=perm[B+1]+Z;
+  return lerp(lerp(lerp(gr(perm[AA],x,y,z),gr(perm[BA],x-1,y,z),u),lerp(gr(perm[AB],x,y-1,z),gr(perm[BB],x-1,y-1,z),u),v),
+              lerp(lerp(gr(perm[AA+1],x,y,z-1),gr(perm[BA+1],x-1,y,z-1),u),lerp(gr(perm[AB+1],x,y-1,z-1),gr(perm[BB+1],x-1,y-1,z-1),u),v),w);
+}
+
+/* ------------------------------ layout ----------------------------------- */
+const BRAIN={cx:1450,cy:880,S:640,F:4.6};
+const SCREEN={x:2470,y:262,w:1210,h:880};
+const SIG={x:2470,y:1262,w:1210,h:690};
+const CORE={x:2255,y:1000};
+const HAND={x:520,y:1930,s:1.5};
+const ORDER=[0,2,4,1,3];                 // pentagram order -> long, readable cursor moves
+const TILE=[];
+(()=>{ // five target tiles on a pentagon inside the screen
+  const cx=SCREEN.x+SCREEN.w*0.5-95, cy=SCREEN.y+88+(SCREEN.h-88-100)/2, rx=SCREEN.w*0.285, ry=SCREEN.h*0.265;
+  for(let k=0;k<5;k++){const a=-Math.PI/2+k*TAU/5;TILE.push({x:cx+Math.cos(a)*rx,y:cy+Math.sin(a)*ry,k})}
+})();
+
+/* ------------------------------ sprites ---------------------------------- */
+function mkSprite(r,g,b,size=96,whiten=0.8){
+  const c=document.createElement('canvas');c.width=c.height=size;const x=c.getContext('2d');
+  const L=k=>`rgb(${Math.round(r+(255-r)*k)},${Math.round(g+(255-g)*k)},${Math.round(b+(255-b)*k)})`;
+  const q=size/2,gd=x.createRadialGradient(q,q,0,q,q,q);
+  gd.addColorStop(0,L(whiten));gd.addColorStop(0.07,L(whiten*0.6));
+  gd.addColorStop(0.16,`rgba(${r},${g},${b},0.75)`);gd.addColorStop(0.34,`rgba(${r},${g},${b},0.26)`);
+  gd.addColorStop(0.62,`rgba(${r},${g},${b},0.07)`);gd.addColorStop(1,`rgba(${r},${g},${b},0)`);
+  x.fillStyle=gd;x.fillRect(0,0,size,size);return c;
+}
+function mkSoft(r,g,b,size=256){ // pure soft glow, no hot core
+  const c=document.createElement('canvas');c.width=c.height=size;const x=c.getContext('2d');
+  const q=size/2,gd=x.createRadialGradient(q,q,0,q,q,q);
+  gd.addColorStop(0,`rgba(${r},${g},${b},0.55)`);gd.addColorStop(0.4,`rgba(${r},${g},${b},0.18)`);gd.addColorStop(1,`rgba(${r},${g},${b},0)`);
+  x.fillStyle=gd;x.fillRect(0,0,size,size);return c;
+}
+const SP={brain:[]};
+for(let i=0;i<16;i++){const t=i/15;SP.brain.push(mkSprite(Math.round(lerp(70,168,t)),Math.round(lerp(214,112,t)),255,96,0.7))}
+SP.hot=mkSprite(120,235,255,96,0.9);
+SP.warm=mkSprite(255,184,96,96,0.8);
+SP.coral=mkSprite(255,92,108,96,0.8);
+SP.violet=mkSprite(150,110,255,96,0.7);
+SP.cyan=mkSprite(80,225,255,96,0.75);
+SP.softC=mkSoft(60,200,255);SP.softV=mkSoft(120,90,255);SP.softW=mkSoft(255,170,90);SP.softK=mkSoft(255,80,110);
+function glow(s,x,y,size,a){ctx.globalAlpha=a;ctx.drawImage(s,x-size*0.5,y-size*0.5,size,size)}
+
+function rr(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath()}
+
+/* ------------------------------ polylines -------------------------------- */
+function Poly(n){this.n=n;this.x=new Float32Array(n+1);this.y=new Float32Array(n+1);this.l=new Float32Array(n+1);this.L=0}
+Poly.prototype.finish=function(){this.l[0]=0;for(let i=1;i<=this.n;i++){this.l[i]=this.l[i-1]+Math.hypot(this.x[i]-this.x[i-1],this.y[i]-this.y[i-1])}this.L=this.l[this.n]};
+let _px=0,_py=0,_tx=1,_ty=0;
+Poly.prototype.at=function(d){
+  d=clamp(d,0,this.L);let lo=0,hi=this.n;
+  while(hi-lo>1){const m=(lo+hi)>>1;if(this.l[m]<=d)lo=m;else hi=m}
+  const seg=this.l[hi]-this.l[lo]||1,f=(d-this.l[lo])/seg;
+  _px=lerp(this.x[lo],this.x[hi],f);_py=lerp(this.y[lo],this.y[hi],f);
+  const dx=this.x[hi]-this.x[lo],dy=this.y[hi]-this.y[lo],m=Math.hypot(dx,dy)||1;_tx=dx/m;_ty=dy/m;
+};
+function cubic(P,p0x,p0y,p1x,p1y,p2x,p2y,p3x,p3y,from){
+  const n=P.n;for(let i=0;i<=n;i++){const t=i/n,m=1-t,a=m*m*m,b=3*m*m*t,c=3*m*t*t,d=t*t*t;const k=(from||0)+i;P.x[k]=a*p0x+b*p1x+c*p2x+d*p3x;P.y[k]=a*p0y+b*p1y+c*p2y+d*p3y}
+}
+
+/* ------------------------------ timeline --------------------------------- */
+const CYC=3;                                  // 5 intent cycles of 3 s = 15 s
+const actEnv=u=>0.10+0.90*sstep(0.03,0.16,u)*(1-sstep(0.74,0.92,u));
+function envAt(tt){return actEnv(frac(tt/CYC))}
+const cycDir=[];                              // movement direction of each cycle (for decoder / raster tuning)
+for(let c=0;c<5;c++){const a=TILE[ORDER[c]],b=TILE[ORDER[(c+1)%5]];cycDir.push(Math.atan2(b.y-a.y,b.x-a.x))}
+
+function cursorAt(tt){
+  tt=((tt%DUR)+DUR)%DUR;
+  const c=Math.floor(tt/CYC),u=(tt-CYC*c)/CYC;
+  const a=TILE[ORDER[c]],b=TILE[ORDER[(c+1)%5]];
+  const p=sstep5(0.22,0.74,u);
+  let x=lerp(a.x,b.x,p),y=lerp(a.y,b.y,p);
+  const dx=b.x-a.x,dy=b.y-a.y,dist=Math.hypot(dx,dy)||1,nx=-dy/dist,ny=dx/dist;
+  const bow=(c%2?1:-1)*0.13*dist*Math.sin(Math.PI*p);
+  x+=nx*bow;y+=ny*bow;
+  const mv=4*p*(1-p),tr=mv*9;
+  x+=tr*(Math.sin(TAU*tt*61/DUR)+0.6*Math.sin(TAU*tt*97/DUR+0.3));
+  y+=tr*(Math.cos(TAU*tt*71/DUR+1.1)+0.6*Math.sin(TAU*tt*113/DUR));
+  return {x,y,c,u,p,mv};
+}
+
+/* ================================ BRAIN ==================================== */
+const BR={ax:0.84,ay:0.58,az:1.0,yc:0.10};
+const NMAX=21000;
+const BX=new Float32Array(NMAX),BY=new Float32Array(NMAX),BZ=new Float32Array(NMAX);
+const NXa=new Float32Array(NMAX),NYa=new Float32Array(NMAX),NZa=new Float32Array(NMAX);
+const BG=new Float32Array(NMAX),BD0=new Float32Array(NMAX),BPH=new Float32Array(NMAX);
+const BCI=new Uint8Array(NMAX),BPART=new Uint8Array(NMAX);
+let N=0;
+function addPt(x,y,z,nx,ny,nz,g,part){
+  const l=Math.hypot(nx,ny,nz)||1;const i=N++;
+  BX[i]=x;BY[i]=y;BZ[i]=z;NXa[i]=nx/l;NYa[i]=ny/l;NZa[i]=nz/l;BG[i]=g;BPART[i]=part;
+  BCI[i]=clamp(Math.round((1-(z+1)/2.1)*15),0,15);BPH[i]=rnd();
+}
+function insideMain(x,y,z){
+  const yl=y-BR.yc,ay=yl>0?BR.ay:BR.ay*0.62,wz=1-0.10*(z/BR.az);
+  const a=x/(BR.ax*wz),b=yl/ay,c=z/BR.az;return a*a+b*b+c*c;
+}
+function insideTemp(x,y,z){const dz=(z-0.14)/0.58,dx=(Math.abs(x)-0.50)/0.27,dy=(y+0.14*dz+0.27)/0.19;return dx*dx+dy*dy+dz*dz}
+function insideCb(x,y,z){const a=x/0.50,b=(y+0.30)/0.26,c=(z+0.74)/0.34;return a*a+b*b+c*c}
+function segDist(px,py,ax,ay,bx,by){const vx=bx-ax,vy=by-ay;const t=clamp(((px-ax)*vx+(py-ay)*vy)/(vx*vx+vy*vy));return Math.hypot(px-(ax+vx*t),py-(ay+vy*t))}
+function foldFn(x,y,z){
+  const f=3.5,q=1.7;
+  const w1=noise3(x*q+3.1,y*q,z*q)*0.55,w2=noise3(x*q,y*q+7.7,z*q+1.3)*0.55,w3=noise3(x*q+9.2,y*q+2.2,z*q)*0.55;
+  const qx=(x+w1)*f,qy=(y+w2)*f,qz=(z+w3)*f,e=0.02;
+  const n0=noise3(qx,qy,qz);
+  const gx=noise3(qx+e,qy,qz)-noise3(qx-e,qy,qz),gy=noise3(qx,qy+e,qz)-noise3(qx,qy-e,qz),gz=noise3(qx,qy,qz+e)-noise3(qx,qy,qz-e);
+  const gl=Math.hypot(gx,gy,gz)/(2*e)+0.05;
+  return sstep(0.010,0.034,Math.abs(n0)/gl/f);
+}
+function grooves(x,y,z){
+  let f=1;
+  if(Math.abs(x)>0.2)f*=sstep(0.012,0.045,segDist(z,y,0.68,-0.02,-0.45,0.22));   // lateral (Sylvian) fissure
+  f*=sstep(0.010,0.036,segDist(z,y,-0.10,0.68,0.17,0.20));                         // central sulcus
+  return f;
+}
+function genBrain(){
+  // cerebrum
+  let cnt=0,tries=0;
+  while(cnt<11500&&tries<900000){
+    tries++;
+    let dx=gauss(),dy=gauss(),dz=gauss();const l=Math.hypot(dx,dy,dz);dx/=l;dy/=l;dz/=l;
+    const ay=dy>0?BR.ay:BR.ay*0.62,A=BR.ax,B=ay,C=BR.az;
+    if(rnd()*0.86>Math.sqrt((B*C*dx)**2+(A*C*dy)**2+(A*B*dz)**2))continue;
+    const wz=1-0.10*dz;let x=BR.ax*wz*dx;const y=BR.yc+ay*dy,z=BR.az*dz;
+    if(Math.abs(x)<0.026)continue;
+    if(dy<-0.42&&rnd()<0.93)continue;
+    x+=(x>0?1:-1)*0.014;
+    if(insideTemp(x,y,z)<0.88)continue;
+    const g=foldFn(x,y,z)*grooves(x,y,z);
+    if(rnd()>0.05+0.95*Math.pow(g,1.5))continue;
+    const nx=dx/(BR.ax*wz),ny=dy/ay,nz=dz/BR.az,nl=Math.hypot(nx,ny,nz),disp=0.05*(g-0.45);
+    addPt(x+nx/nl*disp,y+ny/nl*disp,z+nz/nl*disp,nx,ny,nz,g,0);cnt++;
+  }
+  // temporal lobes
+  cnt=0;tries=0;
+  while(cnt<2400&&tries<400000){
+    tries++;
+    let dx=gauss(),dy=gauss(),dz=gauss();const l=Math.hypot(dx,dy,dz);dx/=l;dy/=l;dz/=l;
+    const sx=rnd()<0.5?-1:1;
+    const x=sx*(0.50+0.27*dx),y=-0.27+0.19*dy-0.14*dz,z=0.14+0.58*dz;
+    if(insideMain(x,y,z)<0.90)continue;
+    const g=foldFn(x,y,z)*sstep(0.0,0.05,Math.abs(y-0.0)+ (y<0?0.05:0));
+    if(rnd()>0.05+0.95*Math.pow(g,1.5))continue;
+    addPt(x,y,z,sx*dx/0.27,dy/0.19,dz/0.58,g,0);cnt++;
+  }
+  // cerebellum
+  cnt=0;tries=0;
+  while(cnt<2300&&tries<400000){
+    tries++;
+    let dx=gauss(),dy=gauss(),dz=gauss();const l=Math.hypot(dx,dy,dz);dx/=l;dy/=l;dz/=l;
+    const x=0.50*dx,y=-0.30+0.26*dy,z=-0.74+0.34*dz;
+    if(insideMain(x,y,z)<0.92)continue;
+    const g=0.5+0.5*Math.sin(y*84+2.0*noise3(x*2,y*2,z*2));
+    if(rnd()>0.10+0.9*Math.pow(g,1.2))continue;
+    addPt(x,y,z,dx/0.50,dy/0.26,dz/0.34,0.35+0.65*g,1);cnt++;
+  }
+  // brain stem
+  cnt=0;tries=0;
+  const ax=0,ay=-0.72,az=-0.24,al=Math.hypot(ay,az),ux=0,uy=ay/al,uz=az/al; // axis
+  const e2x=0,e2y=uz,e2z=-uy;                                                // perpendicular (other is x)
+  while(cnt<700&&tries<100000){
+    tries++;
+    const s=Math.floor(rnd()*46)/46+rnd()*0.01,th=rnd()*TAU;
+    const rad=(0.125-0.05*s)*(1+0.18*Math.exp(-((s-0.22)*(s-0.22))/0.01));
+    const cx=0,cy=-0.28+ay*s,cz=-0.22+az*s;
+    const nx=Math.cos(th),ny=Math.sin(th)*e2y,nz=Math.sin(th)*e2z;
+    const x=cx+rad*nx,y=cy+rad*ny,z=cz+rad*nz;
+    if(insideMain(x,y,z)<0.92||insideCb(x,y,z)<0.9)continue;
+    addPt(x,y,z,nx,ny,nz,0.55+0.45*Math.abs(Math.sin(s*46*Math.PI)),2);cnt++;
+  }
+}
+genBrain();
+
+/* motor-cortex point (where the array sits) + local frame */
+const MOT={x:0,y:0.36,z:0.20,nx:0,ny:0,nz:0};
+(()=>{
+  const y=MOT.y,z=MOT.z,wz=1-0.10*z/BR.az;
+  const s=1-Math.pow((y-BR.yc)/BR.ay,2)-Math.pow(z/BR.az,2);
+  MOT.x=BR.ax*wz*Math.sqrt(s)+0.014+0.01;
+  let nx=MOT.x/Math.pow(BR.ax*wz,2),ny=(y-BR.yc)/(BR.ay*BR.ay),nz=z/(BR.az*BR.az);const l=Math.hypot(nx,ny,nz);
+  MOT.nx=nx/l;MOT.ny=ny/l;MOT.nz=nz/l;
+})();
+const ARR={n:10,pitch:0.023,ux:0,uy:0,uz:0,vx:0,vy:0,vz:0};
+(()=>{ // tangent axes: u = AP direction, v = up-ish
+  let ux=0,uy=0,uz=1;const d=ux*MOT.nx+uy*MOT.ny+uz*MOT.nz;ux-=d*MOT.nx;uy-=d*MOT.ny;uz-=d*MOT.nz;
+  const ul=Math.hypot(ux,uy,uz);ux/=ul;uy/=ul;uz/=ul;
+  const vx=MOT.ny*uz-MOT.nz*uy,vy=MOT.nz*ux-MOT.nx*uz,vz=MOT.nx*uy-MOT.ny*ux;
+  const sgn=vy<0?-1:1;
+  ARR.ux=ux;ARR.uy=uy;ARR.uz=uz;ARR.vx=vx*sgn;ARR.vy=vy*sgn;ARR.vz=vz*sgn;
+})();
+for(let i=0;i<N;i++)BD0[i]=Math.hypot(BX[i]-MOT.x,BY[i]-MOT.y,BZ[i]-MOT.z);
+const STEM={x:0,y:-1.0,z:-0.46};
+
+/* neighbour graph (neural mesh) */
+let EA,EB,NE=0;
+const ADJ_S=new Int32Array(NMAX+1);let ADJ=null;
+(()=>{
+  const cs=0.075,grid=new Map();
+  const key=(a,b,c)=>((a+64)*128+(b+64))*128+(c+64);
+  for(let i=0;i<N;i++){const k=key(Math.floor(BX[i]/cs),Math.floor(BY[i]/cs),Math.floor(BZ[i]/cs));let a=grid.get(k);if(!a){a=[];grid.set(k,a)}a.push(i)}
+  const edges=new Set(),ea=[],eb=[];
+  for(let i=0;i<N;i++){
+    const cx=Math.floor(BX[i]/cs),cy=Math.floor(BY[i]/cs),cz=Math.floor(BZ[i]/cs);
+    const cand=[];
+    for(let a=-1;a<=1;a++)for(let b=-1;b<=1;b++)for(let c=-1;c<=1;c++){
+      const L=grid.get(key(cx+a,cy+b,cz+c));if(!L)continue;
+      for(const j of L){if(j===i||BPART[j]!==BPART[i])continue;const d=Math.hypot(BX[i]-BX[j],BY[i]-BY[j],BZ[i]-BZ[j]);if(d<cs*1.05)cand.push([d,j])}
+    }
+    cand.sort((p,q)=>p[0]-q[0]);
+    const k=Math.min(cand.length,BPART[i]===1?3:2);
+    for(let m=0;m<k;m++){const j=cand[m][1],lo=Math.min(i,j),hi=Math.max(i,j),kk=lo*NMAX+hi;if(!edges.has(kk)){edges.add(kk);ea.push(lo);eb.push(hi)}}
+  }
+  NE=ea.length;EA=Int32Array.from(ea);EB=Int32Array.from(eb);
+  const deg=new Int32Array(N+1);for(let e=0;e<NE;e++){deg[EA[e]]++;deg[EB[e]]++}
+  for(let i=0;i<N;i++)ADJ_S[i+1]=ADJ_S[i]+deg[i];
+  ADJ=new Int32Array(ADJ_S[N]);const fill=new Int32Array(N);
+  for(let e=0;e<NE;e++){const a=EA[e],b=EB[e];ADJ[ADJ_S[a]+fill[a]++]=b;ADJ[ADJ_S[b]+fill[b]++]=a}
+})();
+
+/* signal paths: random walks over the mesh, pulses ride on them */
+const PATHS=[];
+(()=>{
+  const periods=[1.5,2.5,3,5,7.5,15/4];
+  for(let k=0;k<330;k++){
+    let cur=Math.floor(rnd()*N),prev=-1,dirx=0,diry=0,dirz=0;const p=[cur];
+    for(let s=0;s<13;s++){
+      const a=ADJ_S[cur],b=ADJ_S[cur+1];if(b===a)break;
+      let best=-1,bs=-9;
+      for(let m=a;m<b;m++){const j=ADJ[m];if(j===prev)continue;
+        let dx=BX[j]-BX[cur],dy=BY[j]-BY[cur],dz=BZ[j]-BZ[cur];const l=Math.hypot(dx,dy,dz)||1;dx/=l;dy/=l;dz/=l;
+        const sc=(dx*dirx+dy*diry+dz*dirz)+rnd()*0.7;if(sc>bs){bs=sc;best=j}}
+      if(best<0)break;
+      let dx=BX[best]-BX[cur],dy=BY[best]-BY[cur],dz=BZ[best]-BZ[cur];const l=Math.hypot(dx,dy,dz)||1;dirx=dx/l;diry=dy/l;dirz=dz/l;
+      prev=cur;cur=best;p.push(cur);
+    }
+    if(p.length>5)PATHS.push({p,per:periods[Math.floor(rnd()*periods.length)],ph:rnd(),w:0.4+rnd()*0.6});
+  }
+})();
+const SOMA=[];for(let i=0;i<N&&SOMA.length<210;i++){const j=Math.floor(rnd()*N);if(BPART[j]===0&&BG[j]>0.7)SOMA.push(j)}
+
+/* skull shell (sparse, rim-lit) with a circular window over the array */
+const SKN=3200,SKX=new Float32Array(SKN),SKY=new Float32Array(SKN),SKZ=new Float32Array(SKN),SKNX=new Float32Array(SKN),SKNY=new Float32Array(SKN),SKNZ=new Float32Array(SKN);
+let SKC=0;
+(()=>{
+  const rx=BR.ax*1.20,ry=BR.ay*1.23,rz=BR.az*1.13;
+  const wx=MOT.x+MOT.nx*0.18,wy=MOT.y+MOT.ny*0.18,wz=MOT.z+MOT.nz*0.18;
+  for(let i=0;i<9000&&SKC<SKN;i++){
+    let dx=gauss(),dy=gauss(),dz=gauss();const l=Math.hypot(dx,dy,dz);dx/=l;dy/=l;dz/=l;
+    const x=rx*dx,y=BR.yc+0.04+ry*dy,z=rz*dz;
+    if(y<-0.05)continue;
+    if(Math.hypot(x-wx,y-wy,z-wz)<0.34)continue;
+    const j=SKC++;SKX[j]=x;SKY[j]=y;SKZ[j]=z;
+    const nx=dx/rx,ny=dy/ry,nz=dz/rz,nl=Math.hypot(nx,ny,nz);SKNX[j]=nx/nl;SKNY[j]=ny/nl;SKNZ[j]=nz/nl;
+  }
+})();
+
+/* ------------------------------ camera 3D -------------------------------- */
+const C3={ca:1,sa:0,cp:1,sp:0};
+function setCam3(yaw,pitch){C3.ca=Math.cos(yaw);C3.sa=Math.sin(yaw);C3.cp=Math.cos(pitch);C3.sp=Math.sin(pitch)}
+let _x=0,_y=0,_d=0,_k=1;
+function proj(x,y,z){
+  const X=x*C3.ca+z*C3.sa,Z=-x*C3.sa+z*C3.ca,Y=y*C3.cp-X*C3.sp,D=y*C3.sp+X*C3.cp;
+  const k=BRAIN.F/(BRAIN.F-D);_x=BRAIN.cx+Z*BRAIN.S*k;_y=BRAIN.cy-Y*BRAIN.S*k;_d=D;_k=k;
+}
+const PX=new Float32Array(NMAX),PY=new Float32Array(NMAX),PD=new Float32Array(NMAX),PA=new Float32Array(NMAX),PV=new Float32Array(NMAX),PS=new Float32Array(NMAX);
+
+/* ============================= static layers =============================== */
+const bgC=document.createElement('canvas');bgC.width=W;bgC.height=H;
+(()=>{
+  const x=bgC.getContext('2d');
+  x.fillStyle='#03050d';x.fillRect(0,0,W,H);
+  const blob=(cx,cy,r,col,a)=>{const g=x.createRadialGradient(cx,cy,0,cx,cy,r);g.addColorStop(0,`rgba(${col},${a})`);g.addColorStop(1,`rgba(${col},0)`);x.fillStyle=g;x.fillRect(0,0,W,H)};
+  blob(1450,880,1900,'22,52,118',0.34);
+  blob(3300,420,1500,'88,52,190',0.18);
+  blob(520,1850,1300,'16,120,150',0.20);
+  blob(2700,1700,1200,'40,70,190',0.16);
+  blob(1100,200,1000,'30,110,170',0.10);
+  // very fine perspective floor lines (barely visible) for depth
+  x.strokeStyle='rgba(120,170,255,0.035)';x.lineWidth=2;
+  for(let i=-18;i<=18;i++){x.beginPath();x.moveTo(W/2+i*190,H*0.80);x.lineTo(W/2+i*820,H);x.stroke()}
+  for(let j=0;j<9;j++){const y=H*0.80+Math.pow(j/8,1.9)*H*0.20;x.beginPath();x.moveTo(0,y);x.lineTo(W,y);x.stroke()}
+  const m=x.createLinearGradient(0,H*0.74,0,H*0.82);m.addColorStop(0,'rgba(3,5,13,1)');m.addColorStop(1,'rgba(3,5,13,0)');
+})();
+const vigC=document.createElement('canvas');vigC.width=W;vigC.height=H;
+(()=>{
+  const x=vigC.getContext('2d');const g=x.createRadialGradient(W/2,H/2,H*0.42,W/2,H/2,H*1.05);
+  g.addColorStop(0,'rgba(1,2,6,0)');g.addColorStop(0.7,'rgba(1,2,6,0.34)');g.addColorStop(1,'rgba(1,2,6,0.82)');
+  x.fillStyle=g;x.fillRect(0,0,W,H);
+})();
+const grainC=document.createElement('canvas');grainC.width=grainC.height=512;
+(()=>{
+  const x=grainC.getContext('2d'),id=x.createImageData(512,512),r=mulberry32(5);
+  for(let i=0;i<512*512;i++){const v=Math.floor(r()*r()*255);id.data[i*4]=v;id.data[i*4+1]=v;id.data[i*4+2]=v;id.data[i*4+3]=255}
+  x.putImageData(id,0,0);
+})();
+const grainPat=ctx.createPattern(grainC,'repeat');
+
+/* dust + bokeh (closed orbits => periodic) */
+const DUST=[],BOKEH=[];
+for(let i=0;i<260;i++)DUST.push({x:rnd()*W,y:rnd()*H,r:5+rnd()*13,ax:20+rnd()*90,ay:20+rnd()*90,m:1+Math.floor(rnd()*2),n:1+Math.floor(rnd()*2),p:rnd(),q:rnd(),tw:1+Math.floor(rnd()*5),a:0.12+rnd()*0.35,c:rnd()<0.7?SP.cyan:SP.violet});
+for(let i=0;i<20;i++)BOKEH.push({x:rnd()*W,y:rnd()*H,r:110+rnd()*260,ax:60+rnd()*160,ay:50+rnd()*120,p:rnd(),q:rnd(),a:0.020+rnd()*0.035,c:[SP.softC,SP.softV,SP.softC,SP.softW][Math.floor(rnd()*4)]});
+
+/* ============================ draw: background ============================= */
+function drawDust(t,list){
+  ctx.globalCompositeOperation='lighter';
+  for(const d of list){
+    const x=d.x+d.ax*Math.sin(TAU*(d.m*t/DUR+d.p)),y=d.y+d.ay*Math.cos(TAU*(d.n*t/DUR+d.q));
+    const tw=0.55+0.45*Math.sin(TAU*(d.tw*t/DUR+d.p));
+    glow(d.c,x,y,d.r*2.2,d.a*tw);
+  }
+  ctx.globalAlpha=1;
+}
+function arcRing(cx,cy,r,n,duty,sectors,t,col,lw){
+  const sec=TAU/n,rot=sec*sectors*t/DUR;
+  ctx.beginPath();
+  for(let i=0;i<n;i++){const a0=rot+i*sec,a1=a0+sec*duty;ctx.moveTo(cx+Math.cos(a0)*r,cy+Math.sin(a0)*r);ctx.arc(cx,cy,r,a0,a1)}
+  ctx.lineWidth=lw;ctx.strokeStyle=col;ctx.stroke();
+}
+function drawRings(t,A){
+  ctx.globalCompositeOperation='lighter';ctx.setLineDash([]);
+  const cx=BRAIN.cx+40,cy=BRAIN.cy+30;
+  ctx.lineWidth=2;ctx.strokeStyle='rgba(110,190,255,0.07)';
+  ctx.beginPath();ctx.arc(cx,cy,980,0,TAU);ctx.stroke();
+  ctx.beginPath();ctx.arc(cx,cy,1210,0,TAU);ctx.stroke();
+  arcRing(cx,cy,1080,12,0.62,1,t,'rgba(120,210,255,0.17)',3);
+  arcRing(cx,cy,880,8,0.40,-1,t,'rgba(150,170,255,0.15)',3);
+  arcRing(cx,cy,1330,16,0.22,2,t,'rgba(120,210,255,0.10)',3);
+  // fine ticks
+  ctx.strokeStyle='rgba(130,200,255,0.12)';ctx.lineWidth=2;ctx.beginPath();
+  for(let i=0;i<120;i++){const a=TAU*i/120,r0=1000,r1=i%5?1018:1040;ctx.moveTo(cx+Math.cos(a)*r0,cy+Math.sin(a)*r0);ctx.lineTo(cx+Math.cos(a)*r1,cy+Math.sin(a)*r1)}
+  ctx.stroke();
+  ctx.globalAlpha=1;
+}
+
+/* ============================== draw: brain ================================ */
+function brainFrame(t,u,A){
+  const yaw=0.28+0.15*Math.sin(TAU*t/DUR),pitch=0.10+0.025*Math.cos(TAU*t/DUR+0.6);
+  setCam3(yaw,pitch);
+  const {ca,sa,cp,sp}=C3;
+  // light in view space (x right, y up, depth toward camera)
+  const lx=0.45,ly=0.55,ld=0.70,ll=Math.hypot(lx,ly,ld),Lx=lx/ll,Ly=ly/ll,Ld=ld/ll;
+  // moving rings of activity from the electrode site (period 0.75 s, 20 per loop)
+  const r1=frac(t/0.75)*1.7,r2=frac(t/0.75+0.5)*1.7;
+  const bs=sstep(0.05,0.34,u)*(1-sstep(0.34,0.55,u));            // descending blob motor->stem
+  const bxp=lerp(MOT.x,STEM.x,sstep5(0.04,0.38,u)),byp=lerp(MOT.y,STEM.y+0.35,sstep5(0.04,0.38,u)),bzp=lerp(MOT.z,STEM.z+0.20,sstep5(0.04,0.38,u));
+  const sizeBase=BRAIN.S/640;
+  const scanY=lerp(-0.78,0.98,frac(t/(DUR/2)));
+  for(let i=0;i<N;i++){
+    const x=BX[i],y=BY[i],z=BZ[i];
+    const X=x*ca+z*sa,Z=-x*sa+z*ca,Y=y*cp-X*sp,D=y*sp+X*cp;
+    const k=BRAIN.F/(BRAIN.F-D);
+    PX[i]=BRAIN.cx+Z*BRAIN.S*k;PY[i]=BRAIN.cy-Y*BRAIN.S*k;PD[i]=D;
+    // normal in view space
+    const nx=NXa[i],ny=NYa[i],nz=NZa[i];
+    const NXv=nx*ca+nz*sa,NZv=-nx*sa+nz*ca,NYv=ny*cp-NXv*sp,NDv=ny*sp+NXv*cp;
+    const diff=Math.max(0,NZv*Lx+NYv*Ly+NDv*Ld);
+    const fres=Math.pow(1-Math.abs(NDv),2.6);
+    const gg=BG[i];
+    let b=0.20+0.60*diff+0.40*fres;
+    b*=0.45+0.8*gg;
+    // activity
+    const d=BD0[i];
+    let a=0;
+    if(d<0.75)a+=A*Math.exp(-d*d/0.08)*0.75;
+    const e1=d-r1,e2=d-r2;
+    if(e1<0.3&&e1>-0.3)a+=A*Math.exp(-e1*e1/0.012-d*0.9)*0.9;
+    if(e2<0.3&&e2>-0.3)a+=A*Math.exp(-e2*e2/0.012-d*0.9)*0.9;
+    if(bs>0.001){const dd=(x-bxp)*(x-bxp)+(y-byp)*(y-byp)+(z-bzp)*(z-bzp);if(dd<0.45)a+=bs*Math.exp(-dd/0.045)*0.9}
+    const sy=Y-scanY;if(sy<0.16&&sy>-0.16)a+=0.30*Math.exp(-sy*sy/0.0035);
+    // sparse random firing (periodic: 6 slots per second, 90 per loop)
+    const sl=t*6+BPH[i]*0.999;const si=Math.floor(sl);
+    const sk=ihash(i,si%90);
+    if(sk<0.014)a+=0.85*(1-frac(sl));
+    PA[i]=a;
+    const front=sstep(-0.55,0.45,NDv);
+    PV[i]=clamp((0.14+0.86*front)*(b*0.95+0.05)*(0.78+0.22*sstep(-0.9,0.7,D)),0,1);
+    PS[i]=(6+8*clamp(b,0,1)+15*clamp(a,0,1.4))*k*sizeBase;
+  }
+  // ---- volumetric glow inside the brain
+  ctx.globalCompositeOperation='lighter';
+  proj(0.0,0.08,-0.05);glow(SP.softC,_x,_y,2300,0.12);
+  proj(MOT.x*0.7,MOT.y,MOT.z);glow(SP.softC,_x,_y,900,0.08+0.22*A);
+  proj(-0.3,0.2,-0.5);glow(SP.softV,_x,_y,1200,0.14);
+  // ---- mesh edges
+  const P=[];for(let i=0;i<6;i++)P.push(new Path2D());
+  const H3=[new Path2D(),new Path2D(),new Path2D()];let hotAny=false;
+  for(let e=0;e<NE;e++){
+    const a=EA[e],b=EB[e];
+    const dd=(PD[a]+PD[b])*0.5,lvl=dd>0.28?2:(dd>-0.2?1:0),col=(BCI[a]>>3);
+    const pp=P[lvl*2+col];pp.moveTo(PX[a],PY[a]);pp.lineTo(PX[b],PY[b]);
+    const ac=(PA[a]+PA[b])*0.5;
+    if(ac>0.24&&dd>-0.35){const h=H3[ac<0.42?0:ac<0.68?1:2];h.moveTo(PX[a],PY[a]);h.lineTo(PX[b],PY[b]);hotAny=true}
+  }
+  ctx.lineWidth=1.6;
+  const ea=[0.06,0.15,0.26],cc=['110,215,255','160,130,255'];
+  for(let lvl=0;lvl<3;lvl++)for(let col=0;col<2;col++){ctx.strokeStyle=`rgba(${cc[col]},${ea[lvl]})`;ctx.stroke(P[lvl*2+col])}
+  if(hotAny){ctx.lineWidth=2.4;const ha=[0.22,0.45,0.75];for(let l=0;l<3;l++){ctx.strokeStyle=`rgba(170,245,255,${ha[l]})`;ctx.stroke(H3[l])}}
+  // ---- nodes
+  for(let i=0;i<N;i++){
+    const s=PS[i];ctx.globalAlpha=PV[i];ctx.drawImage(SP.brain[BCI[i]],PX[i]-s*0.5,PY[i]-s*0.5,s,s);
+    const a=PA[i];if(a>0.10){const s2=s*1.15;ctx.globalAlpha=clamp(a,0,1)*0.8*Math.min(1,PV[i]*1.5+0.2);ctx.drawImage(SP.hot,PX[i]-s2*0.5,PY[i]-s2*0.5,s2,s2)}
+  }
+  // ---- travelling pulses on the mesh
+  for(const q of PATHS){
+    const n=q.p.length,sc=frac(t/q.per+q.ph)*(n+3)-1.5;
+    if(sc<0||sc>n-1)continue;
+    const i0=Math.floor(sc),f=sc-i0,a=q.p[i0],b=q.p[Math.min(n-1,i0+1)];
+    const x=lerp(PX[a],PX[b],f),y=lerp(PY[a],PY[b],f);
+    const vis=Math.min(1,0.25+0.75*clamp((PD[a]+0.5)*1.2,0,1))*q.w*(0.55+0.55*A);
+    glow(SP.hot,x,y,46*vis+14,0.95*vis);
+    if(i0>0){const pa=q.p[i0-1];ctx.globalAlpha=0.35*vis;ctx.lineWidth=3;ctx.strokeStyle='rgba(150,240,255,1)';ctx.beginPath();ctx.moveTo(PX[pa],PY[pa]);ctx.lineTo(x,y);ctx.stroke()}
+  }
+  // ---- somas
+  for(let k=0;k<SOMA.length;k++){
+    const i=SOMA[k],tw=Math.pow(0.5+0.5*Math.sin(TAU*((k%7+2)*t/DUR+BPH[i])),5);
+    const v=PV[i]*(0.35+0.65*tw)+PA[i]*0.5;if(v<0.05)continue;
+    glow(SP.cyan,PX[i],PY[i],60+80*tw,clamp(v,0,1)*0.85);
+  }
+  ctx.globalAlpha=1;
+}
+function drawSkull(t){
+  const {ca,sa,cp,sp}=C3;ctx.globalCompositeOperation='lighter';
+  for(let i=0;i<SKC;i++){
+    const x=SKX[i],y=SKY[i],z=SKZ[i];
+    const X=x*ca+z*sa,Z=-x*sa+z*ca,Y=y*cp-X*sp,D=y*sp+X*cp;
+    const nx=SKNX[i],ny=SKNY[i],nz=SKNZ[i];
+    const NXv=nx*ca+nz*sa,NDv=ny*sp+NXv*cp;
+    const rim=Math.pow(1-Math.abs(NDv),3.2);
+    const a=0.025+0.55*rim;
+    const k=BRAIN.F/(BRAIN.F-D);
+    const tw=0.7+0.3*Math.sin(TAU*(2*t/DUR+i*0.37));
+    glow(SP.cyan,BRAIN.cx+Z*BRAIN.S*k,BRAIN.cy-Y*BRAIN.S*k,(8+9*rim)*k,a*tw*(NDv>0?1:0.6));
+  }
+  ctx.globalAlpha=1;
+}
+
+/* ====================== electrode array + cable + core ===================== */
+const CABLE=new Poly(200),LINK1=new Poly(100),LINK2=new Poly(100),NERVE=new Poly(260);
+const PIN=[];for(let j=0;j<ARR.n;j++)for(let i=0;i<ARR.n;i++)PIN.push({i,j,ph:ihash(i,j*7+1)});
+let ARR_C={x:0,y:0},ARR_CORNER={x:0,y:0},MOT2={x:0,y:0},STEM2={x:0,y:0};
+function arrayPoint(fi,fj,lift){ // fi,fj in grid units centred on 0
+  const off=ARR.pitch;
+  return [MOT.x+MOT.nx*lift+ARR.ux*fi*off+ARR.vx*fj*off,MOT.y+MOT.ny*lift+ARR.uy*fi*off+ARR.vy*fj*off,MOT.z+MOT.nz*lift+ARR.uz*fi*off+ARR.vz*fj*off];
+}
+function drawArray(t,u,A){
+  const half=(ARR.n-1)/2,pad=0.9,lift=0.016;
+  // plate outline
+  const corners=[[-half-pad,-half-pad],[half+pad,-half-pad],[half+pad,half+pad],[-half-pad,half+pad]];
+  ctx.globalCompositeOperation='lighter';
+  ctx.beginPath();let cxs=0,cys=0;
+  for(let k=0;k<4;k++){const p=arrayPoint(corners[k][0],corners[k][1],lift);proj(p[0],p[1],p[2]);if(k===0)ctx.moveTo(_x,_y);else ctx.lineTo(_x,_y);cxs+=_x;cys+=_y;if(k===1){ARR_CORNER.x=_x;ARR_CORNER.y=_y}}
+  ctx.closePath();
+  ctx.globalCompositeOperation='source-over';ctx.fillStyle='rgba(6,10,22,0.86)';ctx.fill();ctx.globalCompositeOperation='lighter';
+  ctx.fillStyle='rgba(255,190,110,0.07)';ctx.fill();
+  ctx.lineWidth=3;ctx.strokeStyle=`rgba(255,196,120,${0.65+0.25*A})`;ctx.stroke();
+  ARR_C.x=cxs/4;ARR_C.y=cys/4;
+  // pins
+  const slot=Math.floor(t*12)%180;
+  const pinPath=new Path2D(),pinOn=[];
+  for(const pn of PIN){
+    const p=arrayPoint(pn.i-half,pn.j-half,lift);proj(p[0],p[1],p[2]);
+    const fl=ihash(pn.i*31+pn.j,slot+7*pn.i);
+    const dirTune=0.5+0.5*Math.cos(TAU*pn.ph-cycDir[Math.floor(t/CYC)%5]);
+    const on=A>0.2&&fl<0.10+0.35*A*dirTune?1:0;
+    pinPath.moveTo(_x+4.2*_k,_y);pinPath.arc(_x,_y,4.2*_k,0,TAU);
+    if(on)pinOn.push(_x,_y,_k);
+  }
+  ctx.fillStyle='rgba(255,196,120,0.95)';ctx.fill(pinPath);
+  for(let q=0;q<pinOn.length;q+=3){glow(SP.warm,pinOn[q],pinOn[q+1],46*pinOn[q+2],0.9);glow(SP.hot,pinOn[q],pinOn[q+1],24*pinOn[q+2],0.8)}
+  // craniotomy ring
+  const rc=arrayPoint(0,0,0.07);proj(rc[0],rc[1],rc[2]);
+  ctx.globalAlpha=0.55+0.2*A;ctx.strokeStyle='rgba(255,190,120,0.8)';ctx.lineWidth=2.5;ctx.setLineDash([26,14]);ctx.lineDashOffset=-(t/DUR)*40*60;
+  ctx.beginPath();ctx.ellipse(_x,_y,0.30*BRAIN.S*_k*0.62,0.30*BRAIN.S*_k*0.75,0,0,TAU);ctx.stroke();ctx.setLineDash([]);
+  ctx.globalAlpha=1;
+  // motor point + stem in 2D
+  proj(MOT.x,MOT.y,MOT.z);MOT2.x=_x;MOT2.y=_y;
+  proj(STEM.x,STEM.y,STEM.z);STEM2.x=_x;STEM2.y=_y;
+}
+function drawCable(t,u,A){
+  const sx=ARR_CORNER.x,sy=ARR_CORNER.y;
+  cubic(CABLE,sx,sy,sx+70,sy-440,CORE.x-120,CORE.y-620,CORE.x-12,CORE.y-84);CABLE.finish();
+  const n=CABLE.n;ctx.globalCompositeOperation='lighter';ctx.lineCap='round';
+  // soft glow tube
+  ctx.beginPath();for(let i=0;i<=n;i++){if(i)ctx.lineTo(CABLE.x[i],CABLE.y[i]);else ctx.moveTo(CABLE.x[i],CABLE.y[i])}
+  ctx.lineWidth=22;ctx.strokeStyle=`rgba(80,160,255,${0.05+0.05*A})`;ctx.stroke();
+  ctx.lineWidth=8;ctx.strokeStyle='rgba(120,210,255,0.16)';ctx.stroke();
+  // twisted strands
+  for(let s=0;s<3;s++){
+    const bf=new Path2D(),bb=new Path2D();let prev=null;
+    for(let i=0;i<=n;i++){
+      const th=TAU*(i/n*26)+s*TAU/3-TAU*t/DUR*0;      // static twist, motion comes from packets
+      let tx,ty;{const j=Math.min(n,i+1),k=Math.max(0,i-1);tx=CABLE.x[j]-CABLE.x[k];ty=CABLE.y[j]-CABLE.y[k];const m=Math.hypot(tx,ty)||1;tx/=m;ty/=m}
+      const off=Math.sin(th)*7,x=CABLE.x[i]-ty*off,y=CABLE.y[i]+tx*off;
+      if(prev){const front=Math.cos(th)>0;const pth=front?bf:bb;pth.moveTo(prev[0],prev[1]);pth.lineTo(x,y)}
+      prev=[x,y];
+    }
+    const cols=['150,230,255','170,150,255','255,200,140'];
+    ctx.lineWidth=3.2;ctx.strokeStyle=`rgba(${cols[s]},0.28)`;ctx.stroke(bb);
+    ctx.lineWidth=3.6;ctx.strokeStyle=`rgba(${cols[s]},0.85)`;ctx.stroke(bf);
+  }
+  // data packets
+  const Np=9,env=0.35+0.65*A;
+  for(let k=0;k<Np;k++){
+    const s=frac(t/3+k/Np),d=s*CABLE.L;CABLE.at(d);
+    const fade=Math.sin(Math.PI*s);
+    glow(SP.hot,_px,_py,54,0.9*fade*env);
+    const px=_px,py=_py,tx=_tx,ty=_ty;
+    ctx.globalAlpha=0.85*fade*env;ctx.lineWidth=5;ctx.strokeStyle='rgba(190,250,255,1)';
+    ctx.beginPath();ctx.moveTo(px-tx*46,py-ty*46);ctx.lineTo(px,py);ctx.stroke();
+  }
+  ctx.globalAlpha=1;ctx.lineCap='butt';
+}
+function drawCore(t,u,A){
+  const x=CORE.x,y=CORE.y;ctx.globalCompositeOperation='lighter';
+  glow(SP.softC,x,y,520,0.30+0.35*A);glow(SP.softV,x,y,380,0.22+0.2*A);
+  const rot=TAU*t/DUR;
+  ctx.lineWidth=4;
+  ctx.setLineDash([60,22,14,22]);ctx.lineDashOffset=0;
+  ctx.save();ctx.translate(x,y);ctx.rotate(rot*3);ctx.strokeStyle=`rgba(120,225,255,${0.55+0.3*A})`;ctx.beginPath();ctx.arc(0,0,92,0,TAU);ctx.stroke();ctx.restore();
+  ctx.setLineDash([30,18]);ctx.save();ctx.translate(x,y);ctx.rotate(-rot*5);ctx.strokeStyle=`rgba(170,140,255,${0.6})`;ctx.lineWidth=3;ctx.beginPath();ctx.arc(0,0,68,0,TAU);ctx.stroke();ctx.restore();
+  ctx.setLineDash([]);
+  ctx.lineWidth=2;ctx.strokeStyle='rgba(150,220,255,0.30)';ctx.beginPath();ctx.arc(x,y,126,0,TAU);ctx.stroke();
+  // hexagon glass
+  ctx.beginPath();for(let k=0;k<6;k++){const a=TAU*k/6+Math.PI/6+rot*1,r=42;const px=x+Math.cos(a)*r,py=y+Math.sin(a)*r;if(k)ctx.lineTo(px,py);else ctx.moveTo(px,py)}ctx.closePath();
+  ctx.fillStyle=`rgba(170,240,255,${0.10+0.12*A})`;ctx.fill();ctx.lineWidth=3;ctx.strokeStyle='rgba(230,250,255,0.85)';ctx.stroke();
+  glow(SP.hot,x,y,120+60*A*(0.5+0.5*Math.sin(TAU*t*5/DUR)),0.9);
+  ctx.globalAlpha=1;
+}
+function drawLinks(t,u,A){
+  cubic(LINK1,CORE.x+60,CORE.y-70,CORE.x+170,CORE.y-210,SCREEN.x-190,SCREEN.y+SCREEN.h*0.5+150,SCREEN.x,SCREEN.y+SCREEN.h*0.5);LINK1.finish();
+  cubic(LINK2,CORE.x+60,CORE.y+70,CORE.x+170,CORE.y+260,SIG.x-190,SIG.y+SIG.h*0.5-150,SIG.x,SIG.y+SIG.h*0.5);LINK2.finish();
+  ctx.globalCompositeOperation='lighter';ctx.lineCap='round';
+  for(const [L,ph,env] of [[LINK1,0,0.3+0.7*actEnv(frac(u+0.12))],[LINK2,0.5,0.6]]){
+    ctx.beginPath();for(let i=0;i<=L.n;i++){if(i)ctx.lineTo(L.x[i],L.y[i]);else ctx.moveTo(L.x[i],L.y[i])}
+    ctx.lineWidth=14;ctx.strokeStyle='rgba(110,170,255,0.06)';ctx.stroke();
+    ctx.lineWidth=3;ctx.strokeStyle='rgba(150,215,255,0.38)';ctx.stroke();
+    for(let k=0;k<5;k++){
+      const s=frac(t/3*1+k/5+ph),d=s*L.L;L.at(d);const f=Math.sin(Math.PI*s);
+      glow(SP.hot,_px,_py,44,0.85*f*env);
+    }
+  }
+  ctx.globalAlpha=1;ctx.lineCap='butt';
+}
+
+/* =============================== HAND + NERVE ============================== */
+const HAND_PTS={
+  thumb:[[-70,-60],[-132,-140],[-182,-215],[-212,-285]],
+  index:[[-80,-230],[-92,-340],[-98,-410],[-102,-475]],
+  middle:[[-15,-245],[-17,-365],[-18,-445],[-19,-515]],
+  ring:[[48,-235],[58,-345],[62,-415],[66,-475]],
+  pinky:[[105,-210],[122,-290],[131,-340],[138,-385]]
+};
+const PALM=[[-55,0],[-70,-60],[-80,-230],[-15,-245],[48,-235],[105,-210],[72,-60],[55,0]];
+function handPos(p){return [HAND.x+p[0]*HAND.s,HAND.y+p[1]*HAND.s]}
+function curlFinger(ch,k,thumb){
+  const out=[ch[0].slice()];
+  if(thumb){
+    let a=0,px=ch[0][0],py=ch[0][1];
+    for(let s=1;s<4;s++){
+      let vx=ch[s][0]-ch[s-1][0],vy=ch[s][1]-ch[s-1][1];a+=k*(s===1?0.50:0.46);
+      const c=Math.cos(a),sn=Math.sin(a);const rx=vx*c-vy*sn,ry=vx*sn+vy*c;px+=rx*(1-0.18*k);py+=ry*(1-0.18*k);out.push([px,py]);
+    }
+    return out;
+  }
+  let th=0,px=ch[0][0],py=ch[0][1];const inc=[0.95,0.75,0.45];
+  for(let s=1;s<4;s++){
+    const vx=ch[s][0]-ch[s-1][0],vy=ch[s][1]-ch[s-1][1];th+=k*inc[s-1];
+    const f=Math.cos(th);px+=vx*f;py+=vy*f;out.push([px,py]);
+  }
+  return out;
+}
+function strokeChain(pts){ctx.beginPath();for(let i=0;i<pts.length;i++){const p=handPos(pts[i]);if(i)ctx.lineTo(p[0],p[1]);else ctx.moveTo(p[0],p[1])}ctx.stroke()}
+function drawHand(t,u,A){
+  ctx.globalCompositeOperation='source-over';
+  // body fill + forearm
+  ctx.beginPath();for(let i=0;i<PALM.length;i++){const p=handPos(PALM[i]);if(i)ctx.lineTo(p[0],p[1]);else ctx.moveTo(p[0],p[1])}ctx.closePath();
+  const g=ctx.createLinearGradient(0,HAND.y-500*HAND.s,0,HAND.y);g.addColorStop(0,'rgba(100,130,200,0.03)');g.addColorStop(1,'rgba(100,130,200,0.12)');
+  ctx.fillStyle=g;ctx.fill();
+  ctx.lineWidth=3;ctx.strokeStyle='rgba(130,160,215,0.28)';ctx.stroke();
+  // forearm
+  const f1=handPos([-55,0]),f2=handPos([55,0]);
+  const fg=ctx.createLinearGradient(0,f1[1],0,H);fg.addColorStop(0,'rgba(130,160,215,0.30)');fg.addColorStop(1,'rgba(130,160,215,0)');
+  ctx.strokeStyle=fg;ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(f1[0],f1[1]);ctx.lineTo(f1[0]-16,H);ctx.moveTo(f2[0],f2[1]);ctx.lineTo(f2[0]+16,H);ctx.stroke();
+  // real (motionless) hand skeleton
+  ctx.lineWidth=3.5;ctx.strokeStyle='rgba(145,175,230,0.68)';
+  for(const key in HAND_PTS)strokeChain(HAND_PTS[key]);
+  strokeChain([[0,0],HAND_PTS.thumb[0]]);strokeChain([[0,0],HAND_PTS.pinky[0]]);
+  strokeChain([HAND_PTS.thumb[0],HAND_PTS.index[0],HAND_PTS.middle[0],HAND_PTS.ring[0],HAND_PTS.pinky[0]]);
+  ctx.fillStyle='rgba(8,12,26,0.95)';ctx.lineWidth=3;ctx.strokeStyle='rgba(150,180,235,0.75)';
+  const allPts=[[0,0]];for(const key in HAND_PTS)for(const p of HAND_PTS[key])allPts.push(p);
+  for(const p of allPts){const q=handPos(p);ctx.beginPath();ctx.arc(q[0],q[1],8,0,TAU);ctx.fill();ctx.stroke()}
+  // ghost hand = the intended movement
+  const k=0.88*sstep(0.05,0.30,u)*(1-sstep(0.62,0.86,u));
+  const ga=0.15+0.85*A;
+  if(ga>0.05){
+    ctx.globalCompositeOperation='lighter';
+    const jit=(Math.sin(TAU*t*53/DUR)+Math.sin(TAU*t*79/DUR+1))*0.012*k;
+    const gh={};for(const key in HAND_PTS)gh[key]=curlFinger(HAND_PTS[key],k*(1+jit),key==='thumb');
+    ctx.lineCap='round';ctx.lineJoin='round';
+    for(const pass of [[16,0.10],[6,0.40],[3,0.95]]){
+      ctx.lineWidth=pass[0];ctx.strokeStyle=`rgba(110,235,255,${pass[1]*ga})`;
+      for(const key in gh)strokeChain(gh[key]);
+      strokeChain([[0,0],HAND_PTS.thumb[0]]);strokeChain([[0,0],HAND_PTS.pinky[0]]);
+      strokeChain([HAND_PTS.thumb[0],HAND_PTS.index[0],HAND_PTS.middle[0],HAND_PTS.ring[0],HAND_PTS.pinky[0]]);
+    }
+    for(const key in gh)for(let s=0;s<4;s++){const q=handPos(gh[key][s]);glow(SP.hot,q[0],q[1],s===3?78:46,0.85*ga)}
+    const q0=handPos([0,0]);glow(SP.hot,q0[0],q0[1],80,0.8*ga);
+    ctx.lineCap='butt';ctx.lineJoin='miter';
+  }
+  ctx.globalAlpha=1;
+}
+function drawNerve(t,u,A){
+  // path: motor cortex -> brain stem -> (spinal cord) -> wrist, broken at 60 %
+  const mx=MOT2.x,my=MOT2.y,sx=STEM2.x,sy=STEM2.y,wx=HAND.x+84*HAND.s*0.2,wy=HAND.y-8;
+  // inner part (inside the brain): quadratic as cubic
+  const A1=NERVE;A1.n=260;
+  const nA=110;const cA=new Poly(nA);cubic(cA,mx,my,mx-330,my+90,sx+250,sy-380,sx,sy);cA.finish();
+  const nB=150;const cB=new Poly(nB);cubic(cB,sx,sy,sx-20,sy+320,wx+520,wy+80,wx+86,wy);cB.finish();
+  for(let i=0;i<=nA;i++){NERVE.x[i]=cA.x[i];NERVE.y[i]=cA.y[i]}
+  for(let i=1;i<=nB;i++){NERVE.x[nA+i]=cB.x[i];NERVE.y[nA+i]=cB.y[i]}
+  NERVE.n=nA+nB;NERVE.finish();
+  const L=NERVE.L,Lb=cA.L+cB.L*0.52,gap=34;
+  // draw cord as ladder (spinal-cord feel)
+  ctx.globalCompositeOperation='lighter';ctx.lineCap='round';
+  const segPath=(d0,d1,off)=>{const p=new Path2D();let first=true;for(let d=d0;d<=d1;d+=14){NERVE.at(d);const x=_px-_ty*off,y=_py+_tx*off;if(first){p.moveTo(x,y);first=false}else p.lineTo(x,y)}return p};
+  const rung=(d0,d1)=>{const p=new Path2D();for(let d=d0;d<=d1;d+=26){NERVE.at(d);p.moveTo(_px-_ty*9,_py+_tx*9);p.lineTo(_px+_ty*9,_py-_tx*9)}return p};
+  const dInner=cA.L;
+  // live part
+  const live=0.20+0.30*A;
+  ctx.lineWidth=3;ctx.strokeStyle=`rgba(110,225,255,${live})`;
+  ctx.stroke(segPath(dInner,Lb-gap,9));ctx.stroke(segPath(dInner,Lb-gap,-9));
+  ctx.lineWidth=2;ctx.strokeStyle=`rgba(110,225,255,${live*0.7})`;ctx.stroke(rung(dInner,Lb-gap));
+  ctx.lineWidth=2.4;ctx.setLineDash([2,12]);ctx.lineCap='round';ctx.strokeStyle=`rgba(110,225,255,${0.20+0.30*A})`;ctx.stroke(segPath(0,dInner,0));ctx.setLineDash([]);
+  // dead part
+  ctx.lineWidth=3;ctx.strokeStyle='rgba(125,145,190,0.28)';
+  ctx.stroke(segPath(Lb+gap,L,9));ctx.stroke(segPath(Lb+gap,L,-9));
+  ctx.lineWidth=2;ctx.strokeStyle='rgba(125,145,190,0.18)';ctx.stroke(rung(Lb+gap,L));
+  // pulses (3 in a stream)
+  const trav=sstep5(0.04,0.40,u);
+  for(let k=0;k<4;k++){
+    const tk=clamp(trav*(1+0.08*k)-0.09*k,0,1);if(tk<=0.001||tk>=1)continue;
+    const d=lerp(0,Lb-gap,tk);NERVE.at(d);
+    const fade=1-0.15*k;glow(SP.hot,_px,_py,84,0.95*fade*(0.4+0.6*A));
+    const px=_px,py=_py;
+    for(let m=1;m<=14;m++){NERVE.at(Math.max(0,d-m*13));glow(SP.cyan,_px,_py,50*(1-m/16),0.30*fade*(1-m/15)*(0.4+0.6*A))}
+  }
+  // the break: crack + sparks + fading ghost pulses
+  NERVE.at(Lb);const bx=_px,by=_py,btx=_tx,bty=_ty;
+  const hit=clamp((u-0.38)/0.5,0,1);                    // time since the pulse reached the break
+  const hitOn=u>0.38&&u<0.92?1:0;
+  const flick=0.6+0.4*Math.sin(TAU*t*131/DUR)*Math.sin(TAU*t*47/DUR+1);
+  // crack zig-zag
+  ctx.lineWidth=3.5;ctx.strokeStyle=`rgba(255,100,110,${(0.30+0.55*hitOn*(1-hit)*flick)})`;
+  ctx.beginPath();{
+    NERVE.at(Lb-gap);let x0=_px,y0=_py;ctx.moveTo(x0,y0);
+    for(let s=1;s<=5;s++){NERVE.at(Lb-gap+2*gap*s/5);const o=(s%2?1:-1)*(s===5?0:16);ctx.lineTo(_px-_ty*o,_py+_tx*o)}
+  }ctx.stroke();
+  glow(SP.coral,bx,by,200+120*hitOn*(1-hit),0.35+0.5*hitOn*(1-hit)*flick);
+  glow(SP.softK,bx,by,520,0.18+0.30*hitOn*(1-hit));
+  // sparks
+  if(u>0.40&&u<0.92){
+    const ts=(u-0.40)*CYC;
+    for(let s=0;s<26;s++){
+      const ang=ihash(s,3)*TAU,spd=120+ihash(s,9)*340,ls=0.4+ihash(s,5)*0.9;
+      const age=ts-ihash(s,17)*0.5;if(age<0||age>ls)continue;
+      const f=age/ls,x=bx+Math.cos(ang)*spd*age,y=by+Math.sin(ang)*spd*age+260*age*age;
+      glow(SP.warm,x,y,34*(1-f)+8,0.9*(1-f));
+      ctx.globalAlpha=0.5*(1-f);ctx.lineWidth=3;ctx.strokeStyle='rgba(255,170,120,1)';ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x-Math.cos(ang)*spd*0.05,y-(Math.sin(ang)*spd+520*age)*0.05);ctx.stroke();
+    }
+  }
+  // dying echoes beyond the break
+  for(let k=0;k<2;k++){
+    const e=clamp((u-0.44-0.05*k)/0.22,0,1);if(e<=0||e>=1)continue;
+    NERVE.at(Lb+gap+e*120);glow(SP.violet,_px,_py,60*(1-e)+10,0.5*(1-e));
+  }
+  ctx.globalAlpha=1;ctx.lineCap='butt';
+}
+
+/* ================================ SCREEN ==================================== */
+function glassPanel(x,y,w,h,r,glowSprite,glowA,t,off){
+  ctx.globalCompositeOperation='lighter';glow(glowSprite,x+w/2,y+h/2,Math.max(w,h)*1.7,glowA);ctx.globalAlpha=1;
+  ctx.globalCompositeOperation='source-over';
+  rr(x,y,w,h,r);
+  const g=ctx.createLinearGradient(x,y,x,y+h);g.addColorStop(0,'rgba(22,32,66,0.80)');g.addColorStop(1,'rgba(7,11,26,0.90)');ctx.fillStyle=g;ctx.fill();
+  const hg=ctx.createRadialGradient(x+w*0.2,y,0,x+w*0.2,y,w*0.7);hg.addColorStop(0,'rgba(140,190,255,0.10)');hg.addColorStop(1,'rgba(140,190,255,0)');ctx.fillStyle=hg;ctx.fill();
+  const bg=ctx.createLinearGradient(x,y,x+w,y+h);bg.addColorStop(0,'rgba(180,225,255,0.46)');bg.addColorStop(0.5,'rgba(120,150,255,0.10)');bg.addColorStop(1,'rgba(170,130,255,0.34)');
+  ctx.lineWidth=2.5;ctx.strokeStyle=bg;ctx.stroke();
+  // slow specular sweep (one pass per loop)
+  const sp=frac(t/DUR+off),bx=x-w*0.5+sp*w*2.0;
+  ctx.save();rr(x,y,w,h,r);ctx.clip();ctx.globalCompositeOperation='lighter';
+  const sg=ctx.createLinearGradient(bx,y,bx+w*0.35,y+h*0.6);
+  sg.addColorStop(0,'rgba(170,215,255,0)');sg.addColorStop(0.5,'rgba(170,215,255,0.075)');sg.addColorStop(1,'rgba(170,215,255,0)');
+  ctx.fillStyle=sg;ctx.fillRect(x,y,w,h);ctx.restore();
+}
+function drawArrow(x,y,s,fill,glowA){
+  ctx.globalCompositeOperation='lighter';glow(SP.hot,x+8*s,y+14*s,160*s,glowA);glow(SP.cyan,x,y,70*s,glowA);
+  ctx.globalCompositeOperation='source-over';
+  ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x,y+36*s);ctx.lineTo(x+9*s,y+28*s);ctx.lineTo(x+16*s,y+44*s);ctx.lineTo(x+23*s,y+41*s);ctx.lineTo(x+16*s,y+26*s);ctx.lineTo(x+28*s,y+26*s);ctx.closePath();
+  ctx.fillStyle=fill;ctx.fill();ctx.lineWidth=2.5*s;ctx.strokeStyle='rgba(10,20,40,0.85)';ctx.lineJoin='round';ctx.stroke();
+}
+function tileGlyph(k,x,y,r){
+  ctx.beginPath();
+  switch(k){
+    case 0:ctx.arc(x,y,r,0,TAU);break;
+    case 1:ctx.moveTo(x-r*0.8,y-r);ctx.lineTo(x+r*1.05,y);ctx.lineTo(x-r*0.8,y+r);ctx.closePath();break;
+    case 2:ctx.rect(x-r*0.9,y-r*0.9,r*1.8,r*1.8);break;
+    case 3:ctx.moveTo(x,y-r*1.15);ctx.lineTo(x+r*1.15,y);ctx.lineTo(x,y+r*1.15);ctx.lineTo(x-r*1.15,y);ctx.closePath();break;
+    default:ctx.moveTo(x-r,y);ctx.lineTo(x+r,y);ctx.moveTo(x,y-r);ctx.lineTo(x,y+r);
+  }
+  ctx.stroke();
+}
+function drawScreen(t,u,A){
+  const S=SCREEN,bob=Math.sin(TAU*t/DUR)*7;
+  ctx.save();ctx.translate(0,bob);
+  glassPanel(S.x,S.y,S.w,S.h,38,SP.softV,0.17,t,0.0);
+  // top bar
+  ctx.globalCompositeOperation='source-over';
+  ctx.fillStyle='rgba(255,255,255,0.10)';rr(S.x+110,S.y+30,300,26,13);ctx.fill();rr(S.x+430,S.y+30,120,26,13);ctx.fill();
+  for(let i=0;i<3;i++){ctx.fillStyle=['rgba(255,110,120,0.8)','rgba(255,200,110,0.8)','rgba(110,230,170,0.8)'][i];ctx.beginPath();ctx.arc(S.x+50+i*26,S.y+43,8,0,TAU);ctx.fill()}
+  const led=0.35+0.65*actEnv(frac(u+0.1));ctx.globalCompositeOperation='lighter';glow(SP.cyan,S.x+S.w-62,S.y+43,54,led);glow(SP.violet,S.x+S.w-112,S.y+43,40,0.4);ctx.globalAlpha=1;
+  ctx.globalCompositeOperation='source-over';
+  ctx.strokeStyle='rgba(255,255,255,0.07)';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(S.x,S.y+86);ctx.lineTo(S.x+S.w,S.y+86);ctx.stroke();
+  // content clip
+  ctx.save();rr(S.x+2,S.y+88,S.w-4,S.h-90,34);ctx.clip();
+  // dot grid
+  ctx.fillStyle='rgba(150,190,255,0.10)';ctx.beginPath();
+  for(let gx=S.x+40;gx<S.x+S.w;gx+=46)for(let gy=S.y+120;gy<S.y+S.h;gy+=46){ctx.rect(gx,gy,3,3)}ctx.fill();
+  const cur=cursorAt(t),cc=cur.c,cu=cur.u;
+  const dest=ORDER[(cc+1)%5],src=ORDER[cc];
+  // dotted route between targets (pentagram) – the visited legs light up
+  ctx.setLineDash([3,16]);ctx.lineCap='round';ctx.lineWidth=4;
+  for(let k=0;k<5;k++){const a=TILE[ORDER[k]],b=TILE[ORDER[(k+1)%5]];const done=k<cc?1:(k===cc?cur.p:0);
+    ctx.strokeStyle='rgba(150,190,255,0.16)';ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();}
+  ctx.setLineDash([]);ctx.lineCap='butt';
+  // equaliser (decoded signal strength) bottom-left
+  ctx.globalCompositeOperation='lighter';
+  for(let k=0;k<22;k++){
+    const h=14+86*(0.12+0.88*A*(0.35+0.65*(0.5+0.5*Math.sin(TAU*((k%7+3)*t/DUR+k*0.43)))))*(0.55+0.45*Math.sin(Math.PI*(k+1)/23));
+    ctx.fillStyle=`rgba(${lerp(110,170,k/22)},${lerp(225,130,k/22)},255,${0.35+0.4*h/100})`;
+    rr(S.x+60+k*18,S.y+S.h-52-h,10,h,5);ctx.fill();
+  }
+  // progress line (loop position) bottom
+  ctx.fillStyle='rgba(150,200,255,0.10)';ctx.fillRect(S.x+60,S.y+S.h-34,S.w-120,4);
+  ctx.fillStyle='rgba(130,235,255,0.75)';ctx.fillRect(S.x+60,S.y+S.h-34,(S.w-120)*(cc+cu)/5,4);
+  ctx.globalCompositeOperation='source-over';
+  // targets
+  for(const tl of TILE){
+    const isDest=tl.k===dest,isSrc=tl.k===src;
+    const dist=Math.hypot(cur.x-tl.x,cur.y-tl.y);
+    const hover=sstep(150,50,dist);
+    let pop=0,age=-1;
+    if(isSrc&&cu<0.36)age=(cu+0.05)*CYC;
+    if(isDest&&cu>=0.95)age=(cu-0.95)*CYC;
+    if(age>=0)pop=Math.exp(-age*3.2);
+    const sz=170+22*hover+30*pop;
+    rr(tl.x-sz/2,tl.y-sz/2,sz,sz,36);
+    const tg=ctx.createLinearGradient(tl.x,tl.y-sz/2,tl.x,tl.y+sz/2);tg.addColorStop(0,`rgba(${40+60*hover},${70+120*hover},${120+110*hover},${0.20+0.30*hover+0.3*pop})`);tg.addColorStop(1,`rgba(20,30,70,${0.35+0.2*hover})`);
+    ctx.fillStyle=tg;ctx.fill();
+    ctx.lineWidth=2.5+1.5*hover;ctx.strokeStyle=`rgba(${150+60*hover},${200+40*hover},255,${0.28+0.55*hover+0.4*pop})`;ctx.stroke();
+    ctx.lineWidth=5;ctx.lineCap='round';ctx.strokeStyle=`rgba(${160+90*hover},${230},255,${0.55+0.4*hover+0.3*pop})`;tileGlyph(tl.k,tl.x,tl.y,32+3*pop);ctx.lineCap='butt';
+    if(age>=0&&age<1.4){ // click ripple
+      ctx.globalCompositeOperation='lighter';
+      for(let r=0;r<2;r++){const a2=age-r*0.18;if(a2<0)continue;const f=a2/1.0;if(f>1)continue;
+        ctx.lineWidth=5*(1-f)+1;ctx.strokeStyle=`rgba(130,240,255,${0.8*(1-f)})`;ctx.beginPath();ctx.arc(tl.x,tl.y,100+260*f,0,TAU);ctx.stroke()}
+      glow(SP.hot,tl.x,tl.y,330*pop+60,0.7*pop);
+      ctx.globalCompositeOperation='source-over';ctx.globalAlpha=1;
+    }
+    if(isDest&&cu>0.70&&cu<0.95){ // dwell ring
+      const f=sstep(0.74,0.95,cu);
+      ctx.lineWidth=9;ctx.lineCap='round';ctx.strokeStyle=`rgba(140,245,255,${0.9*sstep(0.70,0.78,cu)})`;
+      ctx.beginPath();ctx.arc(tl.x,tl.y,sz/2+26,-Math.PI/2,-Math.PI/2+TAU*f);ctx.stroke();ctx.lineCap='butt';
+      ctx.globalCompositeOperation='lighter';glow(SP.cyan,tl.x+Math.cos(-Math.PI/2+TAU*f)*(sz/2+26),tl.y+Math.sin(-Math.PI/2+TAU*f)*(sz/2+26),80,0.9);ctx.globalAlpha=1;ctx.globalCompositeOperation='source-over';
+    }
+  }
+  // decoder (population vector)
+  const dcx=S.x+S.w-150,dcy=S.y+88+(S.h-88-100)/2,dth=cycDir[cc];
+  const speed=cu>0.22&&cu<0.78?cur.mv:0.0;
+  ctx.globalCompositeOperation='source-over';ctx.strokeStyle='rgba(150,200,255,0.18)';ctx.lineWidth=2;ctx.beginPath();ctx.arc(dcx,dcy,112,0,TAU);ctx.stroke();
+  ctx.beginPath();ctx.arc(dcx,dcy,60,0,TAU);ctx.stroke();
+  ctx.globalCompositeOperation='lighter';ctx.lineCap='round';
+  for(let k=0;k<32;k++){
+    const a=TAU*k/32,tune=Math.max(0,Math.cos(a-dth)),jit=0.5+0.5*Math.sin(TAU*((k%9+3)*t/DUR+k*0.7));
+    const len=12+(86*tune*(0.15+0.85*speed)+10*jit)*(0.4+0.6*A);
+    ctx.lineWidth=7;ctx.strokeStyle=`rgba(${lerp(110,170,k/32)},${lerp(230,130,tune<0.2?1:1-tune*0.5)},255,${0.35+0.6*tune})`;
+    ctx.beginPath();ctx.moveTo(dcx+Math.cos(a)*30,dcy+Math.sin(a)*30);ctx.lineTo(dcx+Math.cos(a)*(30+len),dcy+Math.sin(a)*(30+len));ctx.stroke();
+  }
+  const ml=26+70*(0.15+0.85*speed);ctx.lineWidth=7;ctx.strokeStyle='rgba(255,255,255,0.95)';ctx.beginPath();ctx.moveTo(dcx,dcy);ctx.lineTo(dcx+Math.cos(dth)*ml,dcy+Math.sin(dth)*ml);ctx.stroke();
+  glow(SP.hot,dcx+Math.cos(dth)*ml,dcy+Math.sin(dth)*ml,60,0.9);glow(SP.hot,dcx,dcy,50,0.7);ctx.lineCap='butt';ctx.globalAlpha=1;
+  // cursor trail + cursor
+  ctx.globalCompositeOperation='lighter';
+  for(let k=22;k>=1;k--){const q=cursorAt(t-k*0.022);const f=1-k/23;glow(SP.cyan,q.x,q.y,16+60*f,0.50*f*f*(0.2+0.8*clamp(cur.mv*3,0,1)))}
+  ctx.globalAlpha=1;
+  drawArrow(cur.x,cur.y,1.7,'rgba(255,255,255,0.98)',0.55);
+  ctx.restore();  // clip
+  ctx.restore();  // bob
+}
+
+/* ============================ SIGNALS PANEL ================================ */
+const EEG_CH=6,EEG_AMP=[];
+for(let c=0;c<EEG_CH;c++){const a=[];for(let k=0;k<5;k++)a.push({f:[3,5,9,14,23][k]+c%3,m:[2,-3,5,-7,11][k]*(c%2?1:-1)*(k%2?1:-1)||2,p:rnd()*TAU,a:[1,0.7,0.5,0.35,0.22][k]*(0.8+rnd()*0.4)});EEG_AMP.push(a)}
+const EEG_GRAD=[];
+function drawSignals(t,u,A){
+  const S=SIG;
+  glassPanel(S.x,S.y,S.w,S.h,38,SP.softC,0.13,t,0.5);
+  ctx.globalCompositeOperation='source-over';
+  ctx.fillStyle='rgba(255,255,255,0.10)';rr(S.x+50,S.y+34,230,24,12);ctx.fill();rr(S.x+296,S.y+34,100,24,12);ctx.fill();
+  ctx.globalCompositeOperation='lighter';glow(SP.warm,S.x+S.w-62,S.y+46,46,0.5+0.4*A);glow(SP.cyan,S.x+S.w-112,S.y+46,40,0.5);ctx.globalAlpha=1;
+  ctx.globalCompositeOperation='source-over';
+  ctx.strokeStyle='rgba(255,255,255,0.07)';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(S.x,S.y+88);ctx.lineTo(S.x+S.w,S.y+88);ctx.stroke();
+  const x0=S.x+56,x1=S.x+S.w-56,wid=x1-x0,vs=240;
+  const top=S.y+112,chH=54,nCh=EEG_CH;
+  // grid
+  ctx.strokeStyle='rgba(150,190,255,0.06)';ctx.lineWidth=2;ctx.beginPath();
+  for(let i=0;i<=11;i++){const x=x0+wid*i/11;ctx.moveTo(x,top-6);ctx.lineTo(x,top+chH*nCh+6)}
+  for(let c=0;c<=nCh;c++){ctx.moveTo(x0,top+chH*c);ctx.lineTo(x1,top+chH*c)}ctx.stroke();
+  // EEG
+  ctx.globalCompositeOperation='lighter';ctx.lineJoin='round';
+  const NS=240;
+  for(let ch=0;ch<nCh;ch++){
+    const yc=top+chH*(ch+0.5),col=lerp(0,1,ch/(nCh-1));
+    if(!EEG_GRAD[ch]){const g=ctx.createLinearGradient(x0,0,x1,0);const rgb=`${Math.round(lerp(90,165,col))},${Math.round(lerp(225,125,col))},255`;g.addColorStop(0,`rgba(${rgb},0)`);g.addColorStop(0.35,`rgba(${rgb},0.55)`);g.addColorStop(1,`rgba(${rgb},1)`);EEG_GRAD[ch]=g}
+    const P=new Path2D();
+    for(let i=0;i<=NS;i++){
+      const px=i/NS,x=x0+wid*px,ts=t-(1-px)*(wid/vs);
+      const e=envAt(ts);let v=0;
+      for(const w of EEG_AMP[ch])v+=w.a*Math.sin(TAU*(w.f*px+w.m*t/DUR)+w.p);
+      const burst=Math.sin(TAU*(61*px-47*t/DUR+ch))*0.35*e;
+      const y=yc-(v*0.34*(0.30+0.95*e)+burst)*chH*0.62;
+      if(i)P.lineTo(x,y);else P.moveTo(x,y);
+    }
+    ctx.strokeStyle=EEG_GRAD[ch];ctx.globalAlpha=0.16;ctx.lineWidth=9;ctx.stroke(P);ctx.globalAlpha=1;ctx.lineWidth=2.6;ctx.stroke(P);
+  }
+  // raster plot (direction-tuned spikes)
+  const rTop=top+chH*nCh+44,rows=34,rowH=(S.y+S.h-46-rTop)/rows;
+  ctx.fillStyle='rgba(150,190,255,0.04)';ctx.fillRect(x0,rTop-8,wid,rows*rowH+16);
+  const q=20,baseSlot=Math.floor(t*q);
+  const bright=new Path2D(),mid=new Path2D(),dim=new Path2D();
+  const colsN=Math.ceil(wid/(vs/q))+1;
+  for(let j=0;j<colsN;j++){
+    const si=baseSlot-j,T=si/q,x=x1-(t-T)*vs-4;if(x<x0)break;
+    const e=envAt(T),cyc=((Math.floor(T/CYC)%5)+5)%5,th=cycDir[cyc];
+    const idx=((si%300)+300)%300;
+    for(let r=0;r<rows;r++){
+      const pref=TAU*r/rows*1.0+ihash(r,5)*0.6,tune=Math.max(0,Math.cos(pref-th));
+      const pr=0.012+0.62*e*tune*tune+0.05*e;
+      if(ihash(r,idx)<pr){const P=j<7?bright:j<46?mid:dim;P.rect(x,rTop+r*rowH+rowH*0.15,5,rowH*0.7)}
+    }
+  }
+  ctx.fillStyle='rgba(235,255,255,0.98)';ctx.fill(bright);ctx.fillStyle='rgba(120,225,255,0.85)';ctx.fill(mid);ctx.fillStyle='rgba(160,135,255,0.55)';ctx.fill(dim);
+  // playhead
+  const pg=ctx.createLinearGradient(0,top,0,rTop+rows*rowH);pg.addColorStop(0,'rgba(180,240,255,0)');pg.addColorStop(0.5,'rgba(180,240,255,0.7)');pg.addColorStop(1,'rgba(180,240,255,0)');
+  ctx.fillStyle=pg;ctx.fillRect(x1+2,top-10,4,rTop+rows*rowH-top+20);
+  ctx.globalAlpha=1;ctx.globalCompositeOperation='source-over';
+}
+
+/* ================================ post ===================================== */
+const bl1=document.createElement('canvas');bl1.width=960;bl1.height=540;const b1=bl1.getContext('2d');
+const bl2=document.createElement('canvas');bl2.width=480;bl2.height=270;const b2=bl2.getContext('2d');
+const hasFilter=('filter' in b1);
+b1.imageSmoothingQuality='high';b2.imageSmoothingQuality='high';
+function bloom(){
+  if(!hasFilter)return;
+  b1.globalCompositeOperation='copy';if(hasFilter)b1.filter='brightness(1.15) contrast(1.55) blur(5px)';b1.drawImage(cv,0,0,960,540);if(hasFilter)b1.filter='none';
+  b2.globalCompositeOperation='copy';if(hasFilter)b2.filter='blur(5px)';b2.drawImage(bl1,0,0,480,270);if(hasFilter)b2.filter='none';
+  ctx.setTransform(1,0,0,1,0,0);ctx.globalCompositeOperation='lighter';
+  ctx.globalAlpha=0.40;ctx.drawImage(bl1,0,0,W,H);ctx.globalAlpha=0.34;ctx.drawImage(bl2,0,0,W,H);
+  ctx.globalAlpha=1;ctx.globalCompositeOperation='source-over';
+}
+
+/* ============================== main render ================================= */
+function render(t){
+  t=((t%DUR)+DUR)%DUR;
+  const c=Math.floor(t/CYC),u=(t-c*CYC)/CYC,A=actEnv(u);
+  ctx.setTransform(1,0,0,1,0,0);ctx.globalCompositeOperation='source-over';ctx.globalAlpha=1;
+  ctx.drawImage(bgC,0,0);
+  // camera: slow push-in + drift, loops exactly
+  const z=1+0.026*(0.5-0.5*Math.cos(TAU*t/DUR)),cx=30*Math.sin(TAU*t/DUR),cy=14*Math.cos(TAU*t/DUR);
+  ctx.setTransform(1+0.0,0,0,1,cx*0.35,cy*0.35);drawDust(t,DUST);
+  ctx.setTransform(z,0,0,z,(1-z)*W/2+cx,(1-z)*H/2+cy);
+  drawRings(t,A);
+  brainFrame(t,u,A);               // computes projections first
+  ctx.globalCompositeOperation='source-over';
+  drawSkull(t);
+  drawArray(t,u,A);
+  drawHand(t,u,A);
+  drawNerve(t,u,A);
+  drawCable(t,u,A);
+  drawLinks(t,u,A);
+  drawCore(t,u,A);
+  drawScreen(t,u,A);
+  drawSignals(t,u,A);
+  ctx.setTransform(1.0+0.03,0,0,1.03,-(0.03)*W/2-cx*1.8,-(0.03)*H/2-cy*1.8);drawDust(t+3.7,BOKEH.map(b=>({x:b.x,y:b.y,r:b.r*0.5,ax:b.ax,ay:b.ay,m:1,n:1,p:b.p,q:b.q,tw:1,a:b.a*14,c:b.c})));
+  ctx.setTransform(1,0,0,1,0,0);
+  bloom();
+  ctx.globalCompositeOperation='source-over';ctx.drawImage(vigC,0,0);
+  // film grain (also acts as dither to avoid banding in the encode)
+  const fi=Math.floor(t*30),ox=Math.floor(ihash(fi,1)*512),oy=Math.floor(ihash(fi,2)*512);
+  ctx.save();ctx.translate(-ox,-oy);ctx.globalCompositeOperation='lighter';ctx.globalAlpha=0.045;ctx.fillStyle=grainPat;ctx.fillRect(ox,oy,W,H);ctx.restore();
+  ctx.globalAlpha=1;ctx.globalCompositeOperation='source-over';
+}
+
+/* ============================== autoplay loop =============================== */
+window.__DURATION=DUR;window.__renderAt=render;
+let t0=null,seeking=false;
+function frame(ts){
+  if(!seeking){
+    if(t0===null)t0=ts;
+    render(((ts-t0)/1000)%DUR);
+  }
+  requestAnimationFrame(frame);
+}
+render(0);
+requestAnimationFrame(frame);
+window.__seek=(s)=>{seeking=true;render(s)};   // frame-stepping helper for external capture tools
+window.__play=()=>{seeking=false;t0=null};
+})();
+</script>
+</body>
+</html>
