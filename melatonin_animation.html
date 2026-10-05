@@ -1,0 +1,1260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Screens, Melatonin &amp; the Hormone of Darkness — 4K Animation</title>
+<meta name="viewport" content="width=3840,height=2160">
+<style>
+  html,body{margin:0;padding:0;width:100%;height:100%;background:#04060f;overflow:hidden}
+  body{display:flex;align-items:center;justify-content:center}
+  canvas#c{width:100vw;height:100vh;display:block;background:#04060f}
+</style>
+</head>
+<body>
+<canvas id="c" width="3840" height="2160"></canvas>
+<script>
+/* =====================================================================
+   SCREENS & MELATONIN — a 9:43 synchronized explainer animation
+   3840 x 2160, pure Canvas 2D, autoplays, time-driven (performance.now)
+   Optional: append ?t=120 to the URL to start at 120 s (for previews).
+   ===================================================================== */
+'use strict';
+const W=3840,H=2160,CX=W/2,CY=H/2;
+const cv=document.getElementById('c');
+let ctx=cv.getContext('2d',{alpha:false});const MAIN=ctx;const OFF=document.createElement('canvas');OFF.width=W;OFF.height=H;const OCTX=OFF.getContext('2d');
+// draw a module through an offscreen buffer so it can be faded as a whole
+function drawVia(fn,alpha){if(alpha>=1){fn();return}ctx=OCTX;OCTX.setTransform(1,0,0,1,0,0);OCTX.globalAlpha=1;OCTX.clearRect(0,0,W,H);try{fn()}finally{ctx=MAIN}MAIN.save();MAIN.setTransform(1,0,0,1,0,0);MAIN.globalAlpha=alpha;MAIN.drawImage(OFF,0,0);MAIN.restore()}
+const FONT='"Inter","SF Pro Display","Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif';
+const MONO='"JetBrains Mono","SF Mono","Cascadia Code",Consolas,monospace';
+
+/* ---------- palette ---------- */
+const WHITE='#f5f7ff', INK='#060915', MUTED='rgba(245,247,255,0.55)', DIM='rgba(245,247,255,0.28)';
+const AMBER='#ffb547', GOLD='#ffd37a', ORANGE='#ff7b2e', WARM='#ff9a3c';
+const BLUE='#3b8cff', CYAN='#4fe3ff', ICE='#bfe6ff', VIOLET='#8b6cff';
+const GREEN='#45e08a', RED='#ff5a6e', PINK='#ff7ab6';
+const rgba=(hex,a)=>{const n=parseInt(hex.slice(1),16);return `rgba(${n>>16&255},${n>>8&255},${n&255},${a})`};
+
+/* ---------- math ---------- */
+const clamp=(v,a,b)=>v<a?a:v>b?b:v, sat=v=>clamp(v,0,1), lerp=(a,b,t)=>a+(b-a)*t;
+const ramp=(t,a,b)=>sat((t-a)/(b-a));
+const eo=t=>1-Math.pow(1-sat(t),3), ei=t=>Math.pow(sat(t),3);
+const eio=t=>{t=sat(t);return t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2};
+const eo5=t=>1-Math.pow(1-sat(t),5);
+const back=t=>{t=sat(t);const c=1.70158,c3=c+1;return 1+c3*Math.pow(t-1,3)+c*Math.pow(t-1,2)};
+const elastic=t=>{t=sat(t);return t===0||t===1?t:Math.pow(2,-10*t)*Math.sin((t*10-.75)*(2*Math.PI/3))+1};
+const pulse=(t,f=1,ph=0)=>.5+.5*Math.sin((t*f+ph)*Math.PI*2);
+const TAU=Math.PI*2;
+let seed=1;const rnd=()=>{seed=(seed*16807)%2147483647;return (seed-1)/2147483646};
+function hash(n){const s=Math.sin(n*12.9898+78.233)*43758.5453;return s-Math.floor(s)}
+// smooth 1D noise
+function noise1(x){const i=Math.floor(x),f=x-i,u=f*f*(3-2*f);return lerp(hash(i),hash(i+1),u)*2-1}
+
+/* ---------- shape helpers ---------- */
+function rr(x,y,w,h,r){r=Math.min(r,w/2,h/2);ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath()}
+function circ(x,y,r){ctx.beginPath();ctx.arc(x,y,r,0,TAU);ctx.closePath()}
+function line(x1,y1,x2,y2,color,w=4,alpha=1,cap='round'){ctx.save();ctx.globalAlpha*=alpha;ctx.strokeStyle=color;ctx.lineWidth=w;ctx.lineCap=cap;ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();ctx.restore()}
+function glow(x,y,r,color,a=1,inner=0){const g=ctx.createRadialGradient(x,y,r*inner,x,y,r);g.addColorStop(0,rgba(color,a));g.addColorStop(.35,rgba(color,a*.35));g.addColorStop(1,rgba(color,0));ctx.fillStyle=g;ctx.fillRect(x-r,y-r,r*2,r*2)}
+function card(x,y,w,h,o={}){ctx.save();const r=o.r??48;ctx.globalAlpha*=o.alpha??1;
+  if(o.shadow!==false){ctx.shadowColor='rgba(0,0,0,0.55)';ctx.shadowBlur=70;ctx.shadowOffsetY=24}
+  rr(x,y,w,h,r);ctx.fillStyle=o.fill||'rgba(14,20,44,0.78)';ctx.fill();ctx.shadowColor='transparent';
+  const g=ctx.createLinearGradient(x,y,x,y+h);g.addColorStop(0,'rgba(255,255,255,0.07)');g.addColorStop(1,'rgba(255,255,255,0.015)');ctx.fillStyle=g;ctx.fill();
+  ctx.lineWidth=o.lw||3;ctx.strokeStyle=o.stroke||'rgba(255,255,255,0.14)';ctx.stroke();
+  if(o.accent){ctx.save();ctx.clip();ctx.fillStyle=o.accent;ctx.fillRect(x,y,w,10);ctx.restore()}
+  ctx.restore()}
+function arrow(x1,y1,x2,y2,o={}){const p=sat(o.p??1);if(p<=0)return;const col=o.color||WHITE,w=o.w||10;
+  const bend=o.bend||0;const mx=(x1+x2)/2+bend*(y1-y2)*.5,my=(y1+y2)/2+bend*(x2-x1)*.5;
+  const pt=s=>{const a=lerp(x1,mx,s),b=lerp(mx,x2,s),c=lerp(y1,my,s),d=lerp(my,y2,s);return [lerp(a,b,s),lerp(c,d,s)]};
+  ctx.save();ctx.globalAlpha*=o.alpha??1;ctx.strokeStyle=col;ctx.fillStyle=col;ctx.lineWidth=w;ctx.lineCap='round';ctx.lineJoin='round';
+  if(o.glow){ctx.shadowColor=col;ctx.shadowBlur=30}
+  if(o.dash){ctx.setLineDash(o.dash);ctx.lineDashOffset=-(o.t||0)*300}
+  ctx.beginPath();const N=24;for(let i=0;i<=N;i++){const [px,py]=pt(p*i/N);i?ctx.lineTo(px,py):ctx.moveTo(px,py)}ctx.stroke();
+  const [hx,hy]=pt(p),[bx,by]=pt(Math.max(0,p-.02));const ang=Math.atan2(hy-by,hx-bx),hs=(o.head||w*3.2);
+  ctx.setLineDash([]);ctx.beginPath();ctx.moveTo(hx+Math.cos(ang)*hs*.6,hy+Math.sin(ang)*hs*.6);
+  ctx.lineTo(hx+Math.cos(ang+2.5)*hs,hy+Math.sin(ang+2.5)*hs);ctx.lineTo(hx+Math.cos(ang-2.5)*hs,hy+Math.sin(ang-2.5)*hs);ctx.closePath();ctx.fill();ctx.restore()}
+
+/* ---------- text ---------- */
+function font(size,weight=700,fam=FONT){ctx.font=`${weight} ${size}px ${fam}`}
+function txt(s,x,y,size,o={}){ctx.save();ctx.globalAlpha*=o.alpha??1;font(size,o.weight??700,o.mono?MONO:FONT);
+  ctx.textAlign=o.align||'center';ctx.textBaseline=o.base||'middle';
+  if(o.ls){ctx.letterSpacing=o.ls+'px'}
+  if(o.glow){ctx.shadowColor=o.glow;ctx.shadowBlur=o.blur||50}
+  if(o.stroke){ctx.lineWidth=o.lw||6;ctx.strokeStyle=o.stroke;ctx.strokeText(s,x,y)}
+  ctx.fillStyle=o.color||WHITE;ctx.fillText(s,x,y);ctx.restore()}
+function measure(s,size,weight=700,fam=FONT){font(size,weight,fam);return ctx.measureText(s).width}
+function wrapLines(s,maxW,size,weight=700){font(size,weight);const words=s.split(' '),lines=[];let cur='';
+  for(const w of words){const test=cur?cur+' '+w:w;if(ctx.measureText(test.replace(/\*/g,'')).width>maxW&&cur){lines.push(cur);cur=w}else cur=test}
+  if(cur)lines.push(cur);return lines}
+// big kinetic headline: words rise in one after another
+function headline(s,x,y,size,o={}){const p=sat(o.p??1),lines=wrapLines(s,o.maxW||3000,size,o.weight||800);
+  const lh=size*(o.lh||1.08);let idx=0;const total=lines.reduce((a,l)=>a+l.split(' ').length,0);
+  const y0=y-(lines.length-1)*lh/2;
+  lines.forEach((ln,li)=>{const words=ln.split(' ');font(size,o.weight||800);const widths=words.map(w=>ctx.measureText(w.replace(/\*/g,'')).width);
+    const sp=size*.26;const lw=widths.reduce((a,b)=>a+b,0)+sp*(words.length-1);let cx=(o.align==='left'?x:x-lw/2);
+    words.forEach((w,wi)=>{const wp=ramp(p,idx/total*.75,idx/total*.75+.25);idx++;const hl=w.startsWith('*')&&w.length>1;const clean=w.replace(/\*/g,'');
+      const e=eo5(wp);ctx.save();ctx.globalAlpha*=e*(o.alpha??1);
+      const dy=(1-e)*size*.5;ctx.translate(cx+widths[wi]/2,y0+li*lh+dy);
+      if(o.glow||hl){ctx.shadowColor=hl?(o.hlGlow||o.hl||AMBER):o.glow;ctx.shadowBlur=o.blur||40}
+      font(size,o.weight||800);ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillStyle=hl?(o.hl||AMBER):(o.color||WHITE);ctx.fillText(clean,0,0);ctx.restore();
+      cx+=widths[wi]+sp})})}
+function pill(x,y,s,o={}){const size=o.size||44;font(size,o.weight||700);const w=ctx.measureText(s).width+size*1.4,h=size*1.9;ctx.save();ctx.globalAlpha*=o.alpha??1;
+  const px=o.align==='left'?x:x-w/2;rr(px,y-h/2,w,h,h/2);ctx.fillStyle=o.fill||rgba(o.color||WHITE,0.12);ctx.fill();ctx.lineWidth=2;ctx.strokeStyle=rgba(o.color||WHITE,0.45);ctx.stroke();
+  txt(s,px+w/2,y+2,size,{color:o.color||WHITE,weight:o.weight||700});ctx.restore();return w}
+function tag(x,y,s,o={}){ctx.save();ctx.globalAlpha*=o.alpha??1;txt(s,x,y,o.size||40,{color:o.color||MUTED,weight:600,ls:8,align:o.align||'center'});ctx.restore()}
+function counter(v,dec=0){return v.toLocaleString('en-US',{maximumFractionDigits:dec,minimumFractionDigits:dec})}
+
+/* ---------- background ---------- */
+const STARS=[];for(let i=0;i<420;i++)STARS.push({x:rnd()*W,y:rnd()*H,r:rnd()*2.2+.6,ph:rnd()*TAU,sp:rnd()*.6+.2});
+const grain=document.createElement('canvas');grain.width=grain.height=512;{const g=grain.getContext('2d'),d=g.createImageData(512,512);for(let i=0;i<d.data.length;i+=4){const v=rnd()*255;d.data[i]=d.data[i+1]=d.data[i+2]=v;d.data[i+3]=255}g.putImageData(d,0,0)}
+let bgTint={c:BLUE,a:.16}, bgTarget={c:BLUE,a:.16};
+function drawBG(t,warmth=0){
+  const g=ctx.createLinearGradient(0,0,0,H);g.addColorStop(0,'#070a1c');g.addColorStop(.55,'#070b1f');g.addColorStop(1,'#03040c');ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+  // drifting aurora blobs (cool + a warm one that strengthens with warmth)
+  ctx.save();ctx.globalCompositeOperation='screen';
+  glow(W*.22+Math.sin(t*.11)*300,H*.3+Math.cos(t*.13)*180,1500,'#1a2a7a',.42);
+  glow(W*.8+Math.sin(t*.09+2)*320,H*.72+Math.cos(t*.1)*160,1600,'#2b1a66',.36);
+  glow(W*.5+Math.sin(t*.07+4)*500,H*1.05,1900,'#ff8a2a',.08+.3*warmth);
+  ctx.restore();
+  ctx.fillStyle=WHITE;for(const s of STARS){const a=.25+.55*pulse(t,s.sp,s.ph);ctx.globalAlpha=a*.6;circ(s.x,s.y+((t*8*s.sp)%40)-20,s.r);ctx.fill()}ctx.globalAlpha=1;
+  // faint grid
+  ctx.save();ctx.strokeStyle='rgba(255,255,255,0.028)';ctx.lineWidth=2;ctx.beginPath();for(let x=0;x<=W;x+=240){ctx.moveTo(x,0);ctx.lineTo(x,H)}for(let y=0;y<=H;y+=240){ctx.moveTo(0,y);ctx.lineTo(W,y)}ctx.stroke();ctx.restore();
+}
+function drawPost(t){
+  // vignette
+  const v=ctx.createRadialGradient(CX,CY,H*.35,CX,CY,H*1.05);v.addColorStop(0,'rgba(0,0,0,0)');v.addColorStop(1,'rgba(0,0,0,0.62)');ctx.fillStyle=v;ctx.fillRect(0,0,W,H);
+  // film grain
+  ctx.save();ctx.globalAlpha*=.045;ctx.globalCompositeOperation='overlay';const ox=Math.floor(hash(Math.floor(t*60))*512),oy=Math.floor(hash(Math.floor(t*60)+7)*512);
+  ctx.translate(-ox,-oy);ctx.fillStyle=ctx.createPattern(grain,'repeat');ctx.fillRect(0,0,W+512,H+512);ctx.restore();
+}
+
+/* =====================================================================
+   ICON / OBJECT LIBRARY  (all drawn around (x,y), scale s)
+   ===================================================================== */
+function drawPhone(x,y,w,h,o={}){ctx.save();ctx.translate(x,y);ctx.rotate(o.rot||0);const r=w*.14;
+  if(o.glowColor){ctx.save();ctx.globalCompositeOperation='screen';glow(0,0,Math.max(w,h)*(o.glowR||1.4),o.glowColor,(o.glowA??.55));ctx.restore()}
+  ctx.shadowColor='rgba(0,0,0,0.6)';ctx.shadowBlur=60;rr(-w/2,-h/2,w,h,r);ctx.fillStyle='#0b0e1a';ctx.fill();ctx.shadowColor='transparent';
+  ctx.lineWidth=w*.02;ctx.strokeStyle='rgba(255,255,255,0.22)';ctx.stroke();
+  const b=w*.05,sw=w-2*b,sh=h-2*b;rr(-sw/2,-sh/2,sw,sh,r*.8);
+  const sc=o.screen||'#0a0d18';if(typeof sc==='string')ctx.fillStyle=sc;else{const g=ctx.createLinearGradient(0,-sh/2,0,sh/2);g.addColorStop(0,sc[0]);g.addColorStop(1,sc[1]);ctx.fillStyle=g}ctx.fill();
+  if(o.content){ctx.save();rr(-sw/2,-sh/2,sw,sh,r*.8);ctx.clip();o.content(sw,sh);ctx.restore()}
+  // notch
+  rr(-w*.16,-sh/2+w*.03,w*.32,w*.07,w*.035);ctx.fillStyle='#0b0e1a';ctx.fill();ctx.restore()}
+// scrolling social feed used inside phones
+function feed(sw,sh,t,warm=0){const cardH=sh*.22,gap=sh*.03,off=(t*sh*.25)%(cardH+gap);
+  for(let i=-1;i<6;i++){const y=-sh/2+i*(cardH+gap)-off+sh*.1;ctx.fillStyle=warm?'rgba(255,170,90,0.14)':'rgba(255,255,255,0.09)';rr(-sw*.42,y,sw*.84,cardH,sw*.05);ctx.fill();
+    ctx.fillStyle=warm?'rgba(255,190,120,0.35)':'rgba(255,255,255,0.3)';circ(-sw*.32,y+cardH*.22,sw*.06);ctx.fill();
+    for(let k=0;k<3;k++){rr(-sw*.22,y+cardH*.12+k*cardH*.14,sw*(k?0.45:0.3),cardH*.07,20);ctx.fill()}
+    rr(-sw*.38,y+cardH*.5,sw*.76,cardH*.42,sw*.03);ctx.fillStyle=warm?rgba(ORANGE,.25):rgba(BLUE,.35);ctx.fill()}}
+function drawBrain(x,y,s,o={}){ctx.save();ctx.translate(x,y);ctx.scale(s,s);ctx.globalAlpha*=o.alpha??1;const col=o.color||PINK;
+  // cerebrum
+  ctx.beginPath();ctx.moveTo(-1.05,0.05);ctx.bezierCurveTo(-1.15,-0.6,-0.6,-1.05,0.05,-1.0);ctx.bezierCurveTo(0.7,-1.02,1.2,-0.6,1.15,-0.05);ctx.bezierCurveTo(1.12,0.35,0.85,0.55,0.55,0.6);
+  ctx.bezierCurveTo(0.3,0.62,0.1,0.55,-0.1,0.6);ctx.bezierCurveTo(-0.5,0.7,-1.0,0.5,-1.05,0.05);ctx.closePath();
+  ctx.fillStyle=o.fill||rgba(col,.12);ctx.fill();ctx.lineWidth=o.lw||0.035;ctx.strokeStyle=o.stroke||rgba(col,.9);if(o.glow){ctx.shadowColor=col;ctx.shadowBlur=o.glow}ctx.stroke();ctx.shadowColor='transparent';
+  // cerebellum + stem
+  ctx.beginPath();ctx.moveTo(0.55,0.6);ctx.bezierCurveTo(0.95,0.55,1.1,0.85,0.9,1.0);ctx.bezierCurveTo(0.7,1.12,0.45,1.0,0.45,0.78);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(0.3,0.75);ctx.bezierCurveTo(0.35,0.95,0.3,1.2,0.4,1.45);ctx.moveTo(0.55,0.72);ctx.bezierCurveTo(0.6,0.95,0.6,1.2,0.65,1.45);ctx.stroke();
+  // folds
+  ctx.lineWidth=(o.lw||0.035)*.7;ctx.globalAlpha*=.65;ctx.beginPath();
+  ctx.moveTo(-0.75,-0.2);ctx.bezierCurveTo(-0.55,-0.5,-0.3,-0.3,-0.2,-0.6);ctx.moveTo(-0.3,0.3);ctx.bezierCurveTo(-0.1,0.0,0.15,0.2,0.3,-0.1);
+  ctx.moveTo(0.2,-0.75);ctx.bezierCurveTo(0.4,-0.5,0.6,-0.7,0.8,-0.4);ctx.moveTo(-0.6,0.4);ctx.bezierCurveTo(-0.45,0.25,-0.35,0.4,-0.2,0.3);ctx.moveTo(0.5,0.3);ctx.bezierCurveTo(0.65,0.1,0.85,0.25,0.95,0.05);ctx.stroke();
+  ctx.restore();return {px:x+0.22*s,py:y+0.12*s}} // pineal position (center-back)
+function drawPineal(px,py,r,a,t){ctx.save();ctx.globalCompositeOperation='screen';glow(px,py,r*(4+pulse(t,1.2)*1.2),AMBER,a*.8);ctx.restore();
+  ctx.save();ctx.globalAlpha*=a;ctx.fillStyle=GOLD;ctx.shadowColor=AMBER;ctx.shadowBlur=60;ctx.beginPath();ctx.ellipse(px,py,r*1.15,r*.8,-.5,0,TAU);ctx.fill();ctx.restore()}
+function drawEye(x,y,s,o={}){ctx.save();ctx.translate(x,y);ctx.scale(s,s);ctx.globalAlpha*=o.alpha??1;
+  // cross-section eyeball, looking left
+  ctx.lineWidth=.045;ctx.strokeStyle=o.stroke||'rgba(255,255,255,0.85)';ctx.fillStyle='rgba(255,255,255,0.05)';circ(0,0,1);ctx.fill();ctx.stroke();
+  // cornea bulge + lens
+  ctx.beginPath();ctx.arc(-0.95,0,0.42,Math.PI*.55,Math.PI*1.45);ctx.stroke();
+  ctx.beginPath();ctx.ellipse(-0.7,0,0.13,0.36,0,0,TAU);ctx.fillStyle=rgba(ICE,.5);ctx.fill();ctx.stroke();
+  // iris
+  ctx.strokeStyle=rgba(CYAN,.9);ctx.lineWidth=.08;ctx.beginPath();ctx.moveTo(-0.84,-0.72);ctx.lineTo(-0.84,-0.38);ctx.moveTo(-0.84,0.72);ctx.lineTo(-0.84,0.38);ctx.stroke();
+  // retina (back inner lining) highlighted
+  ctx.lineWidth=.1;ctx.strokeStyle=rgba(o.retina||AMBER,o.retinaA??.9);if(o.glow){ctx.shadowColor=o.retina||AMBER;ctx.shadowBlur=40}ctx.beginPath();ctx.arc(0,0,0.9,-Math.PI*.42,Math.PI*.42);ctx.stroke();ctx.shadowColor='transparent';
+  // optic nerve
+  ctx.lineWidth=.045;ctx.strokeStyle='rgba(255,255,255,0.85)';ctx.beginPath();ctx.moveTo(0.95,0.3);ctx.bezierCurveTo(1.6,0.45,2.1,0.4,2.6,0.4);ctx.moveTo(0.98,0.05);ctx.bezierCurveTo(1.6,0.2,2.1,0.15,2.6,0.15);ctx.stroke();
+  ctx.restore()}
+function drawClock(x,y,r,o={}){ctx.save();ctx.translate(x,y);ctx.globalAlpha*=o.alpha??1;
+  if(o.night){ctx.beginPath();ctx.moveTo(0,0);ctx.arc(0,0,r,o.night[0],o.night[1]);ctx.closePath();ctx.fillStyle=rgba(VIOLET,.25);ctx.fill()}
+  circ(0,0,r);ctx.lineWidth=r*.07;ctx.strokeStyle=o.color||'rgba(255,255,255,0.85)';ctx.fillStyle=o.fill||'rgba(255,255,255,0.04)';ctx.fill();ctx.stroke();
+  for(let i=0;i<12;i++){const a=i/12*TAU;line(Math.cos(a)*r*.85,Math.sin(a)*r*.85,Math.cos(a)*r*.93,Math.sin(a)*r*.93,'rgba(255,255,255,0.6)',r*.035)}
+  const h=(o.h??22)/12*TAU-Math.PI/2,m=(o.m??0)/60*TAU-Math.PI/2;
+  line(0,0,Math.cos(h)*r*.5,Math.sin(h)*r*.5,o.hand||WHITE,r*.08);line(0,0,Math.cos(m)*r*.75,Math.sin(m)*r*.75,o.hand||WHITE,r*.05);
+  circ(0,0,r*.06);ctx.fillStyle=o.hand||WHITE;ctx.fill();ctx.restore()}
+// melatonin skeletal structure (N-acetyl-5-methoxytryptamine)
+const MOL_A=[[0.866,0.5],[0,1],[-0.866,0.5],[-0.866,-0.5],[0,-1],[0.866,-0.5],[1.817,0.809,'N'],[2.405,0],[1.817,-0.809],[2.317,-1.675],[3.317,-1.675],[3.817,-2.541,'N'],[4.817,-2.541],[5.317,-1.675,'O'],[5.317,-3.407],[-1.732,-1.0,'O'],[-2.732,-1.0]];
+const MOL_B=[[0,1],[1,2,1],[2,3],[3,4,1],[4,5],[5,0,1],[0,6],[6,7],[7,8,1],[8,5],[8,9],[9,10],[10,11],[11,12],[12,13,1],[12,14],[3,15],[15,16]];
+function drawMolecule(x,y,s,rot,o={}){ctx.save();ctx.translate(x,y);ctx.globalAlpha*=o.alpha??1;const p=sat(o.p??1);const col=o.color||AMBER;
+  const pts=MOL_A.map(a=>{const ax=a[0]-1.4,ay=a[1]+0.9;const c=Math.cos(rot),sn=Math.sin(rot);return [ (ax*c-ay*sn)*s, (ax*sn+ay*c)*s*(o.squash||1) ]});
+  ctx.lineCap='round';ctx.lineJoin='round';if(o.glow!==false){ctx.shadowColor=col;ctx.shadowBlur=s*.6}
+  MOL_B.forEach((b,i)=>{const bp=ramp(p,i/MOL_B.length*.8,i/MOL_B.length*.8+.2);if(bp<=0)return;const [a1,a2]=[pts[b[0]],pts[b[1]]];const ex=lerp(a1[0],a2[0],bp),ey=lerp(a1[1],a2[1],bp);
+    ctx.strokeStyle=col;ctx.lineWidth=s*.09;ctx.beginPath();ctx.moveTo(a1[0],a1[1]);ctx.lineTo(ex,ey);ctx.stroke();
+    if(b[2]){const dx=a2[0]-a1[0],dy=a2[1]-a1[1],L=Math.hypot(dx,dy),nx=-dy/L*s*.17,ny=dx/L*s*.17;ctx.lineWidth=s*.06;ctx.beginPath();ctx.moveTo(a1[0]*.85+a2[0]*.15+nx,a1[1]*.85+a2[1]*.15+ny);ctx.lineTo(lerp(a1[0],ex,.85)+nx,lerp(a1[1],ey,.85)+ny);ctx.stroke()}});
+  ctx.shadowColor='transparent';
+  MOL_A.forEach((a,i)=>{const ap=ramp(p,i/MOL_A.length*.8,i/MOL_A.length*.8+.2);if(ap<=0)return;const [px,py]=pts[i];
+    if(a[2]){const c=a[2]==='N'?BLUE:RED;circ(px,py,s*.26*ap);ctx.fillStyle=INK;ctx.fill();ctx.lineWidth=s*.06;ctx.strokeStyle=c;ctx.stroke();txt(a[2],px,py+s*.01,s*.3,{color:c,weight:800})}
+    else{circ(px,py,s*.07*ap);ctx.fillStyle=WHITE;ctx.fill()}});
+  ctx.restore()}
+function drawGlasses(x,y,s,o={}){ctx.save();ctx.translate(x,y);ctx.scale(s,s);ctx.globalAlpha*=o.alpha??1;const tint=o.tint||rgba(ORANGE,.45);
+  ctx.lineWidth=.09;ctx.strokeStyle=o.frame||WHITE;ctx.lineCap='round';
+  for(const sx of[-1,1]){rr(sx*1.25-1.05,-0.7,2.1,1.5,0.55);ctx.fillStyle=tint;ctx.fill();ctx.stroke()}
+  ctx.beginPath();ctx.moveTo(-0.2,-0.2);ctx.quadraticCurveTo(0,-0.45,0.2,-0.2);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(-2.3,-0.4);ctx.lineTo(-3.1,-0.55);ctx.moveTo(2.3,-0.4);ctx.lineTo(3.1,-0.55);ctx.stroke();ctx.restore()}
+function drawCapsule(x,y,s,rot,c1,c2,a=1){ctx.save();ctx.translate(x,y);ctx.rotate(rot);ctx.globalAlpha*=a;ctx.shadowColor='rgba(0,0,0,.5)';ctx.shadowBlur=30;
+  rr(-s,-s*.42,s*2,s*.84,s*.42);ctx.fillStyle=c2;ctx.fill();ctx.save();ctx.beginPath();ctx.rect(-s,-s*.5,s,s);ctx.clip();rr(-s,-s*.42,s*2,s*.84,s*.42);ctx.fillStyle=c1;ctx.fill();ctx.restore();
+  ctx.shadowColor='transparent';ctx.fillStyle='rgba(255,255,255,0.35)';rr(-s*.8,-s*.3,s*1.5,s*.14,s*.07);ctx.fill();ctx.restore()}
+function drawGummy(x,y,s,c,a=1){ctx.save();ctx.translate(x,y);ctx.globalAlpha*=a;ctx.fillStyle=c;ctx.shadowColor='rgba(0,0,0,.5)';ctx.shadowBlur=30;
+  // bear-ish: head + body + ears
+  circ(0,-s*.55,s*.42);ctx.fill();circ(-s*.32,-s*.85,s*.16);ctx.fill();circ(s*.32,-s*.85,s*.16);ctx.fill();rr(-s*.5,-s*.3,s,s*.95,s*.35);ctx.fill();
+  ctx.shadowColor='transparent';ctx.fillStyle='rgba(255,255,255,0.4)';ctx.beginPath();ctx.ellipse(-s*.15,-s*.65,s*.1,s*.18,-.4,0,TAU);ctx.fill();ctx.restore()}
+function drawBottle(x,y,s,c,label,a=1){ctx.save();ctx.translate(x,y);ctx.globalAlpha*=a;ctx.shadowColor='rgba(0,0,0,.5)';ctx.shadowBlur=40;
+  rr(-s*.55,-s,s*1.1,s*2,s*.18);ctx.fillStyle='#1a2240';ctx.fill();ctx.shadowColor='transparent';rr(-s*.35,-s*1.3,s*.7,s*.4,s*.08);ctx.fillStyle=c;ctx.fill();
+  rr(-s*.55,-s*.35,s*1.1,s*.9,0);ctx.fillStyle='rgba(255,255,255,0.9)';ctx.fill();if(label)txt(label,0,s*.1,s*.22,{color:'#1a2240',weight:800});
+  ctx.fillStyle=c;rr(-s*.55,-s*.35,s*1.1,s*.14,0);ctx.fill();ctx.restore()}
+function drawLeaf(x,y,s,rot,c,a=1){ctx.save();ctx.translate(x,y);ctx.rotate(rot);ctx.globalAlpha*=a;ctx.beginPath();ctx.moveTo(0,0);ctx.bezierCurveTo(s*.6,-s*.5,s*.9,-s*1.3,0,-s*2);ctx.bezierCurveTo(-s*.9,-s*1.3,-s*.6,-s*.5,0,0);ctx.closePath();
+  ctx.fillStyle=c;ctx.fill();ctx.strokeStyle='rgba(255,255,255,0.35)';ctx.lineWidth=s*.05;ctx.beginPath();ctx.moveTo(0,-s*.1);ctx.lineTo(0,-s*1.8);ctx.stroke();ctx.restore()}
+function drawSun(x,y,r,o={}){ctx.save();ctx.globalAlpha*=o.alpha??1;ctx.globalCompositeOperation='screen';glow(x,y,r*3.2,GOLD,.6);ctx.globalCompositeOperation='source-over';
+  circ(x,y,r);ctx.fillStyle=GOLD;ctx.shadowColor=GOLD;ctx.shadowBlur=60;ctx.fill();ctx.shadowColor='transparent';const t=o.t||0;
+  for(let i=0;i<12;i++){const a=i/12*TAU+t*.3;line(x+Math.cos(a)*r*1.35,y+Math.sin(a)*r*1.35,x+Math.cos(a)*r*(1.7+.15*pulse(t,1,i/12)),y+Math.sin(a)*r*(1.7+.15*pulse(t,1,i/12)),GOLD,r*.1)}ctx.restore()}
+function drawMoon(x,y,r,o={}){ctx.save();ctx.globalAlpha*=o.alpha??1;ctx.globalCompositeOperation='screen';glow(x,y,r*3,ICE,.35);ctx.globalCompositeOperation='source-over';
+  ctx.beginPath();ctx.arc(x,y,r,0,TAU);ctx.arc(x+r*.45,y-r*.25,r*.82,0,TAU,true);ctx.fillStyle=ICE;ctx.shadowColor=ICE;ctx.shadowBlur=50;ctx.fill('evenodd');ctx.restore()}
+function drawPerson(x,y,h,o={}){ctx.save();ctx.translate(x,y);ctx.globalAlpha*=o.alpha??1;ctx.fillStyle=o.color||'#0d1020';ctx.strokeStyle=o.stroke||'rgba(255,255,255,0.3)';ctx.lineWidth=h*.012;
+  circ(0,-h*.82,h*.13);ctx.fill();ctx.stroke();ctx.beginPath();ctx.moveTo(-h*.28,0);ctx.lineTo(-h*.26,-h*.45);ctx.quadraticCurveTo(-h*.26,-h*.66,0,-h*.66);ctx.quadraticCurveTo(h*.26,-h*.66,h*.26,-h*.45);ctx.lineTo(h*.28,0);ctx.closePath();ctx.fill();ctx.stroke();ctx.restore()}
+function drawCheck(x,y,s,p=1,c=GREEN){ctx.save();ctx.globalAlpha*=sat(p*3);circ(x,y,s);ctx.fillStyle=rgba(c,.18);ctx.fill();ctx.lineWidth=s*.12;ctx.strokeStyle=c;ctx.stroke();ctx.lineCap='round';ctx.lineJoin='round';ctx.shadowColor=c;ctx.shadowBlur=30;
+  const q=eo(p);ctx.beginPath();ctx.moveTo(x-s*.45,y);const m1=sat(q*2),m2=ramp(q,.5,1);ctx.lineTo(x-s*.45+s*.33*m1,y+s*.33*m1);if(m2>0)ctx.lineTo(x-s*.12+s*.62*m2,y+s*.33-s*.72*m2);ctx.stroke();ctx.restore()}
+function drawCross(x,y,s,p=1,c=RED){ctx.save();ctx.globalAlpha*=sat(p*3);circ(x,y,s);ctx.fillStyle=rgba(c,.18);ctx.fill();ctx.lineWidth=s*.12;ctx.strokeStyle=c;ctx.stroke();ctx.lineCap='round';ctx.shadowColor=c;ctx.shadowBlur=30;
+  const q=eo(p);const d=s*.42;line(x-d,y-d,x-d+2*d*sat(q*2),y-d+2*d*sat(q*2),c,s*.12);const q2=ramp(q,.5,1);if(q2>0)line(x+d,y-d,x+d-2*d*q2,y-d+2*d*q2,c,s*.12);ctx.restore()}
+function drawShield(x,y,s,c,a=1){ctx.save();ctx.translate(x,y);ctx.globalAlpha*=a;ctx.beginPath();ctx.moveTo(0,-s);ctx.lineTo(s*.85,-s*.65);ctx.bezierCurveTo(s*.9,0.2*s,s*.5,s*.75,0,s);ctx.bezierCurveTo(-s*.5,s*.75,-s*.9,0.2*s,-s*.85,-s*.65);ctx.closePath();
+  ctx.fillStyle=rgba(c,.2);ctx.fill();ctx.lineWidth=s*.09;ctx.strokeStyle=c;ctx.shadowColor=c;ctx.shadowBlur=40;ctx.stroke();ctx.restore()}
+function drawBulb(x,y,s,o={}){ctx.save();ctx.translate(x,y);ctx.globalAlpha*=o.alpha??1;const on=o.on??1,c=o.color||WARM;
+  if(on>0){ctx.save();ctx.globalCompositeOperation='screen';glow(0,-s*.2,s*2.6,c,.6*on);ctx.restore()}
+  circ(0,-s*.25,s*.75);ctx.fillStyle=rgba(c,.12+.35*on);ctx.fill();ctx.lineWidth=s*.06;ctx.strokeStyle='rgba(255,255,255,0.8)';ctx.stroke();
+  rr(-s*.3,s*.42,s*.6,s*.45,s*.08);ctx.fillStyle='#2a3150';ctx.fill();ctx.stroke();
+  // filament
+  ctx.strokeStyle=on?GOLD:'rgba(255,255,255,0.4)';ctx.lineWidth=s*.05;if(on){ctx.shadowColor=GOLD;ctx.shadowBlur=30*on}ctx.beginPath();ctx.moveTo(-s*.18,s*.4);ctx.lineTo(-s*.18,-s*.05);
+  for(let i=0;i<5;i++){ctx.lineTo(-s*.18+i*s*.09,-s*.05-(i%2?0:s*.22))}ctx.lineTo(s*.18,s*.4);ctx.stroke();ctx.restore()}
+function drawFire(x,y,s,t,a=1){ctx.save();ctx.translate(x,y);ctx.globalAlpha*=a;ctx.globalCompositeOperation='screen';glow(0,-s*.6,s*3,ORANGE,.5);ctx.globalCompositeOperation='source-over';
+  for(let i=0;i<9;i++){const ph=hash(i*3.1),f=t*2.2+ph*10,hgt=s*(1.2+.5*noise1(f)),wx=noise1(f*.7+5)*s*.25+(i-4)*s*.11,w=s*(.42-Math.abs(i-4)*.06);
+    const g=ctx.createLinearGradient(0,0,0,-hgt);g.addColorStop(0,rgba(GOLD,.95));g.addColorStop(.45,rgba(ORANGE,.9));g.addColorStop(1,rgba(RED,0));ctx.fillStyle=g;
+    ctx.beginPath();ctx.moveTo(wx-w,0);ctx.quadraticCurveTo(wx-w*1.2,-hgt*.45,wx+noise1(f+2)*s*.15,-hgt);ctx.quadraticCurveTo(wx+w*1.2,-hgt*.45,wx+w,0);ctx.closePath();ctx.fill()}
+  // logs
+  ctx.fillStyle='#3b2416';rr(-s*1.1,-s*.05,s*2.2,s*.22,s*.1);ctx.fill();ctx.save();ctx.rotate(-.35);rr(-s*1.0,s*.05,s*2.0,s*.22,s*.1);ctx.fill();ctx.restore();
+  for(let i=0;i<12;i++){const f=(t*.8+hash(i)*5)%1;ctx.globalAlpha=a*(1-f);circ((hash(i*7)-.5)*s*1.2+noise1(t+i)*s*.3,-s*1.2-f*s*2,s*.045);ctx.fillStyle=GOLD;ctx.fill()}ctx.restore()}
+function drawBed(x,y,w,o={}){ctx.save();ctx.translate(x,y);ctx.globalAlpha*=o.alpha??1;const h=w*.3;
+  rr(-w/2,-h*.1,w,h,w*.03);ctx.fillStyle=o.color||'#111633';ctx.fill();ctx.lineWidth=w*.006;ctx.strokeStyle='rgba(255,255,255,0.18)';ctx.stroke();
+  rr(-w/2-w*.03,-h*.9,w*.07,h*1.3,w*.02);ctx.fillStyle='#0d1128';ctx.fill();ctx.stroke(); // headboard
+  rr(-w*.42,-h*.45,w*.3,h*.42,w*.04);ctx.fillStyle='#1b2250';ctx.fill();ctx.stroke(); // pillow
+  ctx.beginPath();ctx.moveTo(-w*.1,-h*.1);ctx.quadraticCurveTo(w*.1,-h*.6,w*.52,-h*.3);ctx.lineTo(w*.52,h*.9);ctx.lineTo(-w*.1,h*.9);ctx.closePath();ctx.fillStyle=o.blanket||'#17204a';ctx.fill();ctx.stroke(); // blanket
+  ctx.restore()}
+function drawBook(x,y,s,o={}){ctx.save();ctx.translate(x,y);ctx.rotate(o.rot||0);ctx.globalAlpha*=o.alpha??1;ctx.lineWidth=s*.04;ctx.strokeStyle='rgba(255,255,255,0.8)';
+  for(const sx of[-1,1]){ctx.beginPath();ctx.moveTo(0,-s*.7);ctx.quadraticCurveTo(sx*s*.5,-s*.85,sx*s*1.05,-s*.7);ctx.lineTo(sx*s*1.05,s*.7);ctx.quadraticCurveTo(sx*s*.5,s*.55,0,s*.7);ctx.closePath();ctx.fillStyle=o.page||'#f1e9d6';ctx.fill();ctx.stroke();
+    ctx.strokeStyle='rgba(40,30,20,0.35)';ctx.lineWidth=s*.03;for(let i=0;i<7;i++){const yy=-s*.45+i*s*.16;ctx.beginPath();ctx.moveTo(sx*s*.2,yy);ctx.lineTo(sx*s*(i%3==2?.6:.88),yy);ctx.stroke()}ctx.strokeStyle='rgba(255,255,255,0.8)';ctx.lineWidth=s*.04}
+  ctx.restore()}
+function drawEReader(x,y,s,o={}){ctx.save();ctx.translate(x,y);ctx.rotate(o.rot||0);ctx.globalAlpha*=o.alpha??1;const on=o.on??1;
+  if(on>0){ctx.save();ctx.globalCompositeOperation='screen';glow(0,0,s*2.2,ICE,.5*on);ctx.restore()}
+  rr(-s*.95,-s*1.25,s*1.9,s*2.5,s*.12);ctx.fillStyle='#0c1020';ctx.fill();ctx.lineWidth=s*.03;ctx.strokeStyle='rgba(255,255,255,0.3)';ctx.stroke();
+  rr(-s*.82,-s*1.1,s*1.64,s*2.2,s*.05);ctx.fillStyle=on?'#dfefff':'#1a2030';ctx.shadowColor=ICE;ctx.shadowBlur=40*on;ctx.fill();ctx.shadowColor='transparent';
+  ctx.strokeStyle=on?'rgba(30,50,90,0.55)':'rgba(255,255,255,0.2)';ctx.lineWidth=s*.035;for(let i=0;i<10;i++){const yy=-s*.85+i*s*.19;ctx.beginPath();ctx.moveTo(-s*.65,yy);ctx.lineTo(s*(i%4==3?.1:.65),yy);ctx.stroke()}ctx.restore()}
+function drawTadpole(x,y,s,t,o={}){ctx.save();ctx.translate(x,y);ctx.rotate(o.rot||0);ctx.globalAlpha*=o.alpha??1;const c=o.color||'#2b2b3a';
+  ctx.strokeStyle=c;ctx.lineWidth=s*.22;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(0,0);for(let i=1;i<=10;i++){const u=i/10;ctx.lineTo(-u*s*2.2,Math.sin(u*6-t*12+(o.ph||0))*s*.35*u)}ctx.stroke();
+  ctx.beginPath();ctx.ellipse(s*.1,0,s*.8,s*.55,0,0,TAU);ctx.fillStyle=c;ctx.fill();ctx.fillStyle='rgba(255,255,255,0.7)';circ(s*.45,-s*.15,s*.1);ctx.fill();ctx.restore()}
+function drawFrog(x,y,s,o={}){ctx.save();ctx.translate(x,y);ctx.globalAlpha*=o.alpha??1;const c=o.color||'#3aa655';ctx.fillStyle=c;ctx.strokeStyle='rgba(0,0,0,0.3)';ctx.lineWidth=s*.03;
+  ctx.beginPath();ctx.ellipse(0,0,s*1.3,s*.8,0,0,TAU);ctx.fill();ctx.stroke(); // body
+  ctx.beginPath();ctx.ellipse(-s*.95,-s*.45,s*.75,s*.55,0,0,TAU);ctx.fill();ctx.stroke(); // head
+  for(const sx of[-1.3,-.6]){circ(sx*s,-s*.95,s*.22);ctx.fill();ctx.stroke();ctx.fillStyle='#111';circ(sx*s,-s*.95,s*.1);ctx.fill();ctx.fillStyle=c} // eyes
+  ctx.beginPath();ctx.ellipse(s*.9,s*.35,s*.6,s*.4,.3,0,TAU);ctx.fill();ctx.stroke(); // hind leg
+  ctx.beginPath();ctx.ellipse(-s*.6,s*.55,s*.35,s*.22,-.3,0,TAU);ctx.fill();ctx.stroke(); // front leg
+  if(o.spots){ctx.fillStyle=rgba('#0f2a14',o.spots);for(let i=0;i<9;i++){circ((hash(i)*2.2-1.1)*s,(hash(i+9)-.5)*s*1.1,s*.1+hash(i+3)*s*.06);ctx.fill()}}
+  ctx.restore()}
+function drawGear(x,y,r,n,rot,c,a=1){ctx.save();ctx.translate(x,y);ctx.rotate(rot);ctx.globalAlpha*=a;ctx.beginPath();for(let i=0;i<n*2;i++){const ang=i/(n*2)*TAU,rr2=i%2?r:r*1.25;ctx.lineTo(Math.cos(ang)*rr2,Math.sin(ang)*rr2);ctx.lineTo(Math.cos(ang+TAU/(n*4))*rr2,Math.sin(ang+TAU/(n*4))*rr2)}ctx.closePath();
+  ctx.fillStyle=rgba(c,.22);ctx.fill();ctx.lineWidth=r*.1;ctx.strokeStyle=c;ctx.stroke();circ(0,0,r*.35);ctx.fillStyle=INK;ctx.fill();ctx.stroke();ctx.restore()}
+function drawTV(x,y,w,o={}){ctx.save();ctx.translate(x,y);ctx.globalAlpha*=o.alpha??1;const h=w*.56,on=o.on??1;if(on){ctx.save();ctx.globalCompositeOperation='screen';glow(0,0,w*1.1,ICE,.45*on);ctx.restore()}
+  rr(-w/2,-h/2,w,h,w*.02);ctx.fillStyle='#0b0e1a';ctx.fill();ctx.lineWidth=w*.012;ctx.strokeStyle='rgba(255,255,255,0.3)';ctx.stroke();rr(-w/2+w*.03,-h/2+w*.03,w-w*.06,h-w*.06,w*.01);
+  const g=ctx.createLinearGradient(-w/2,0,w/2,0);g.addColorStop(0,rgba(BLUE,.7*on+.05));g.addColorStop(.5,rgba(ICE,.85*on+.05));g.addColorStop(1,rgba(VIOLET,.7*on+.05));ctx.fillStyle=g;ctx.fill();
+  rr(-w*.12,h/2,w*.24,w*.05,w*.01);ctx.fillStyle='#161a2e';ctx.fill();ctx.restore()}
+function drawLaptop(x,y,w,o={}){ctx.save();ctx.translate(x,y);ctx.globalAlpha*=o.alpha??1;const h=w*.62,on=o.on??1;if(on){ctx.save();ctx.globalCompositeOperation='screen';glow(0,-h*.4,w*1.1,ICE,.4*on);ctx.restore()}
+  rr(-w/2,-h,w,h*.9,w*.03);ctx.fillStyle='#0b0e1a';ctx.fill();ctx.lineWidth=w*.012;ctx.strokeStyle='rgba(255,255,255,0.3)';ctx.stroke();rr(-w/2+w*.03,-h+w*.03,w-w*.06,h*.9-w*.06,w*.015);ctx.fillStyle=rgba(ICE,.75*on+.05);ctx.fill();
+  rr(-w*.58,-h*.1,w*1.16,w*.05,w*.02);ctx.fillStyle='#1a1f36';ctx.fill();ctx.stroke();ctx.restore()}
+function drawLamp(x,y,s,o={}){ctx.save();ctx.translate(x,y);ctx.globalAlpha*=o.alpha??1;const on=o.on??1;line(0,0,0,s*1.2,'rgba(255,255,255,0.4)',s*.04);
+  ctx.beginPath();ctx.moveTo(-s*.8,0);ctx.lineTo(s*.8,0);ctx.lineTo(s*.35,-s*.9);ctx.lineTo(-s*.35,-s*.9);ctx.closePath();ctx.fillStyle='#1a1f36';ctx.fill();ctx.strokeStyle='rgba(255,255,255,0.4)';ctx.lineWidth=s*.04;ctx.stroke();
+  if(on){ctx.save();ctx.globalCompositeOperation='screen';const g=ctx.createLinearGradient(0,0,0,s*3);g.addColorStop(0,rgba(ICE,.55*on));g.addColorStop(1,rgba(ICE,0));ctx.fillStyle=g;ctx.beginPath();ctx.moveTo(-s*.8,0);ctx.lineTo(s*.8,0);ctx.lineTo(s*2.4,s*3);ctx.lineTo(-s*2.4,s*3);ctx.closePath();ctx.fill();ctx.restore()}ctx.restore()}
+function drawPaper(x,y,w,h,o={}){ctx.save();ctx.translate(x,y);ctx.rotate(o.rot||0);ctx.globalAlpha*=o.alpha??1;ctx.shadowColor='rgba(0,0,0,0.6)';ctx.shadowBlur=80;ctx.shadowOffsetY=30;
+  rr(-w/2,-h/2,w,h,w*.02);ctx.fillStyle=o.color||'#f4f1ea';ctx.fill();ctx.shadowColor='transparent';ctx.restore()}
+function drawPlant(x,y,s,o={}){ctx.save();ctx.translate(x,y);ctx.globalAlpha*=o.alpha??1;const g=o.g??1,c=o.color||'#4ccf6a';const n=Math.round(2+4*g);
+  ctx.strokeStyle='#2f8a46';ctx.lineWidth=s*.08;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(0,0);ctx.quadraticCurveTo(s*.1,-s*g,0,-s*2.2*g);ctx.stroke();
+  for(let i=0;i<n;i++){const u=(i+1)/(n+1),yy=-s*2.2*g*u,sx=i%2?1:-1;drawLeaf(sx*s*.05,yy,s*(.5+.3*(1-u))*g,sx*1.2,c)}
+  if(o.roots){ctx.strokeStyle=rgba(GOLD,.6);ctx.lineWidth=s*.05;for(let i=-2;i<=2;i++){ctx.beginPath();ctx.moveTo(0,0);ctx.quadraticCurveTo(i*s*.35,s*.5,i*s*.6,s*1.1*o.roots);ctx.stroke()}}
+  ctx.restore()}
+function drawMito(x,y,s,rot,o={}){ctx.save();ctx.translate(x,y);ctx.rotate(rot);ctx.globalAlpha*=o.alpha??1;const c=o.color||ORANGE;if(o.glow){ctx.save();ctx.globalCompositeOperation='screen';glow(0,0,s*2.4,c,.5*o.glow);ctx.restore()}
+  ctx.beginPath();ctx.ellipse(0,0,s*1.5,s*.7,0,0,TAU);ctx.fillStyle=rgba(c,.2);ctx.fill();ctx.lineWidth=s*.08;ctx.strokeStyle=c;ctx.stroke();
+  ctx.lineWidth=s*.06;ctx.beginPath();for(let i=-3;i<=3;i++){const xx=i*s*.38;ctx.moveTo(xx,-s*.55);ctx.quadraticCurveTo(xx+s*.15*(i%2?1:-1),0,xx,s*.55)}ctx.stroke();ctx.restore()}
+function drawWhale(x,y,s,o={}){ctx.save();ctx.translate(x,y);ctx.scale(o.flip?-s:s,s);ctx.globalAlpha*=o.alpha??1;ctx.fillStyle=o.color||'#2a3f7a';ctx.strokeStyle='rgba(255,255,255,0.45)';ctx.lineWidth=.03;
+  ctx.beginPath();ctx.moveTo(-1.9,0);ctx.bezierCurveTo(-1.5,-0.75,0.2,-0.85,1.1,-0.35);ctx.bezierCurveTo(1.6,-0.1,2.0,0.05,2.6,-0.35);ctx.lineTo(2.7,-0.05);ctx.lineTo(2.6,0.35);ctx.bezierCurveTo(2.0,0.05,1.6,0.2,1.1,0.35);
+  ctx.bezierCurveTo(0.2,0.75,-1.5,0.6,-1.9,0);ctx.closePath();ctx.fill();ctx.stroke();ctx.beginPath();ctx.moveTo(-0.2,0.35);ctx.quadraticCurveTo(0.1,0.8,0.5,0.65);ctx.quadraticCurveTo(0.3,0.45,0.2,0.3);ctx.fill();
+  ctx.fillStyle='rgba(255,255,255,0.8)';circ(-1.35,-0.2,0.07);ctx.fill();ctx.restore()}
+function drawDolphin(x,y,s,o={}){ctx.save();ctx.translate(x,y);ctx.rotate(o.rot||0);ctx.scale(s,s);ctx.globalAlpha*=o.alpha??1;ctx.fillStyle=o.color||'#4d6fb3';ctx.strokeStyle='rgba(255,255,255,0.45)';ctx.lineWidth=.03;
+  ctx.beginPath();ctx.moveTo(-2.1,-0.05);ctx.bezierCurveTo(-1.6,-0.55,-0.5,-0.6,0.3,-0.45);ctx.lineTo(0.2,-0.95);ctx.lineTo(0.8,-0.4);ctx.bezierCurveTo(1.4,-0.3,1.9,-0.15,2.3,-0.4);ctx.lineTo(2.2,0);ctx.lineTo(2.3,0.4);
+  ctx.bezierCurveTo(1.9,0.1,1.4,0.25,0.8,0.3);ctx.bezierCurveTo(-0.3,0.55,-1.6,0.45,-2.1,-0.05);ctx.closePath();ctx.fill();ctx.stroke();ctx.fillStyle='rgba(255,255,255,0.8)';circ(-1.5,-0.2,0.06);ctx.fill();ctx.restore()}
+function drawDNA(x,y,w,h,t,o={}){ctx.save();ctx.translate(x,y);ctx.globalAlpha*=o.alpha??1;const c=o.color||CYAN;ctx.lineCap='round';const n=22;
+  for(let i=0;i<=n;i++){const u=i/n,yy=-h/2+u*h,ph=u*TAU*2+t*1.5,x1=Math.sin(ph)*w/2,x2=Math.sin(ph+Math.PI)*w/2;
+    line(x1,yy,x2,yy,rgba(c,.5),h*.012);circ(x1,yy,h*.018);ctx.fillStyle=c;ctx.fill();circ(x2,yy,h*.018);ctx.fillStyle=VIOLET;ctx.fill()}ctx.restore()}
+function drawGlobe(x,y,r,t,o={}){ctx.save();ctx.translate(x,y);ctx.globalAlpha*=o.alpha??1;circ(0,0,r);ctx.fillStyle=rgba(BLUE,.12);ctx.fill();ctx.lineWidth=r*.025;ctx.strokeStyle='rgba(255,255,255,0.7)';ctx.stroke();
+  ctx.save();circ(0,0,r);ctx.clip();for(let i=0;i<6;i++){const u=((i/6+t*.05)%1)*2-1;ctx.beginPath();ctx.ellipse(0,0,Math.abs(u)*r,r,0,0,TAU);ctx.strokeStyle='rgba(255,255,255,0.22)';ctx.stroke()}
+  for(let i=1;i<4;i++){ctx.beginPath();ctx.moveTo(-r,r*(i/2-1));ctx.lineTo(r,r*(i/2-1));ctx.stroke()}ctx.restore();ctx.restore()}
+function drawPlane(x,y,s,rot,c=WHITE){ctx.save();ctx.translate(x,y);ctx.rotate(rot);ctx.fillStyle=c;ctx.beginPath();ctx.moveTo(s,0);ctx.lineTo(-s*.6,s*.25);ctx.lineTo(-s*.9,s*.7);ctx.lineTo(-s*1.1,s*.6);ctx.lineTo(-s*.9,s*.15);ctx.lineTo(-s*.9,-s*.15);ctx.lineTo(-s*1.1,-s*.6);ctx.lineTo(-s*.9,-s*.7);ctx.lineTo(-s*.6,-s*.25);ctx.closePath();ctx.fill();ctx.restore()}
+/* foods */
+function drawCherry(x,y,s,a=1){ctx.save();ctx.translate(x,y);ctx.globalAlpha*=a;ctx.strokeStyle='#5a9a3a';ctx.lineWidth=s*.08;ctx.beginPath();ctx.moveTo(-s*.4,s*.4);ctx.quadraticCurveTo(-s*.1,-s*.8,s*.4,-s*1.1);ctx.moveTo(s*.45,s*.45);ctx.quadraticCurveTo(s*.5,-s*.5,s*.4,-s*1.1);ctx.stroke();
+  for(const p of[[-.4,.5],[.45,.55]]){circ(p[0]*s,p[1]*s,s*.42);ctx.fillStyle='#d81e3c';ctx.fill();ctx.fillStyle='rgba(255,255,255,0.45)';circ(p[0]*s-s*.12,p[1]*s-s*.15,s*.1);ctx.fill()}drawLeaf(s*.4,-s*1.05,s*.3,1.3,'#5fbf4a');ctx.restore()}
+function drawBanana(x,y,s,a=1){ctx.save();ctx.translate(x,y);ctx.globalAlpha*=a;ctx.beginPath();ctx.moveTo(-s,-s*.2);ctx.quadraticCurveTo(0,s*1.1,s,-s*.3);ctx.quadraticCurveTo(0,s*.55,-s,-s*.2);ctx.closePath();ctx.fillStyle='#f5d33c';ctx.fill();ctx.strokeStyle='#b89a1c';ctx.lineWidth=s*.05;ctx.stroke();ctx.restore()}
+function drawOrange(x,y,s,a=1){ctx.save();ctx.translate(x,y);ctx.globalAlpha*=a;circ(0,0,s);ctx.fillStyle='#ff8c1a';ctx.fill();ctx.strokeStyle='rgba(255,255,255,0.5)';ctx.lineWidth=s*.05;ctx.beginPath();for(let i=0;i<8;i++){const an=i/8*TAU;ctx.moveTo(0,0);ctx.lineTo(Math.cos(an)*s*.85,Math.sin(an)*s*.85)}ctx.stroke();circ(0,0,s*.85);ctx.stroke();drawLeaf(s*.2,-s*.9,s*.25,1.2,'#5fbf4a');ctx.restore()}
+function drawPineapple(x,y,s,a=1){ctx.save();ctx.translate(x,y);ctx.globalAlpha*=a;ctx.beginPath();ctx.ellipse(0,s*.3,s*.65,s*.9,0,0,TAU);ctx.fillStyle='#f0a52a';ctx.fill();ctx.save();ctx.clip();ctx.strokeStyle='rgba(120,70,10,0.5)';ctx.lineWidth=s*.04;ctx.beginPath();for(let i=-4;i<=4;i++){ctx.moveTo(i*s*.3-s,-s*.8);ctx.lineTo(i*s*.3+s,s*1.4);ctx.moveTo(i*s*.3+s,-s*.8);ctx.lineTo(i*s*.3-s,s*1.4)}ctx.stroke();ctx.restore();
+  for(let i=-2;i<=2;i++)drawLeaf(i*s*.12,-s*.5,s*.4,i*.35,'#3f9f3a');ctx.restore()}
+function drawMilk(x,y,s,a=1){ctx.save();ctx.translate(x,y);ctx.globalAlpha*=a;ctx.beginPath();ctx.moveTo(-s*.55,-s);ctx.lineTo(s*.55,-s);ctx.lineTo(s*.42,s);ctx.lineTo(-s*.42,s);ctx.closePath();ctx.fillStyle='rgba(255,255,255,0.18)';ctx.fill();ctx.strokeStyle='rgba(255,255,255,0.8)';ctx.lineWidth=s*.06;ctx.stroke();
+  ctx.beginPath();ctx.moveTo(-s*.52,-s*.6);ctx.lineTo(s*.52,-s*.6);ctx.lineTo(s*.42,s);ctx.lineTo(-s*.42,s);ctx.closePath();ctx.fillStyle='#f6f3ec';ctx.fill();ctx.restore()}
+function drawGrain(x,y,s,c,a=1){ctx.save();ctx.translate(x,y);ctx.globalAlpha*=a;ctx.strokeStyle=c;ctx.lineWidth=s*.07;ctx.beginPath();ctx.moveTo(0,s);ctx.lineTo(0,-s*.9);ctx.stroke();ctx.fillStyle=c;for(let i=0;i<5;i++){const yy=-s*.9+i*s*.3;for(const sx of[-1,1]){ctx.beginPath();ctx.ellipse(sx*s*.2,yy,s*.22,s*.11,sx*.9,0,TAU);ctx.fill()}}ctx.restore()}
+function drawCoffee(x,y,s,t,a=1){ctx.save();ctx.translate(x,y);ctx.globalAlpha*=a;rr(-s*.7,-s*.5,s*1.4,s*1.2,s*.2);ctx.fillStyle='#f1ede6';ctx.fill();ctx.beginPath();ctx.arc(s*.85,s*.05,s*.32,-Math.PI/2,Math.PI/2);ctx.lineWidth=s*.14;ctx.strokeStyle='#f1ede6';ctx.stroke();
+  ctx.beginPath();ctx.ellipse(0,-s*.5,s*.7,s*.16,0,0,TAU);ctx.fillStyle='#4a2c17';ctx.fill();ctx.strokeStyle='rgba(255,255,255,0.35)';ctx.lineWidth=s*.05;for(let i=-1;i<=1;i++){ctx.beginPath();ctx.moveTo(i*s*.3,-s*.75);ctx.bezierCurveTo(i*s*.3+s*.15,-s*1.0+Math.sin(t*2+i)*s*.05,i*s*.3-s*.15,-s*1.2,i*s*.3,-s*1.45);ctx.stroke()}ctx.restore()}
+/* chart helpers */
+function axes(x,y,w,h,o={}){ctx.save();ctx.globalAlpha*=o.alpha??1;ctx.strokeStyle='rgba(255,255,255,0.3)';ctx.lineWidth=4;ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x,y+h);ctx.lineTo(x+w,y+h);ctx.stroke();
+  ctx.strokeStyle='rgba(255,255,255,0.07)';ctx.lineWidth=2;const ny=o.ny||4;for(let i=1;i<=ny;i++){const yy=y+h-h*i/ny;ctx.beginPath();ctx.moveTo(x,yy);ctx.lineTo(x+w,yy);ctx.stroke()}ctx.restore()}
+function bar(x,yBase,w,h,c,p=1,o={}){const hh=h*eo(p);ctx.save();ctx.globalAlpha*=o.alpha??1;if(o.glow){ctx.save();ctx.globalCompositeOperation='screen';glow(x+w/2,yBase-hh/2,Math.max(w,hh)*.9,c,.35);ctx.restore()}
+  rr(x,yBase-hh,w,hh,Math.min(w*.18,hh/2));const g=ctx.createLinearGradient(0,yBase-hh,0,yBase);g.addColorStop(0,c);g.addColorStop(1,rgba(c,.35));ctx.fillStyle=g;ctx.fill();ctx.restore();return hh}
+
+/* =====================================================================
+   SCRIPT  — [start, end, caption (words prefixed with * are highlighted), visual module]
+   ===================================================================== */
+const RAW=[
+[0,4.42,"One hour of screen time before bed can measurably change your *hormones.","hook"],
+[4.42,7.54,"Here is the *actual *study. You know the moment.","hook"],
+[7.54,11.68,"The lights are off, the *phone *is *glowing, and you scroll a little longer.","bed"],
+[11.68,15.44,"It feels harmless, even relaxing. But deep inside your head,","bed"],
+[15.44,18.52,"a *tiny *gland is reading that glow as a message.","bed"],
+[18.52,22.0,"And the message is simple. *It *is *not *night *yet.","bed"],
+[22.0,26.3,"Before we finish, you will know *which *hormone that is, and *which *color of light flips it.","promise"],
+[26.3,31.14,"You will see what a *controlled *lab *experiment found when people read on a glowing screen.","promise"],
+[31.14,36.14,"And you will learn which popular fixes have *real *evidence, and which are mostly *marketing.","promise"],
+[36.14,40.18,"Here is the question behind all of it. A glowing rectangle in your hand can","question"],
+[40.18,45.52,"reach a hormone deep inside your brain. So *what *actually *protects that hormone at night?","question"],
+[45.52,49.32,"Some answers are *solid *science. Others are *clever *packaging.","question"],
+[49.32,53.44,"The hormone is *melatonin, sometimes called the *hormone *of *darkness.","intro"],
+[53.44,58.3,"It is made by the *pineal *gland, a small structure near the center of your brain.","intro"],
+[58.3,62.3,"When *darkness *falls, the gland releases it, and drowsiness follows.","intro"],
+[62.3,66.48,"When *light *hits *your *eyes, production is suppressed, and wakefulness takes over.","intro"],
+[66.48,72.32,"On screen, a chart built from measured ranges tracks melatonin in human blood across a *full *day.","daychart"],
+[72.32,76.8,"In daylight, it sits low, around *10 *to *20 picograms per milliliter.","daychart"],
+[76.8,82.44,"A picogram is *one *trillionth of a gram. At night, it climbs to roughly *80 *to *120,","daychart"],
+[82.44,87.04,"nearly *80% of the day's supply is made after dark.","daychart"],
+[87.04,92.58,"In *2015, Harvard-affiliated researchers led by *Anne-Marie *Chang published a study.","study"],
+[92.58,95.62,"It appeared in the *Proceedings *of *the *National *Academy *of *Sciences.","study"],
+[95.62,99.44,"They tested reading before bed, inside a *controlled *sleep *lab.","study"],
+[99.44,102.94,"On some evenings, volunteers read on a *light-emitting *e-reader.","study"],
+[102.94,106.12,"On other evenings, the same people read a *printed *book.","study"],
+[106.12,109.66,"Look at this simplified comparison. *One *bar for each kind of reading.","bars"],
+[109.66,115.12,"After the e-reader, the evening melatonin rise was *suppressed, and it came *later.","bars"],
+[115.12,118.96,"Volunteers took *longer *to *fall *asleep. Their internal clock *shifted *later.","bars"],
+[118.96,122.94,"And the next morning, they felt *less *alert than after the paper book.","bars"],
+[122.94,127.76,"One *honest *detail about our opening line. The lab reading sessions ran *longer *than *an *hour","honest"],
+[127.76,131.78,"each evening. But the effect follows a *simple *rule we will meet shortly,","honest"],
+[131.78,137.5,"and that rule decides which fixes work. *Same *words, *same *volunteers, *same *lab.","honest"],
+[137.5,142.68,"Only the *light was different. So what in that light reached the brain? And how?","honest"],
+[142.68,147.72,"The first clue came from *frogs *and *tadpoles, decades before anyone owned a screen.","tadpole"],
+[147.72,152.18,"In *1917, two researchers, *Carey *Pratt *McCord and *Floyd *Allen,","tadpole"],
+[152.18,157.2,"fed tadpoles extracts from cow pineal glands. The tadpoles' skin *turned *lighter.","tadpole"],
+[157.2,160.96,"This illustration shows the dark *pigment *cells in their skin contracting.","tadpole"],
+[160.96,162.62,"Nobody was thinking about *sleep yet.","tadpole"],
+[162.62,167.48,"Four decades later, *Aaron *Lerner, a dermatology professor at *Yale *University,","lerner"],
+[167.48,171.88,"chased that clue. He hoped a pineal substance might help treat *skin *diseases.","lerner"],
+[171.88,176.0,"In *1958, his team isolated it from cow pineal glands.","lerner"],
+[176.0,180.52,"This illustrated portrait shows Lerner beside a frog whose skin *fades *paler.","lerner"],
+[180.52,185.12,"Lerner named it *melatonin, partly from the Greek word *melas, meaning black or dark.","lerner"],
+[185.12,190.6,"It looked like a skin compound. Instead, research in the *mid-1970s showed something else.","lerner"],
+[190.6,195.06,"Melatonin production in the human pineal gland follows a *daily *rhythm.","lerner"],
+[195.06,198.0,"A skin molecule had turned out to be a *clock *signal.","lerner"],
+[198.0,200.94,"So how does light reach a gland *buried *in *your *brain?","pathway"],
+[200.94,204.96,"Through special *light-sensing *cells in your retina at the back of each eye.","pathway"],
+[204.96,208.86,"They send light and dark information to the *suprachiasmatic *nuclei.","pathway"],
+[208.86,212.24,"That tiny cluster works as your brain's *master *clock.","pathway"],
+[212.24,216.9,"Follow the arrow on this simplified diagram, from *eye to *clock to *pineal *gland.","pathway"],
+[216.9,222.22,"At night, a messenger called *norepinephrine activates a key enzyme on the melatonin assembly","pathway"],
+[222.22,228.44,"line. In daylight, that signal stops. Without it, the enzyme is *broken *down almost immediately.","pathway"],
+[228.44,233.74,"So daylight does not just pause the factory. It *dismantles a key machine on the line.","pathway"],
+[233.74,236.34,"Melatonin already in your blood does *not *linger either.","pathway"],
+[236.34,240.96,"Its *half-life, the time it takes to clear half of it, is roughly *20 *to *50 *minutes.","pathway"],
+[240.96,243.7,"That simple rule we promised starts with *color.","spectrum"],
+[243.7,248.54,"On this spectrum bar, one narrow band glows. That is *blue *light,","spectrum"],
+[248.54,253.72,"between *460 *and *480 *nanometers. And it suppresses melatonin the most.","spectrum"],
+[253.72,257.62,"The *brighter the light, and the *longer it lasts, the stronger the suppression.","spectrum"],
+[257.62,262.08,"In bright light tests, light made only of wavelengths *above *530 *nanometers","spectrum"],
+[262.08,264.58,"did *not suppress melatonin at all.","spectrum"],
+[264.58,268.96,"For most of human history, evenings were lit by *fire, which glows mostly yellow.","hist"],
+[268.96,272.96,"Even the *incandescent *bulbs of the 20th century gave off relatively little blue.","hist"],
+[272.96,277.04,"Many modern screens and bulbs shifted that balance *toward *blue.","hist"],
+[277.04,279.88,"And that is where *your *evening *routine comes in.","hist"],
+[279.88,283.94,"Once blue light became the problem, an *entire *market appeared to solve it.","market"],
+[283.94,288.32,"Glasses, apps, screen settings, gummies, even special snacks.","market"],
+[288.32,290.7,"Some of these have *real *evidence behind them.","market"],
+[290.7,294.6,"One of them has a surprising *official *verdict against it.","market"],
+[294.6,298.74,"Start with *blue-blocking *glasses. Here, the science is fairly direct.","glasses"],
+[298.74,303.96,"Wearing glasses that block blue light in the hours before bed can *reduce melatonin suppression.","glasses"],
+[303.96,307.64,"They have even been suggested for people trying to shift to an *earlier *bedtime.","glasses"],
+[307.64,309.36,"The catch is in the *lens.","glasses"],
+[309.36,313.02,"The benefit depends on *how *much of that blue band it actually stops.","glasses"],
+[313.02,315.56,"Watch this *before *and *after split of a phone screen.","nightmode"],
+[315.56,317.52,"On the left, the *standard *display.","nightmode"],
+[317.52,321.08,"On the right, *night *mode, shifted toward warm orange.","nightmode"],
+[321.08,323.62,"Night mode reduces blue light, which *fits *the *mechanism.","nightmode"],
+[323.62,326.96,"But remember the rule, *brightness and *duration matter too.","nightmode"],
+[326.96,331.42,"A warm screen at full brightness for hours is still *a *lot *of *light.","nightmode"],
+[331.42,334.92,"How much night mode alone changes sleep is still an *open *question.","nightmode"],
+[334.92,337.74,"And your phone is rarely the *only *glow in the room.","room"],
+[337.74,342.48,"Overhead lights, televisions, and laptops all send signals to the *same *clock.","room"],
+[342.48,346.18,"Light before and during sleep has been linked to *poorer *sleep *quality.","room"],
+[346.18,348.14,"Disrupted melatonin may be the reason.","room"],
+[348.14,350.42,"This matters more for *some *people than others.","people"],
+[350.42,355.5,"In *teenagers, melatonin timing naturally shifts later, pushing sleep and wake times later too.","people"],
+[355.5,359.6,"That raises their risk of a pattern called *delayed *sleep *phase *disorder,","people"],
+[359.6,361.52,"where the body clock *runs *late.","people"],
+[361.52,364.24,"Production also tends to *decline as people age.","people"],
+[364.24,368.18,"Add bright evening screens, and a late clock can drift *even *later.","people"],
+[368.18,370.46,"Now the *official *verdict we teased.","verdict"],
+[370.46,374.64,"Melatonin itself is sold as a *supplement, in pills, gummies, and liquids.","verdict"],
+[374.64,380.22,"In *2017, the *American *Academy *of *Sleep *Medicine recommended *against using it to treat insomnia.","verdict"],
+[380.22,383.6,"Their reason was *poor *effectiveness and *very *low *quality *evidence.","verdict"],
+[383.6,388.24,"The *European *Insomnia *Guideline of *2023 took a narrower view.","verdict"],
+[388.24,391.44,"It supported one approved form, a *prolonged *release version,","verdict"],
+[391.44,394.26,"for people *55 *and *older for up to *three *months.","verdict"],
+[394.26,399.04,"But it recommended *against fast release or over-the-counter melatonin for insomnia.","verdict"],
+[399.04,400.54,"*Timing matters too.","jetlag"],
+[400.54,402.94,"Melatonin can ease *jet *lag on *eastward flights.","jetlag"],
+[402.94,406.18,"But taken at the *wrong *time, it can delay adjustment instead.","jetlag"],
+[406.18,407.76,"And the *special *snacks?","foods"],
+[407.76,412.08,"Many plants contain melatonin, from *tart *cherries to grains like *rice and *oats.","foods"],
+[412.08,418.08,"Eating melatonin-rich foods like *bananas, *pineapple, and *oranges raises melatonin in the blood.","foods"],
+[418.08,422.92,"Milk and sour cherries *may improve sleep quality, but that is a *may, not a promise.","foods"],
+[422.92,425.8,"The comparison worth remembering involves *sleep *timing.","compare"],
+[425.8,427.84,"For people whose body clock *runs *late,","compare"],
+[427.84,432.08,"one analysis found melatonin cut time to fall asleep by *39 *minutes.","compare"],
+[432.08,435.62,"For people with *insomnia, the gain was just *7 *minutes.","compare"],
+[435.62,438.32,"*Same *molecule, very different results.","compare"],
+[438.32,441.2,"Whether any of this fits your situation is a question for a *doctor.","compare"],
+[441.2,444.3,"All of this treats melatonin as a *sleep *hormone.","second"],
+[444.3,446.56,"But that may be its *second *job.","second"],
+[446.56,448.62,"The *plant *clue was a hint.","second"],
+[448.62,450.98,"Melatonin turned up in places that *never *sleep at all.","second"],
+[450.98,454.06,"And its *oldest *role has nothing to do with bedtime.","second"],
+[454.06,457.64,"For decades, scientists assumed melatonin belonged to *animals.","plants"],
+[457.64,462.24,"When it showed up in *coffee *extracts in the 1970s, they dismissed it as a byproduct.","plants"],
+[462.24,466.22,"Then, in *1987, it was identified in *plants.","plants"],
+[466.22,468.8,"Since then, it has been found in *every *plant investigated,","plants"],
+[468.8,472.02,"from roots and leaves to fruits and seeds.","plants"],
+[472.02,473.86,"Plants make more of it under *stress,","plants"],
+[473.86,478.08,"during *drought, *extreme *temperatures, *salty *soil, or *fungal *infection.","plants"],
+[478.08,480.78,"In studies on *lettuce grown in salty soil,","plants"],
+[480.78,484.3,"spraying melatonin on the leaves boosted *leaf *number and *chlorophyll.","plants"],
+[484.3,486.9,"So in plants, it acts as a *protector.","plants"],
+[486.9,489.88,"This *timeline *of *life on Earth holds the answer.","tree"],
+[489.88,494.42,"Melatonin is made by *bacteria, including photosynthetic *cyanobacteria.","tree"],
+[494.42,498.34,"In *2022, a key enzyme for making it was found in an *archaeon,","tree"],
+[498.34,500.56,"a single-celled microbe.","tree"],
+[500.56,505.54,"That places melatonin-making in *all *three great branches of life, including *yours.","tree"],
+[505.54,509.26,"Its roots likely reach back about *4 *billion *years.","tree"],
+[509.26,510.92,"Why would early cells need it?","oxygen"],
+[510.92,513.38,"The leading idea is *protection.","oxygen"],
+[513.38,515.68,"*Oxygen was building up in early Earth's atmosphere,","oxygen"],
+[515.68,519.2,"and oxygen creates *reactive *molecules that damage cells.","oxygen"],
+[519.2,522.48,"In lab studies, melatonin *neutralizes those molecules,","oxygen"],
+[522.48,525.54,"and it was *twice *as *effective as vitamin E against one type.","oxygen"],
+[525.54,529.88,"A cutaway of a cell, on screen now, highlights its *mitochondria,","cell"],
+[529.88,532.1,"the tiny *energy *factories.","cell"],
+[532.1,535.0,"Researchers think much of your melatonin is made *inside *them.","cell"],
+[535.0,538.84,"But one group of animals proves the sleep link from the *opposite *side.","whales"],
+[538.84,543.44,"*Whales *and *dolphins have lost every gene for making melatonin and for its receptors.","whales"],
+[543.44,546.5,"They sleep with *one *half of the brain at a time.","whales"],
+[546.5,548.74,"Scientists think the two facts are *connected.","whales"],
+[548.74,551.06,"So here is the *answer to our question.","answer"],
+[551.06,554.7,"Your melatonin is an *ancient *signal, built to read darkness.","answer"],
+[554.7,557.02,"A screen does *not *damage it.","answer"],
+[557.02,561.34,"It simply sends the *daytime *message, through your eyes, to your master clock.","answer"],
+[561.34,564.44,"What protects that hormone is *less of that message.","answer"],
+[564.44,567.18,"*Dimmer, *warmer, *shorter evening light.","answer"],
+[567.18,570.02,"Glasses only help if they *truly *block the blue band.","answer"],
+[570.02,573.2,"Night mode cuts some blue, but *brightness *still *counts.","answer"],
+[573.2,576.48,"And melatonin pills are a separate tool, with *mixed *evidence.","answer"],
+[576.48,580.98,"We separate real science from wellness myths every week on *Daily *Wellness.","outro"],
+[580.98,583.42,"This is general education, *not *medical *advice.","outro"]];
+const SCENES=RAW.map((a,i)=>({i,s:a[0],e:a[1],text:a[2],v:a[3]}));
+const TOTAL=SCENES[SCENES.length-1].e;
+const SEGS=[];SCENES.forEach(sc=>{const L=SEGS[SEGS.length-1];if(L&&L.v===sc.v){L.e=sc.e;L.scenes.push(sc)}else SEGS.push({v:sc.v,s:sc.s,e:sc.e,scenes:[sc]})});
+SCENES.forEach(sc=>sc.seg=SEGS.find(g=>g.scenes.includes(sc)));
+const CHAPTER={hook:"01 · THE HOOK",bed:"01 · THE MOMENT",promise:"COMING UP",question:"THE QUESTION",intro:"02 · THE HORMONE OF DARKNESS",daychart:"02 · A FULL DAY OF MELATONIN",study:"03 · THE 2015 HARVARD STUDY",bars:"03 · THE RESULTS",honest:"03 · AN HONEST DETAIL",tadpole:"04 · 1917 · TADPOLES",lerner:"04 · 1958 · YALE",pathway:"05 · EYE → CLOCK → GLAND",spectrum:"06 · THE COLOR RULE",hist:"06 · A HISTORY OF EVENING LIGHT",market:"07 · THE FIXES",glasses:"07 · BLUE-BLOCKING GLASSES",nightmode:"07 · NIGHT MODE",room:"07 · THE OTHER GLOWS",people:"08 · WHO IT HITS HARDEST",verdict:"09 · THE OFFICIAL VERDICT",jetlag:"09 · TIMING",foods:"09 · SPECIAL SNACKS",compare:"09 · 39 vs 7 MINUTES",second:"10 · THE SECOND JOB",plants:"10 · PLANTS",tree:"10 · 4 BILLION YEARS",oxygen:"10 · PROTECTION",cell:"10 · MITOCHONDRIA",whales:"10 · WHALES & DOLPHINS",answer:"11 · THE ANSWER",outro:"DAILY WELLNESS"};
+const WARMTH={intro:.3,daychart:.35,hist:.6,foods:.45,answer:.4,outro:.6,lerner:.25,tadpole:.2,plants:.3,oxygen:.5,cell:.55,tree:.3,compare:.25,market:.2,glasses:.3,nightmode:.35};
+const ACCENT={bed:CYAN,question:CYAN,spectrum:CYAN,verdict:RED,plants:GREEN,tree:GREEN,oxygen:GREEN,room:CYAN,nightmode:WARM,whales:CYAN,compare:GREEN,foods:GREEN,people:VIOLET};
+const V={};
+
+/* ---------- captions ---------- */
+function drawCaption(sc,S){const words=sc.text.split(' '),n=words.length;const p=sat(S.st/((sc.e-sc.s)*.7));const acc=ACCENT[sc.v]||AMBER;
+  const g=ctx.createLinearGradient(0,H-560,0,H);g.addColorStop(0,'rgba(3,4,12,0)');g.addColorStop(1,'rgba(3,4,12,0.88)');ctx.fillStyle=g;ctx.fillRect(0,H-560,W,560);
+  const size=80,lines=wrapLines(sc.text,3440,size,600),lh=size*1.32,y0=H-190-(lines.length-1)*lh;let idx=0;
+  lines.forEach((ln,li)=>{const ws=ln.split(' ');font(size,600);const widths=ws.map(w=>ctx.measureText(w.replace(/\*/g,'')).width*1.02);const spc=size*.3;const lw=widths.reduce((a,b)=>a+b,0)+spc*(ws.length-1);let cx=CX-lw/2;
+    ws.forEach((w,wi)=>{const wp=ramp(p,idx/n*.85,idx/n*.85+.15);idx++;const hl=w.startsWith('*'),clean=w.replace(/\*/g,'');const e=eo(wp);if(e>0){
+      ctx.save();ctx.globalAlpha*=e;ctx.translate(cx+widths[wi]/2,y0+li*lh+(1-e)*34);font(size,hl?800:600);ctx.textAlign='center';ctx.textBaseline='middle';ctx.shadowColor='rgba(0,0,0,0.9)';ctx.shadowBlur=26;ctx.fillStyle=hl?acc:WHITE;ctx.fillText(clean,0,0);ctx.restore()}
+      cx+=widths[wi]+spc})})}
+/* ---------- HUD (chapter label + wordmark) ---------- */
+function drawHUD(seg,S){const a=ramp(S.t,.8,1.6);const k=eo(ramp(S.lt,0,.8));ctx.save();ctx.globalAlpha*=a;
+  line(160,150,160+260*k,150,AMBER,6);tag(160,210,CHAPTER[seg.v]||'',{align:'left',alpha:k,size:40,color:'rgba(245,247,255,0.7)'});
+  drawMoon(W-230,170,34,{alpha:.9});tag(W-290,172,'DAILY WELLNESS',{align:'right',size:38,color:'rgba(245,247,255,0.6)'});ctx.restore()}
+/* ---------- render loop ---------- */
+function sceneAt(t){let lo=0,hi=SCENES.length-1;while(lo<hi){const m=(lo+hi)>>1;if(SCENES[m].e<=t)lo=m+1;else hi=m}return SCENES[lo]}
+const FADE=.75;
+function render(t){const sc=sceneAt(t),seg=sc.seg,lt=t-seg.s;drawBG(t,WARMTH[seg.v]||0);
+  const S={t,lt,n:sc.i+1,sp:sat((t-sc.s)/(sc.e-sc.s)),st:t-sc.s,sc,seg};
+  const gi=SEGS.indexOf(seg);
+  if(lt<FADE&&gi>0){const ps=SEGS[gi-1],pl=ps.scenes[ps.scenes.length-1];drawVia(()=>V[ps.v]({t,lt:t-ps.s,n:pl.i+1,sp:1,st:t-pl.s,sc:pl,seg:ps,out:lt/FADE}),1-eo(lt/FADE))}
+  drawVia(()=>{ctx.save();V[seg.v](S);ctx.restore()},lt<FADE?eo(lt/FADE):1);
+  drawCaption(sc,S);drawHUD(seg,S);drawPost(t);if(DEBUG)txt('t='+t.toFixed(2)+'  scene '+(sc.i+1)+'  lt='+lt.toFixed(2),CX,60,40,{color:RED,mono:true})}
+
+/* =====================================================================
+   VISUAL MODULES — each receives S={t,lt,n,sp,st,sc,seg}
+   ===================================================================== */
+/* ---- 01 HOOK (scenes 1-2) ---- */
+V.hook=function(S){const {t,lt,n,st}=S;
+  const on=ramp(lt,.05,.45)*(lt<.6?(hash(Math.floor(lt*40))>.3?1:.4):1); // flicker-on
+  // light splash
+  ctx.save();ctx.globalCompositeOperation='screen';glow(CX,CY,2200*on,BLUE,.5*on);glow(CX,CY+200,900*on,ICE,.45*on);ctx.restore();
+  // phone
+  drawPhone(CX,CY+60,560,1150,{rot:-.08,glowColor:ICE,glowA:.7*on,screen:[rgba(ICE,.95*on+.03),rgba(BLUE,.8*on+.03)],content:(sw,sh)=>{ctx.globalAlpha=on;feed(sw,sh,t)}});
+  // left: ONE HOUR
+  const p1=ramp(lt,.4,1.4);
+  ctx.save();ctx.globalAlpha*=p1;headline("ONE HOUR",1000,CY-260,300,{p:p1,weight:900,glow:ICE,blur:60});ctx.restore();
+  headline("of screen time *before *bed",1000,CY+10,96,{p:ramp(lt,1.0,2.0),weight:600,hl:ICE,maxW:1500});
+  // right: hormone waveform that gets suppressed
+  const p2=ramp(lt,2.0,2.8),sup=eio(ramp(lt,2.9,4.3));
+  ctx.save();ctx.globalAlpha*=p2;const gx=2420,gy=CY+40,gw=1150,gh=500;
+  axes(gx,gy-gh/2,gw,gh,{ny:3});tag(gx,gy-gh/2-60,'MELATONIN · pg/mL',{align:'left',size:36});
+  ctx.strokeStyle=AMBER;ctx.lineWidth=12;ctx.lineCap='round';ctx.shadowColor=AMBER;ctx.shadowBlur=40;ctx.beginPath();
+  for(let i=0;i<=120;i++){const u=i/120,x=gx+u*gw;const base=.5-.25*Math.sin(u*TAU*.9+.5),wig=Math.sin(u*40+t*6)*.03;const yv=lerp(base+wig,.86+wig*.5,sup*u);ctx.lineTo(x,gy-gh/2+gh*yv)}ctx.stroke();
+  ctx.restore();
+  headline("measurably changes your *HORMONES",3000,CY+440,96,{p:ramp(lt,2.6,3.6),weight:700,hl:AMBER,maxW:1300});
+  // scene 2: the actual study card
+  if(n>=2){const q=eo(ramp(st,0,.9));ctx.save();ctx.translate(0,(1-q)*900);ctx.globalAlpha=q;
+    drawPaper(CX,CY+20,1900,1250,{rot:-.03});ctx.save();ctx.translate(CX,CY+20);ctx.rotate(-.03);
+    txt('PNAS · 2015 · Chang, Aeschbach, Duffy & Czeisler',0,-500,46,{color:'#5a6075',weight:700,ls:4});
+    const title=wrapLines('Evening use of light-emitting eReaders negatively affects sleep, circadian timing, and next-morning alertness',1600,86,800);
+    title.forEach((l,i)=>txt(l,0,-360+i*104,86,{color:'#141a33',weight:800}));
+    for(let i=0;i<9;i++){rr(-800,60+i*52,i%3==2?900:1600,22,11);ctx.fillStyle='rgba(20,26,51,0.14)';ctx.fill()}
+    ctx.restore();
+    const sp=elastic(ramp(st,.7,1.6));ctx.save();ctx.translate(CX+620,CY-440);ctx.rotate(-.18);ctx.scale(sp,sp);rr(-330,-80,660,160,24);ctx.lineWidth=12;ctx.strokeStyle=RED;ctx.stroke();txt('ACTUAL STUDY',0,4,74,{color:RED,weight:900,ls:6});ctx.restore();
+    ctx.restore()}
+};
+/* ---- 01 THE MOMENT (scenes 3-6): bedroom -> zoom into the head -> pineal gland ---- */
+V.bed=function(S){const {t,lt,n,st}=S;const HEAD={x:1430,y:930};
+  const z=lerp(1,3.1,eio(ramp(t,11.9,15.6)));const xray=ramp(t,13.3,15.3);
+  ctx.save();ctx.translate(HEAD.x,HEAD.y);ctx.scale(z,z);ctx.translate(-HEAD.x,-HEAD.y);
+  // room: floor + wall line + window with moon
+  ctx.fillStyle='rgba(0,0,0,0.35)';ctx.fillRect(0,1500,W,H);line(0,1500,W,1500,'rgba(255,255,255,0.08)',4);
+  rr(2700,380,620,760,30);ctx.fillStyle='rgba(20,30,70,0.6)';ctx.fill();ctx.strokeStyle='rgba(255,255,255,0.18)';ctx.lineWidth=6;ctx.stroke();line(3010,380,3010,1140,'rgba(255,255,255,0.18)',6);line(2700,760,3320,760,'rgba(255,255,255,0.18)',6);drawMoon(3150,560,70,{alpha:.9});
+  drawLamp(3500,300,90,{on:0});
+  drawBed(1920,1480,2400,{});
+  // person sitting up, lit by phone
+  const px=1690,py=1120;
+  ctx.save();ctx.globalCompositeOperation='screen';glow(px,py,620,BLUE,.55);glow(HEAD.x+60,HEAD.y,260,ICE,.45);ctx.restore();
+  ctx.save();ctx.globalAlpha*=1-xray;drawPerson(HEAD.x,1400,620,{});
+  // lit side of face
+  ctx.save();circ(HEAD.x,HEAD.y-108,80);ctx.clip();const g=ctx.createLinearGradient(HEAD.x-40,0,HEAD.x+80,0);g.addColorStop(0,'rgba(120,180,255,0)');g.addColorStop(1,'rgba(160,210,255,0.55)');ctx.fillStyle=g;ctx.fillRect(HEAD.x-100,HEAD.y-200,200,200);ctx.restore();
+  ctx.restore();
+  // arm + phone
+  line(HEAD.x+120,1250,px-60,py+40,'#0d1020',70);
+  drawPhone(px,py,210,430,{rot:.55,glowColor:ICE,glowA:.6,glowR:1.8,screen:[rgba(ICE,.95),rgba(BLUE,.85)],content:(sw,sh)=>feed(sw,sh,t)});
+  // x-ray head with brain
+  if(xray>0){ctx.save();ctx.globalAlpha*=xray;const hx=HEAD.x,hy=HEAD.y-108;
+    ctx.beginPath();ctx.moveTo(hx-150,hy+40);ctx.bezierCurveTo(hx-170,hy-140,hx-60,hy-200,hx+40,hy-190);ctx.bezierCurveTo(hx+150,hy-180,hx+190,hy-60,hx+165,hy+20);ctx.bezierCurveTo(hx+160,hy+60,hx+175,hy+100,hx+130,hy+130);ctx.bezierCurveTo(hx+80,hy+170,hx-40,hy+175,hx-110,hy+130);ctx.closePath();
+    ctx.fillStyle='rgba(10,14,30,0.85)';ctx.fill();ctx.lineWidth=5;ctx.strokeStyle=rgba(CYAN,.7);ctx.shadowColor=CYAN;ctx.shadowBlur=30;ctx.stroke();ctx.shadowColor='transparent';
+    const b=drawBrain(hx-5,hy-35,105,{color:PINK,glow:20,lw:.03});
+    // eye
+    circ(hx+118,hy-30,16);ctx.fillStyle=ICE;ctx.fill();
+    // light rays phone -> eye -> gland
+    const ray=ramp(t,15.4,17.2);
+    if(ray>0){for(let i=-1;i<=1;i++){arrow(px-40,py-90+i*40,hx+135,hy-30+i*6,{p:ray,color:ICE,w:3,alpha:.8,head:14,glow:true})}
+      arrow(hx+118,hy-30,b.px+10,b.py,{p:ramp(ray,.5,1),color:AMBER,w:4,dash:[18,22],t:t,head:16,glow:true})}
+    drawPineal(b.px,b.py,9,ramp(t,15.6,16.6),t);ctx.restore()}
+  ctx.restore();
+  // screen-space labels
+  if(n>=5){const gxs=HEAD.x+(HEAD.x-5+0.22*105-HEAD.x)*z,gys=HEAD.y+(HEAD.y-108-35+0.12*105-HEAD.y)*z;const a=eo(ramp(st,.6,1.4));
+    ctx.save();ctx.globalAlpha*=a;line(gxs+40,gys-30,gxs+320,gys-260,AMBER,4);txt('PINEAL GLAND',gxs+340,gys-280,54,{align:'left',color:AMBER,weight:800,ls:4});txt('reading the glow as a message',gxs+340,gys-215,42,{align:'left',color:MUTED,weight:500});ctx.restore();
+    if(n>=6){const q=back(ramp(st,.1,.8));ctx.save();ctx.translate(2650,760);ctx.scale(q,q);card(-700,-190,1400,380,{r:60,fill:'rgba(255,181,71,0.1)',stroke:rgba(AMBER,.6)});
+      drawSun(-520,0,70,{t});const msg='IT IS NOT NIGHT YET';const nch=Math.floor(ramp(st,.5,2.2)*msg.length);txt(msg.slice(0,nch)+(pulse(t,2)>.5?'|':''),120,6,110,{color:GOLD,weight:900,glow:AMBER,blur:30});ctx.restore()}}
+};
+/* ---- COMING UP (scenes 7-9) ---- */
+V.promise=function(S){const {t,lt,n,st}=S;
+  headline("BEFORE WE FINISH, YOU WILL KNOW",CX,330,76,{p:ramp(lt,.1,1),weight:800,color:MUTED});
+  const cards=[{x:830,title:'WHICH HORMONE?',sub:'and which color of light flips it',c:AMBER},{x:1920,title:'A CONTROLLED LAB EXPERIMENT',sub:'reading on a glowing screen',c:ICE},{x:3010,title:'REAL EVIDENCE vs MARKETING',sub:'which fixes actually work',c:GREEN}];
+  cards.forEach((c,i)=>{const act=n-7===i;const p=back(ramp(lt,.3+i*4.3,1.2+i*4.3));if(p<=0)return;const y=560+(1-p)*500;
+    ctx.save();ctx.globalAlpha*=sat(p*2)*(act||n-7>i?1:.4);card(c.x-460,y,920,1180,{r:64,stroke:act?rgba(c.c,.7):undefined,accent:c.c});
+    if(act){ctx.save();ctx.globalCompositeOperation='screen';glow(c.x,y+600,900,c.c,.18+.08*pulse(t,1.2));ctx.restore()}
+    const ix=c.x,iy=y+440;
+    if(i===0){drawMolecule(ix-60,iy-40,70,t*.3,{p:ramp(st,0,1.5)});const sw=560,sx=ix-sw/2,sy=iy+300;for(let k=0;k<60;k++){const u=k/60,wl=380+u*320;ctx.fillStyle=wlColor(wl);ctx.fillRect(sx+u*sw,sy,sw/60+1,60)}
+      const bu=(470-380)/320;ctx.save();ctx.globalCompositeOperation='screen';glow(sx+bu*sw,sy+30,120,CYAN,.9*pulse(t,1.5));ctx.restore()}
+    if(i===1){drawBed(ix,iy+260,560,{});drawEReader(ix-90,iy-10,110,{rot:-.2,on:.6+.4*pulse(t,.8)});drawBook(ix+180,iy+40,110,{rot:.25})}
+    if(i===2){drawGlasses(ix-190,iy-110,52);drawCheck(ix+30,iy-120,60,ramp(st,0,1));drawCapsule(ix-200,iy+170,75,-.5,AMBER,'#fff');drawGummy(ix-20,iy+150,60,RED);drawCross(ix+180,iy+170,60,ramp(st,.4,1.4));drawPhone(ix+170,iy-110,120,230,{rot:.2,screen:[WARM,ORANGE],glowColor:ORANGE,glowA:.3})}
+    txt(c.title,c.x,y+840,60,{color:WHITE,weight:900,ls:2});txt(c.sub,c.x,y+930,44,{color:MUTED,weight:500});
+    txt('0'+(i+1),c.x-390,y+110,70,{align:'left',color:rgba(c.c,.9),weight:900,mono:true});ctx.restore()})
+};
+// wavelength -> css color (approx visible spectrum)
+function wlColor(wl){let r=0,g=0,b=0;if(wl<440){r=-(wl-440)/60;b=1}else if(wl<490){g=(wl-440)/50;b=1}else if(wl<510){g=1;b=-(wl-510)/20}else if(wl<580){r=(wl-510)/70;g=1}else if(wl<645){r=1;g=-(wl-645)/65}else{r=1}
+  let f=1;if(wl<420)f=.3+.7*(wl-380)/40;else if(wl>700)f=.3+.7*(780-wl)/80;return `rgb(${Math.round(r*255*f)},${Math.round(g*255*f)},${Math.round(b*255*f)})`}
+/* ---- THE QUESTION (scenes 10-12) ---- */
+V.question=function(S){const {t,lt,n,st}=S;
+  if(n<=11){const a=n===11?1-eo(ramp(st,2.6,3.6)):1;ctx.save();ctx.globalAlpha*=a;
+    drawPhone(900,CY+40,420,860,{rot:-.25,glowColor:ICE,glowA:.6,screen:[rgba(ICE,.95),rgba(BLUE,.85)],content:(sw,sh)=>feed(sw,sh,t)});
+    const b=drawBrain(2850,CY-20,330,{color:PINK,glow:30,lw:.03,alpha:ramp(lt,.3,1)});
+    const beam=ramp(lt,.8,2.6);arrow(1050,CY-240,b.px-40,b.py-20,{p:beam,color:ICE,w:8,bend:-.35,glow:true,dash:[30,30],t});
+    drawPineal(b.px,b.py,22,ramp(lt,2.2,3),t);
+    if(n===11){const sh=eo(ramp(st,.4,1.3));drawShield(b.px,b.py,140*sh+20*pulse(t,1.5),GREEN,sh*.9);
+      headline("So what actually *protects that hormone at night?",CX,330,110,{p:ramp(st,.3,1.6),hl:GREEN,maxW:3000})}
+    else headline("A glowing rectangle in your hand can reach a hormone deep inside your *brain",CX,330,96,{p:ramp(lt,.3,1.8),hl:PINK,maxW:3000});
+    ctx.restore()}
+  if(n===12||(n===11&&st>2.6)){const q=n===12?1:eo(ramp(st,2.6,3.6));const L=eo(ramp(q,0,1)),R=eo(ramp(q,.15,1));
+    ctx.save();ctx.globalAlpha*=L;ctx.translate(-(1-L)*1200,0);card(260,420,1600,1150,{r:70,stroke:rgba(GREEN,.6),accent:GREEN});
+    // flask icon
+    ctx.save();ctx.translate(1060,860);ctx.lineWidth=14;ctx.strokeStyle=GREEN;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(-70,-260);ctx.lineTo(-70,-60);ctx.lineTo(-230,220);ctx.quadraticCurveTo(-250,270,-200,270);ctx.lineTo(200,270);ctx.quadraticCurveTo(250,270,230,220);ctx.lineTo(70,-60);ctx.lineTo(70,-260);ctx.closePath();ctx.stroke();
+    ctx.save();ctx.clip();ctx.fillStyle=rgba(GREEN,.35);ctx.beginPath();ctx.moveTo(-300,80+Math.sin(t*2)*10);for(let i=0;i<=20;i++)ctx.lineTo(-300+i*30,80+Math.sin(t*3+i*.6)*12);ctx.lineTo(300,300);ctx.lineTo(-300,300);ctx.fill();ctx.restore();ctx.restore();
+    txt('SOLID SCIENCE',1060,1300,96,{color:GREEN,weight:900,ls:4});txt('controlled studies · measured hormones',1060,1400,46,{color:MUTED,weight:500});ctx.restore();
+    ctx.save();ctx.globalAlpha*=R;ctx.translate((1-R)*1200,0);card(1980,420,1600,1150,{r:70,stroke:rgba(PINK,.6),accent:PINK});
+    // gift box icon
+    ctx.save();ctx.translate(2780,900);ctx.shadowColor=PINK;ctx.shadowBlur=40;rr(-230,-120,460,340,30);ctx.fillStyle=rgba(PINK,.25);ctx.fill();ctx.lineWidth=12;ctx.strokeStyle=PINK;ctx.stroke();rr(-250,-200,500,90,20);ctx.stroke();line(0,-200,0,220,PINK,12);
+    ctx.beginPath();ctx.ellipse(-70,-250,70,45,-.5,0,TAU);ctx.stroke();ctx.beginPath();ctx.ellipse(70,-250,70,45,.5,0,TAU);ctx.stroke();ctx.restore();
+    txt('CLEVER PACKAGING',2780,1300,96,{color:PINK,weight:900,ls:4});txt('glossy claims · thin evidence',2780,1400,46,{color:MUTED,weight:500});ctx.restore()}
+};
+/* ---- 02 THE HORMONE OF DARKNESS (scenes 13-16) ---- */
+let PARTS=[];
+V.intro=function(S){const {t,lt,n,st}=S;
+  const shift=eio(ramp(t,53.4,55.0)); // molecule moves left, brain appears
+  const mx=lerp(CX,900,shift),my=lerp(CY-80,CY-40,shift),ms=lerp(190,120,shift);
+  ctx.save();ctx.globalCompositeOperation='screen';glow(mx,my,900,AMBER,.22);ctx.restore();
+  drawMolecule(mx,my,ms,t*.35,{p:ramp(lt,.1,2.2),squash:.85+.15*Math.cos(t*.7)});
+  if(n===13){headline("*MELATONIN",CX,CY+420,210,{p:ramp(lt,.6,1.6),weight:900,hl:GOLD,blur:70});headline("the hormone of darkness",CX,CY+600,80,{p:ramp(lt,1.6,2.6),weight:500,color:MUTED})}
+  else{ctx.save();ctx.globalAlpha*=shift;txt('MELATONIN',900,CY+340,90,{color:GOLD,weight:900,ls:6});txt('C₁₃H₁₆N₂O₂',900,CY+430,52,{color:MUTED,weight:500});ctx.restore()}
+  if(shift>0){ctx.save();ctx.globalAlpha*=shift;const b=drawBrain(2600,CY-60,400,{color:PINK,glow:30,lw:.028});
+    // night / day state
+    const dark=eio(ramp(t,58.3,60.2))*(1-eio(ramp(t,62.3,63.6)));
+    drawPineal(b.px,b.py,26,1,t);
+    // crosshair pin on the gland
+    const pin=eo(ramp(t,54.6,55.8));ctx.save();ctx.globalAlpha*=pin;ctx.strokeStyle=rgba(AMBER,.8);ctx.lineWidth=4;circ(b.px,b.py,80+10*pulse(t,1));ctx.stroke();line(b.px,b.py-120,b.px,b.py-70,AMBER,4);line(b.px,b.py+70,b.px,b.py+120,AMBER,4);line(b.px-120,b.py,b.px-70,b.py,AMBER,4);line(b.px+70,b.py,b.px+120,b.py,AMBER,4);
+    line(b.px+90,b.py+60,b.px+330,b.py+330,AMBER,4);txt('PINEAL GLAND',b.px+350,b.py+350,58,{align:'left',color:AMBER,weight:800,ls:4});txt('near the center of the brain',b.px+350,b.py+415,42,{align:'left',color:MUTED,weight:500});ctx.restore();
+    // melatonin particles released at night
+    if(n>=15){const emit=dark>.3&&PARTS.length<160;if(emit)for(let i=0;i<3;i++)PARTS.push({x:b.px,y:b.py,vx:(rnd()-.5)*6,vy:(rnd()-.5)*6,l:1});
+      PARTS=PARTS.filter(p=>p.l>0);ctx.save();ctx.globalCompositeOperation='screen';for(const p of PARTS){p.x+=p.vx;p.y+=p.vy;p.l-=n===16?.04:.009;ctx.globalAlpha=sat(p.l)*.9;circ(p.x,p.y,8);ctx.fillStyle=GOLD;ctx.fill();glow(p.x,p.y,30,AMBER,.5)}ctx.restore()}else PARTS=[];
+    // sky indicator above brain: sun -> moon -> sun
+    const sky=2600,skyY=360;ctx.save();ctx.globalAlpha*=ramp(t,57.5,58.5);
+    drawMoon(sky-600*(1-dark)+0,skyY,70,{alpha:dark});drawSun(sky+600*(1-(1-dark)),skyY,70,{alpha:1-dark,t});
+    pill(sky,skyY+150,dark>.5?'DARKNESS → RELEASED':'LIGHT → SUPPRESSED',{color:dark>.5?GOLD:ICE,size:40});ctx.restore();
+    ctx.restore()}
+  // scene 15/16: big eye at bottom-left closing (drowsy) / opening (awake)
+  if(n>=15){const a=ramp(st,0,.8);const openT=n===15?lerp(1,.08,eio(ramp(st,1.2,3.5))):lerp(.08,1.25,eo(ramp(st,.3,1.4)));
+    const ex=900,ey=CY+560,ew=520,eh=260*openT;ctx.save();ctx.globalAlpha*=a;
+    if(n===16){ctx.save();ctx.globalCompositeOperation='screen';const flash=eo(ramp(st,0,.5));glow(ex-700,ey-500,1200*flash,ICE,.7*flash*(1-ramp(st,1.5,3)));ctx.restore();for(let i=-2;i<=2;i++)arrow(ex-900,ey-650+i*60,ex-120,ey-60+i*20,{p:ramp(st,.1,.9),color:ICE,w:5,glow:true,alpha:.9})}
+    ctx.beginPath();ctx.moveTo(ex-ew/2,ey);ctx.quadraticCurveTo(ex,ey-eh*1.5,ex+ew/2,ey);ctx.quadraticCurveTo(ex,ey+eh*1.5,ex-ew/2,ey);ctx.closePath();ctx.fillStyle='rgba(255,255,255,0.9)';ctx.fill();
+    ctx.save();ctx.clip();circ(ex,ey,110);ctx.fillStyle=n===16?CYAN:VIOLET;ctx.fill();circ(ex,ey,50);ctx.fillStyle=INK;ctx.fill();circ(ex-30,ey-35,16);ctx.fillStyle='#fff';ctx.fill();ctx.restore();
+    ctx.lineWidth=10;ctx.strokeStyle=ICE;ctx.stroke();
+    txt(n===15?'drowsiness follows':'wakefulness takes over',ex,ey+330,56,{color:n===15?VIOLET:CYAN,weight:700,alpha:ramp(st,1,1.8)});ctx.restore()}
+};
+/* ---- 02 A FULL DAY OF MELATONIN (scenes 17-20) ---- */
+function melat(h){return 15+92*Math.exp(-Math.pow((h-15)/3.4,2))} // h = hours since noon
+V.daychart=function(S){const {t,lt,n,st}=S;const gx=520,gy=520,gw=2800,gh=1060;const ymax=140;const X=h=>gx+h/24*gw,Y=v=>gy+gh-v/ymax*gh;
+  const a=eo(ramp(lt,0,1));ctx.save();ctx.globalAlpha*=a;
+  // day/night bands
+  const nightA=ramp(lt,.3,1.2);ctx.fillStyle=rgba(VIOLET,.13*nightA);ctx.fillRect(X(8.5),gy,X(19)-X(8.5),gh);ctx.fillStyle=rgba(GOLD,.05*nightA);ctx.fillRect(gx,gy,X(8.5)-gx,gh);ctx.fillRect(X(19),gy,X(24)-X(19),gh);
+  drawSun(X(4),gy-200,44,{t,alpha:nightA});drawMoon(X(13.7),gy-200,44,{alpha:nightA});drawSun(X(21.5),gy-200,44,{t,alpha:nightA});
+  axes(gx,gy,gw,gh,{ny:7});
+  for(let v=0;v<=140;v+=20)txt(v,gx-40,Y(v),38,{align:'right',color:DIM,weight:600,mono:true});
+  ['12:00','18:00','00:00','06:00','12:00'].forEach((s,i)=>txt(s,X(i*6),gy+gh+60,38,{color:DIM,weight:600,mono:true}));
+  txt('pg/mL',gx-60,gy-60,40,{align:'right',color:MUTED,weight:600});tag(gx,gy-90,'MELATONIN IN HUMAN BLOOD · 24 HOURS (measured ranges, simplified)',{align:'left',size:38});
+  // curve draw-on
+  const prog=ramp(lt,.6,5.2);
+  if(n>=20){const fa=eo(ramp(st,.2,2));ctx.save();ctx.globalAlpha*=fa;ctx.beginPath();ctx.moveTo(X(8.5),Y(0));for(let h=8.5;h<=19;h+=.1)ctx.lineTo(X(h),Y(melat(h)));ctx.lineTo(X(19),Y(0));ctx.closePath();const g=ctx.createLinearGradient(0,gy,0,gy+gh);g.addColorStop(0,rgba(AMBER,.55));g.addColorStop(1,rgba(AMBER,.05));ctx.fillStyle=g;ctx.fill();ctx.restore()}
+  ctx.save();ctx.strokeStyle=AMBER;ctx.lineWidth=14;ctx.lineCap='round';ctx.lineJoin='round';ctx.shadowColor=AMBER;ctx.shadowBlur=40;ctx.beginPath();for(let i=0;i<=240;i++){const h=i/240*24*prog;const x=X(h),y=Y(melat(h));i?ctx.lineTo(x,y):ctx.moveTo(x,y)}ctx.stroke();
+  if(prog<1){const h=24*prog;circ(X(h),Y(melat(h)),20);ctx.fillStyle=GOLD;ctx.fill()}ctx.restore();
+  // scene 18: daytime band 10-20
+  if(n>=18){const q=eo(ramp(t-72.32,.2,1.2));ctx.save();ctx.globalAlpha*=q;ctx.fillStyle=rgba(GOLD,.22);ctx.fillRect(gx,Y(20),X(8.5)-gx,Y(10)-Y(20));ctx.fillRect(X(19),Y(20),X(24)-X(19),Y(10)-Y(20));
+    ctx.save();ctx.translate(X(3.5),Y(20)-150*q);card(-360,-120,720,210,{r:40,stroke:rgba(GOLD,.7)});txt('DAYLIGHT',0,-55,42,{color:MUTED,weight:700,ls:4});txt('≈ 10–20 pg/mL',0,20,70,{color:GOLD,weight:900});ctx.restore();ctx.restore()}
+  // scene 19: picogram callout + night range 80-120
+  if(n>=19){const q=eo(ramp(t-76.8,.1,1.0)),q2=eo(ramp(t-76.8,2.4,3.4));ctx.save();ctx.globalAlpha*=q;
+    card(X(1)-120,gy+120,1150,320,{r:48,stroke:rgba(ICE,.5)});txt('1 picogram =',X(1)-80,gy+200,54,{align:'left',color:ICE,weight:800});txt('one trillionth of a gram',X(1)-80,gy+275,50,{align:'left',color:WHITE,weight:600});txt('0.000 000 000 001 g',X(1)-80,gy+360,46,{align:'left',color:MUTED,weight:500,mono:true});ctx.restore();
+    ctx.save();ctx.globalAlpha*=q2;ctx.fillStyle=rgba(AMBER,.16);ctx.fillRect(X(11),Y(120),X(19)-X(11),Y(80)-Y(120));ctx.save();ctx.translate(X(15),Y(120)-170);card(-380,-120,760,210,{r:40,stroke:rgba(AMBER,.7)});txt('NIGHT',0,-55,42,{color:MUTED,weight:700,ls:4});txt('≈ 80–120 pg/mL',0,20,70,{color:AMBER,weight:900});ctx.restore();ctx.restore()}
+  // scene 20: 80% counter
+  if(n>=20){const q=eo(ramp(st,.3,1.4));const val=Math.round(80*eo(ramp(st,.3,2.2)));ctx.save();ctx.globalAlpha*=q;ctx.translate(X(15),Y(45));txt('≈'+val+'%',0,-20,200,{color:GOLD,weight:900,glow:AMBER,blur:60});txt("of the day's supply is made after dark",0,130,50,{color:WHITE,weight:600});ctx.restore()}
+  ctx.restore()};
+/* ---- 03 THE 2015 HARVARD STUDY (scenes 21-25) ---- */
+V.study=function(S){const {t,lt,n,st}=S;
+  // left: paper card with citation; right: sleep lab
+  const pa=eo(ramp(lt,0,1));ctx.save();ctx.globalAlpha*=pa;ctx.translate(0,(1-pa)*200);
+  drawPaper(1000,CY-40,1500,1500,{rot:-.02});ctx.save();ctx.translate(1000,CY-40);ctx.rotate(-.02);
+  txt('PNAS',0,-620,110,{color:'#141a33',weight:900,ls:10});txt('Proceedings of the National Academy of Sciences',0,-520,40,{color:'#5a6075',weight:700});
+  const yr=Math.round(lerp(1990,2015,eo(ramp(lt,.4,1.8))));txt(String(yr),0,-380,170,{color:RED,weight:900,mono:true});
+  const ttl=wrapLines('Evening use of light-emitting eReaders negatively affects sleep, circadian timing, and next-morning alertness',1250,62,800);ttl.forEach((l,i)=>txt(l,0,-230+i*76,62,{color:'#141a33',weight:800}));
+  txt('Anne-Marie Chang · D. Aeschbach · J. F. Duffy · C. A. Czeisler',0,130,38,{color:'#5a6075',weight:700});txt("Brigham and Women's Hospital · Harvard Medical School",0,185,36,{color:'#5a6075',weight:500});
+  for(let i=0;i<7;i++){rr(-600,280+i*55,i%3==1?700:1200,22,11);ctx.fillStyle='rgba(20,26,51,0.12)';ctx.fill()}ctx.restore();
+  if(n>=22){const sp=elastic(ramp(t-92.58,.1,1));ctx.save();ctx.translate(1000,CY+560);ctx.rotate(.08);ctx.scale(sp,sp);rr(-520,-80,1040,160,24);ctx.lineWidth=12;ctx.strokeStyle=BLUE;ctx.stroke();txt('PEER-REVIEWED · 2015',0,4,66,{color:BLUE,weight:900,ls:6});ctx.restore()}
+  ctx.restore();
+  // right: sleep lab
+  const la=eo(ramp(lt,.5,1.5));ctx.save();ctx.globalAlpha*=la;const lx=2750,ly=CY;
+  card(lx-900,ly-760,1800,1560,{r:70,stroke:'rgba(255,255,255,0.18)'});tag(lx-820,ly-680,'CONTROLLED SLEEP LAB',{align:'left',size:40});
+  // monitoring lines (EEG style)
+  ctx.save();ctx.strokeStyle=rgba(GREEN,.7);ctx.lineWidth=4;ctx.beginPath();for(let i=0;i<=120;i++){const x=lx-820+i*13.6;ctx.lineTo(x,ly-560+Math.sin(i*.7+t*8)*10*(hash(Math.floor(i/5)+Math.floor(t*2))>.6?3:1))}ctx.stroke();ctx.restore();
+  drawBed(lx,ly+280,1400,{});drawPerson(lx-320,ly+230,460,{});
+  const ereader=n===24||(n===25&&st<.0);const mode=n>=25?1:n>=24?0:-1; // -1 none, 0 ereader, 1 book
+  const show=ramp(st,0,.6);if(mode===0){ctx.save();ctx.globalCompositeOperation='screen';glow(lx-120,ly+40,700,ICE,.45*show);ctx.restore();drawEReader(lx-110,ly+60,130,{rot:-.3,on:show,alpha:show})}
+  if(mode===1){ctx.save();ctx.globalCompositeOperation='screen';glow(lx-120,ly+40,400,GOLD,.18*show);ctx.restore();drawBook(lx-110,ly+60,130,{rot:-.2,alpha:show})}
+  // evenings calendar
+  if(n>=24){const q=ramp(st,0,1);for(let i=0;i<5;i++){const x=lx-620+i*300,y=ly-330;const isE=n===24?i%2===0:i%2===1;rr(x-120,y-70,240,140,24);ctx.fillStyle=isE?(n===24?rgba(ICE,.25):rgba(GOLD,.25)):'rgba(255,255,255,0.05)';ctx.fill();ctx.strokeStyle='rgba(255,255,255,0.2)';ctx.lineWidth=3;ctx.stroke();txt('EVENING '+(i+1),x,y-25,28,{color:MUTED,weight:700,ls:2});txt(isE?(n===24?'e-reader':'book'):(n===24?'book':'e-reader'),x,y+30,36,{color:isE?WHITE:DIM,weight:700,alpha:q})}}
+  pill(lx,ly+700,n>=25?'SAME PEOPLE · PRINTED BOOK':n>=24?'LIGHT-EMITTING E-READER':n>=23?'READING BEFORE BED':'VOLUNTEERS · 5 EVENINGS EACH',{color:n>=25?GOLD:ICE,size:44});
+  ctx.restore()};
+/* ---- 03 THE RESULTS (scenes 26-29) ---- */
+V.bars=function(S){const {t,lt,n,st}=S;const gx=420,gy=420,gw=1300,gh=1180;
+  const a=eo(ramp(lt,0,.8));ctx.save();ctx.globalAlpha*=a;axes(gx,gy,gw,gh,{ny:4});tag(gx,gy-60,'EVENING MELATONIN RISE · simplified',{align:'left',size:38});
+  const sup=eio(ramp(t,109.9,112.2));
+  const b1=bar(gx+180,gy+gh,380,gh*.78,GOLD,ramp(lt,.3,1.6),{glow:true});txt('PRINTED BOOK',gx+370,gy+gh+70,40,{color:GOLD,weight:800,ls:3});
+  const h2=gh*lerp(.78,.42,sup);const b2=bar(gx+740,gy+gh,380,h2,ICE,ramp(lt,.8,2.1),{glow:true});txt('E-READER',gx+930,gy+gh+70,40,{color:ICE,weight:800,ls:3});
+  if(sup>0){ctx.save();ctx.globalAlpha*=sup;arrow(gx+930,gy+gh-gh*.78-40,gx+930,gy+gh-h2-40,{color:RED,w:8,head:30});txt('−'+Math.round(55*sup)+'%',gx+1180,gy+gh-gh*.62,80,{color:RED,weight:900});txt('suppressed',gx+1180,gy+gh-gh*.62+80,40,{color:MUTED,weight:600});ctx.restore()}
+  ctx.restore();
+  // right: timing curves (scene 27) then result cards (28-29)
+  const rx=2050,ry=420,rw=1450,rh=620;const ca=eo(ramp(t-109.66,.3,1.3));
+  if(n>=27){ctx.save();ctx.globalAlpha*=ca;axes(rx,ry,rw,rh,{ny:3});tag(rx,ry-60,'MELATONIN ONSET · same evening',{align:'left',size:38});
+    const del=eio(ramp(t-109.66,1.6,3.2));
+    const drawC=(c,off,amp,p)=>{ctx.strokeStyle=c;ctx.lineWidth=10;ctx.lineCap='round';ctx.shadowColor=c;ctx.shadowBlur=30;ctx.beginPath();for(let i=0;i<=100;i++){const u=i/100;if(u>p)break;const v=amp/(1+Math.exp(-(u-off)*14));ctx.lineTo(rx+u*rw,ry+rh-v*rh*.85-20)}ctx.stroke()};
+    drawC(GOLD,.45,1,ramp(ca,0,1));drawC(ICE,.45+.22*del,1-.45*del,ramp(ca,.2,1));
+    txt('book',rx+rw*.62,ry+60,36,{color:GOLD,weight:700});txt('e-reader → later',rx+rw*.85,ry+rh*.55,36,{color:ICE,weight:700});
+    ['21:00','23:00','01:00'].forEach((s,i)=>txt(s,rx+i*rw/2,ry+rh+50,34,{color:DIM,weight:600,mono:true}));ctx.restore()}
+  const res=[{s:28,txt:'Took longer to fall asleep',c:RED,ic:(x,y)=>drawClock(x,y,60,{h:23,m:40,color:RED,hand:RED})},{s:28,d:1.6,txt:'Internal clock shifted later',c:VIOLET,ic:(x,y)=>{drawClock(x,y,60,{h:1,m:10,color:VIOLET,hand:VIOLET});arrow(x+80,y-60,x+120,y+10,{color:VIOLET,w:5,bend:-.6})}},{s:29,txt:'Less alert the next morning',c:ORANGE,ic:(x,y)=>{drawSun(x,y,34,{t,alpha:.55});line(x-55,y+55,x+55,y-55,RED,8)}}];
+  res.forEach((r,i)=>{const start=SCENES[r.s-1].s+(r.d||.2);const q=back(ramp(t,start,start+.8));if(q<=0)return;const y=1150+i*200;ctx.save();ctx.globalAlpha*=sat(q*2);ctx.translate((1-q)*300,0);card(rx,y,rw,160,{r:40,stroke:rgba(r.c,.5),shadow:false});r.ic(rx+110,y+80);txt(r.txt,rx+210,y+82,54,{align:'left',color:WHITE,weight:700});ctx.restore()})};
+/* ---- 03 AN HONEST DETAIL (scenes 30-33) ---- */
+V.honest=function(S){const {t,lt,n,st}=S;
+  if(n<=31){const a=n===31?1-eo(ramp(st,3.0,4.0)):1;ctx.save();ctx.globalAlpha*=a;
+    const q=back(ramp(lt,.1,.9));ctx.save();ctx.translate(CX,CY-80);ctx.scale(q,q);card(-1300,-520,2600,1040,{r:80,stroke:rgba(AMBER,.5),accent:AMBER});
+    txt('ONE HONEST DETAIL',0,-400,54,{color:AMBER,weight:800,ls:8});
+    drawClock(-820,80,230,{h:18+4*eo(ramp(lt,.8,3)),m:(eo(ramp(lt,.8,3))*240)%60,night:[Math.PI*1.5,Math.PI*1.5+TAU*(4/12)*eo(ramp(lt,.8,3))]});
+    headline('The lab sessions ran *longer *than *an *hour each evening',500,-120,84,{p:ramp(lt,.6,1.8),maxW:1500,hl:AMBER});
+    txt('about four hours of reading, five evenings in a row',500,120,46,{color:MUTED,weight:500,alpha:ramp(lt,1.8,2.6)});
+    if(n===31){txt('…but the effect follows a simple rule:',500,300,50,{color:WHITE,weight:600,alpha:ramp(st,.2,1)});
+      ['COLOR','BRIGHTNESS','DURATION'].forEach((s,i)=>{const p=back(ramp(st,.6+i*.35,1.3+i*.35));if(p<=0)return;ctx.save();ctx.globalAlpha*=sat(p*2);ctx.translate(-80+i*560,420);ctx.scale(p,p);pill(0,0,s+'  ?',{color:ICE,size:42});ctx.restore()})}
+    ctx.restore();ctx.restore()}
+  if(n>=32||(n===31&&st>3)){const q=n>=32?1:eo(ramp(st,3,4));ctx.save();ctx.globalAlpha*=q;
+    const rows=[{l:'SAME WORDS',ic:(x,y)=>{drawBook(x,y,70,{})},d:0},{l:'SAME VOLUNTEERS',ic:(x,y)=>{for(let i=-1;i<=1;i++)drawPerson(x+i*70,y+70,150,{})},d:.9},{l:'SAME LAB',ic:(x,y)=>{rr(x-80,y-60,160,120,16);ctx.strokeStyle='rgba(255,255,255,0.7)';ctx.lineWidth=6;ctx.stroke();drawBed(x,y+10,110,{})},d:1.8}];
+    const base=n>=32?SCENES[31].s+.3:t;
+    rows.forEach((r,i)=>{const p=back(ramp(t,base+r.d,base+r.d+.8));if(p<=0)return;const x=720+i*1200,y=720;ctx.save();ctx.globalAlpha*=sat(p*2);ctx.translate(x,y+(1-p)*200);card(-430,-260,860,620,{r:60});r.ic(0,-20);txt(r.l,0,230,52,{color:WHITE,weight:800,ls:4});drawCheck(330,-180,46,ramp(t,base+r.d+.5,base+r.d+1.2));ctx.restore()});
+    if(n>=33){const p=ramp(st,0,1);const y=1480;ctx.save();ctx.globalAlpha*=p;ctx.globalCompositeOperation='screen';glow(CX-600,y,500,ICE,.7*p);glow(CX+600,y,500,GOLD,.5*p);ctx.restore();
+      txt('ONLY THE LIGHT WAS DIFFERENT',CX,y,86,{color:WHITE,weight:900,ls:6,alpha:p,glow:ICE,blur:40});
+      headline('What in that light reached the brain? *And *how?',CX,y+170,64,{p:ramp(st,1.5,2.8),hl:CYAN,weight:600})}
+    ctx.restore()}};
+/* ---- 04 1917 · TADPOLES (scenes 34-38) ---- */
+const TADS=[];for(let i=0;i<14;i++)TADS.push({x:rnd()*2400+700,y:rnd()*900+700,dir:rnd()>.5?1:-1,sp:rnd()*60+40,ph:rnd()*10});
+V.tadpole=function(S){const {t,lt,n,st}=S;
+  const light=eio(ramp(t,154.5,157.5)); // skin turns lighter
+  // pond
+  ctx.save();const pa=eo(ramp(lt,0,1));ctx.globalAlpha=pa;ctx.beginPath();ctx.ellipse(CX,CY+150,1700,780,0,0,TAU);const g=ctx.createRadialGradient(CX,CY+150,100,CX,CY+150,1700);g.addColorStop(0,'rgba(40,90,110,0.55)');g.addColorStop(1,'rgba(10,30,50,0.75)');ctx.fillStyle=g;ctx.fill();ctx.strokeStyle='rgba(120,200,220,0.35)';ctx.lineWidth=6;ctx.stroke();
+  // ripples
+  for(let i=0;i<4;i++){const u=((t*.25+i/4)%1);ctx.beginPath();ctx.ellipse(CX-300+i*200,CY+100+i*80,u*600,u*260,0,0,TAU);ctx.strokeStyle=`rgba(160,220,240,${(1-u)*.25})`;ctx.lineWidth=3;ctx.stroke()}
+  ctx.save();ctx.beginPath();ctx.ellipse(CX,CY+150,1700,780,0,0,TAU);ctx.clip();
+  const tc=`rgb(${Math.round(lerp(43,190,light))},${Math.round(lerp(43,190,light))},${Math.round(lerp(58,205,light))})`;
+  TADS.forEach((td,i)=>{const x=td.x+Math.sin(t*.3+td.ph)*td.sp*4,y=td.y+Math.cos(t*.4+td.ph)*40;const dir=Math.cos(t*.3+td.ph)>0?1:-1;ctx.save();ctx.translate(x,y);ctx.scale(dir,1);drawTadpole(0,0,58,t,{ph:td.ph,color:tc});ctx.restore()});ctx.restore();ctx.restore();
+  // year
+  const yr=Math.round(lerp(1850,1917,eo(ramp(lt,.2,2.2))));txt(yr,CX,330,220,{color:WHITE,weight:900,mono:true,alpha:ramp(lt,.1,.8),glow:ICE,blur:50});
+  txt('decades before anyone owned a screen',CX,490,52,{color:MUTED,weight:500,alpha:ramp(lt,1.4,2.2)});
+  if(n>=35){const q=back(ramp(t-147.72,.2,1));ctx.save();ctx.globalAlpha*=sat(q*2);ctx.translate(560,CY+(1-q)*200);card(-420,-200,840,400,{r:50,stroke:rgba(AMBER,.5)});txt('Carey Pratt McCord',0,-90,62,{color:WHITE,weight:800});txt('&',0,-10,46,{color:MUTED});txt('Floyd Allen',0,70,62,{color:WHITE,weight:800});txt('cow pineal gland extract → tadpoles',0,150,34,{color:AMBER,weight:600});ctx.restore()}
+  if(n>=36){const q=ramp(t-152.18,.1,1.6);// dropper
+    ctx.save();const dy=lerp(-300,0,eo(q));ctx.translate(CX+760,560+dy);rr(-40,-200,80,330,30);ctx.fillStyle='rgba(255,255,255,0.15)';ctx.fill();ctx.strokeStyle='rgba(255,255,255,0.7)';ctx.lineWidth=6;ctx.stroke();rr(-60,-280,120,100,40);ctx.fillStyle='#2a3150';ctx.fill();ctx.stroke();
+    ctx.fillStyle=AMBER;rr(-30,0,60,120,20);ctx.fill();const drop=(t*1.2)%1;if(q>.9){ctx.globalAlpha=1-drop;circ(0,150+drop*500,18+drop*8);ctx.fill()}ctx.restore();
+    pill(CX+760,250,'PINEAL EXTRACT',{color:AMBER,size:36,alpha:q});
+    const arrowP=ramp(t-152.18,2.4,3.4);txt('skin turned lighter',CX+900,CY+700,60,{color:ICE,weight:800,alpha:arrowP,glow:ICE})}
+  if(n>=37){const q=back(ramp(t-157.2,.1,.9));const con=eio(ramp(t-157.2,.8,3.2));ctx.save();ctx.globalAlpha*=sat(q*2);ctx.translate(3000,CY-60);ctx.scale(q,q);card(-520,-520,1040,1040,{r:60,stroke:rgba(ICE,.5)});
+    ctx.save();rr(-470,-470,940,940,40);ctx.clip();ctx.fillStyle=`rgb(${Math.round(lerp(120,215,con))},${Math.round(lerp(110,200,con))},${Math.round(lerp(100,185,con))})`;ctx.fillRect(-470,-470,940,940);
+    for(let i=0;i<16;i++){const cx=-350+(i%4)*235,cy=-350+Math.floor(i/4)*235;const spread=lerp(95,22,con);ctx.fillStyle='rgba(30,20,30,0.9)';ctx.beginPath();for(let k=0;k<16;k++){const an=k/16*TAU,rr2=k%2?spread:spread*.35+8;ctx.lineTo(cx+Math.cos(an+i)*rr2,cy+Math.sin(an+i)*rr2)}ctx.closePath();ctx.fill()}ctx.restore();
+    txt('PIGMENT CELLS CONTRACTING',0,-560+30,40,{color:ICE,weight:800,ls:4});ctx.restore()}
+  if(n>=38){const q=back(ramp(st,.1,.8));ctx.save();ctx.globalAlpha*=sat(q*2);ctx.translate(CX-900,CY-150);ctx.scale(q,q);txt('z',0,0,220,{color:VIOLET,weight:900,alpha:.9});txt('z',120,-140,160,{color:VIOLET,weight:900,alpha:.7});txt('z',210,-250,110,{color:VIOLET,weight:900,alpha:.5});
+    line(-200,200,350,-330,RED,22);ctx.restore()}};
+/* ---- 04 1958 · YALE (scenes 39-46) ---- */
+function drawScientist(x,y,s,o={}){ctx.save();ctx.translate(x,y);ctx.scale(s,s);ctx.globalAlpha*=o.alpha??1;
+  ctx.fillStyle='#e9ecf7';ctx.beginPath();ctx.moveTo(-1.4,1.6);ctx.lineTo(-1.3,.5);ctx.quadraticCurveTo(-1.2,-.1,-.55,-.2);ctx.lineTo(0,.35);ctx.lineTo(.55,-.2);ctx.quadraticCurveTo(1.2,-.1,1.3,.5);ctx.lineTo(1.4,1.6);ctx.closePath();ctx.fill(); // lab coat
+  ctx.strokeStyle='rgba(20,26,51,0.35)';ctx.lineWidth=.05;ctx.beginPath();ctx.moveTo(0,.35);ctx.lineTo(0,1.6);ctx.stroke();ctx.fillStyle='#2b3560';ctx.beginPath();ctx.moveTo(-.2,-.2);ctx.lineTo(.2,-.2);ctx.lineTo(0,.5);ctx.closePath();ctx.fill(); // tie
+  ctx.fillStyle='#f3cfae';circ(0,-.85,.55);ctx.fill();ctx.fillStyle='#3a3a44';ctx.beginPath();ctx.arc(0,-.95,.56,Math.PI*1.05,Math.PI*1.95);ctx.lineTo(.5,-1.1);ctx.closePath();ctx.fill(); // hair
+  ctx.strokeStyle='#1a1a22';ctx.lineWidth=.05;rr(-.5,-.95,.4,.26,.08);ctx.stroke();rr(.1,-.95,.4,.26,.08);ctx.stroke();ctx.beginPath();ctx.moveTo(-.1,-.84);ctx.lineTo(.1,-.84);ctx.stroke(); // glasses
+  ctx.beginPath();ctx.moveTo(-.18,-.55);ctx.quadraticCurveTo(0,-.42,.18,-.55);ctx.stroke();ctx.restore()}
+V.lerner=function(S){const {t,lt,n,st}=S;
+  // portrait panel (left) persists through 43
+  if(n<=44){const a=n===44?1-eo(ramp(st,1.8,2.6)):1;ctx.save();ctx.globalAlpha*=a;const q=eo(ramp(lt,0,1));ctx.translate(0,(1-q)*150);
+    card(260,300,1300,1500,{r:70,stroke:rgba(ICE,.4)});ctx.save();ctx.globalCompositeOperation='screen';glow(910,900,700,ICE,.14);ctx.restore();
+    drawScientist(910,900,290,{});txt('AARON B. LERNER',910,1480,62,{color:WHITE,weight:900,ls:4});txt('Dermatology · Yale University',910,1560,42,{color:MUTED,weight:500});
+    const yr=Math.round(lerp(1917,n>=41?1958:1950,eo(ramp(lt,.3,2.6))));txt(yr,910,420,130,{color:ICE,weight:900,mono:true});txt('four decades later',910,520,38,{color:MUTED,weight:500,ls:4});ctx.restore();
+    // right panel content by scene
+    const rx=2650,ry=CY;
+    if(n===39||n===40){const p=eo(ramp(lt,.8,1.8));ctx.save();ctx.globalAlpha*=p;card(rx-900,ry-650,1800,1300,{r:70});
+      // skin patch with disease spots, hope arrow
+      ctx.save();rr(rx-700,ry-450,1400,700,40);ctx.clip();ctx.fillStyle='#e8b894';ctx.fillRect(rx-700,ry-450,1400,700);const heal=n===40?eo(ramp(st,1.5,4)):0;for(let i=0;i<10;i++){ctx.fillStyle=`rgba(190,60,60,${.6*(1-heal)})`;circ(rx-600+hash(i)*1200,ry-350+hash(i+5)*500,40+hash(i+9)*50);ctx.fill()}ctx.restore();
+      txt(n===40?'could a pineal substance treat skin diseases?':'the clue: pineal extract lightens skin',rx,ry+380,54,{color:WHITE,weight:700});
+      if(n===40)txt('HIS HYPOTHESIS',rx,ry-540,40,{color:AMBER,weight:800,ls:6});ctx.restore()}
+    if(n===41||n===42||n===43){const p=eo(ramp(t-171.88,.2,1.2));ctx.save();ctx.globalAlpha*=p;
+      // flask with extract -> crystals
+      const fx=rx-500,fy=ry+200;ctx.save();ctx.translate(fx,fy);ctx.lineWidth=12;ctx.strokeStyle=WHITE;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(-70,-420);ctx.lineTo(-70,-180);ctx.lineTo(-260,220);ctx.quadraticCurveTo(-280,280,-220,280);ctx.lineTo(220,280);ctx.quadraticCurveTo(280,280,260,220);ctx.lineTo(70,-180);ctx.lineTo(70,-420);ctx.closePath();ctx.stroke();
+      ctx.save();ctx.clip();ctx.fillStyle=rgba(AMBER,.45);ctx.fillRect(-300,60,600,300);ctx.restore();
+      const cr=eo(ramp(t-171.88,1.6,3.4));for(let i=0;i<7;i++){ctx.save();ctx.translate(-150+i*50,190-hash(i)*60);ctx.rotate(hash(i+3)*3);ctx.scale(cr,cr);ctx.fillStyle=GOLD;ctx.shadowColor=GOLD;ctx.shadowBlur=30;rr(-14,-40,28,80,6);ctx.fill();ctx.restore()}ctx.restore();
+      txt('isolated from cow pineal glands',fx,fy+400,44,{color:MUTED,weight:600});txt('1958',fx,fy-520,120,{color:GOLD,weight:900,mono:true});
+      // frog fading paler (scene 42)
+      const fade=n>=42?eio(ramp(t-176.0,.6,3.6)):0;const fr=rx+450,fyy=ry+180;ctx.save();ctx.globalAlpha*=ramp(t-176.0,0,.6);
+      const col=`rgb(${Math.round(lerp(58,170,fade))},${Math.round(lerp(166,215,fade))},${Math.round(lerp(85,150,fade))})`;drawFrog(fr,fyy,170,{color:col,spots:(1-fade)*.8});txt('skin fades paler',fr,fyy+330,44,{color:ICE,weight:700,alpha:ramp(t-176.0,2,3)});ctx.restore();
+      ctx.restore()}
+    if(n===43||n===44){const p=eo(ramp(t-180.52,.2,1.0));const base=t-180.52;ctx.save();ctx.globalAlpha*=p*(n===44?1-eo(ramp(st,1.8,2.6)):1);
+      ctx.save();ctx.globalCompositeOperation='screen';glow(rx,ry-350,800,AMBER,.15);ctx.restore();
+      txt('μέλας',rx,ry-450,170,{color:WHITE,weight:900,alpha:ramp(base,.2,.8)});txt('melas · Greek · "black, dark"',rx,ry-310,46,{color:MUTED,weight:500,alpha:ramp(base,.8,1.4)});
+      // assemble MELA + TONIN
+      const m=eo(ramp(base,1.4,2.3));ctx.save();ctx.translate(rx,ry-80);font(190,900);const w1=ctx.measureText('MELA').width,w2=ctx.measureText('TONIN').width;const total=w1+w2;
+      txt('MELA',lerp(-w1/2,-total/2+w1/2,m),(1-m)*-120,190,{color:GOLD,weight:900,glow:AMBER,blur:50,alpha:ramp(base,1.2,1.6)});txt('TONIN',lerp(w2/2+600,-total/2+w1+w2/2,m),0,190,{color:WHITE,weight:900,alpha:ramp(base,1.6,2.2)});ctx.restore();
+      txt('serotonin → melatonin: named for what it did to skin',rx,ry+110,42,{color:MUTED,weight:500,alpha:ramp(base,2.6,3.4)});ctx.restore()}
+    ctx.restore()}
+  // scenes 44-46: skin compound -> daily rhythm -> clock signal
+  if(n>=44){const base=t-185.12;const a=eo(ramp(base,2.7,3.6));ctx.save();ctx.globalAlpha*=a;
+    // left: 'skin compound' crossed, mid-1970s
+    const sx=800,sy=CY-100;card(sx-560,sy-520,1120,1040,{r:70});txt('A SKIN COMPOUND?',sx,sy-380,56,{color:WHITE,weight:800,ls:4});
+    ctx.save();rr(sx-420,sy-280,840,460,40);ctx.clip();ctx.fillStyle='#e8b894';ctx.fillRect(sx-420,sy-280,840,460);ctx.restore();const cr=eo(ramp(base,3.4,4.4));drawCross(sx,sy-50,150,cr);
+    txt('mid-1970s',sx,sy+300,110,{color:ICE,weight:900,mono:true,alpha:ramp(base,3.8,4.6)});txt('research showed something else',sx,sy+400,40,{color:MUTED,weight:500,alpha:ramp(base,4.2,5)});
+    // right: rhythm curve over 48h, then clock morph
+    const rx=2500,ry=CY-100,rw=1900,rh=800;if(n>=45){const p=eo(ramp(t-190.6,0,1));ctx.save();ctx.globalAlpha*=p;axes(rx-rw/2,ry-rh/2,rw,rh,{ny:3});tag(rx-rw/2,ry-rh/2-60,'HUMAN PINEAL MELATONIN · 48 HOURS',{align:'left',size:36});
+      for(let d=0;d<2;d++){ctx.fillStyle=rgba(VIOLET,.12);ctx.fillRect(rx-rw/2+rw*(d/2+.35/2),ry-rh/2,rw*.4/2,rh)}
+      const prog=ramp(t-190.6,.3,3.6);ctx.strokeStyle=AMBER;ctx.lineWidth=12;ctx.lineCap='round';ctx.shadowColor=AMBER;ctx.shadowBlur=40;ctx.beginPath();for(let i=0;i<=300;i++){const u=i/300;if(u>prog)break;const h=u*48%24;const v=melat(h)/140;ctx.lineTo(rx-rw/2+u*rw,ry+rh/2-v*rh*.9-20)}ctx.stroke();ctx.shadowColor='transparent';
+      ['day','night','day','night'].forEach((s,i)=>txt(s,rx-rw/2+rw*(i/4+.125),ry+rh/2+50,34,{color:DIM,weight:600}));
+      txt('a daily rhythm',rx,ry-rh/2-150,70,{color:GOLD,weight:900,alpha:ramp(t-190.6,2.5,3.3)});ctx.restore()}
+    if(n>=46){const p=back(ramp(st,.2,1.1));ctx.save();ctx.globalAlpha*=sat(p*2);ctx.translate(rx,ry+rh/2+330);ctx.scale(p,p);drawClock(-520,0,110,{h:22,m:(st*20)%60,night:[Math.PI*1.5,Math.PI*2.2]});txt('A CLOCK SIGNAL',120,0,110,{color:WHITE,weight:900,ls:6,glow:ICE,blur:40});ctx.restore()}
+    ctx.restore()}};
+/* ---- 05 EYE → CLOCK → GLAND (scenes 47-56) ---- */
+let NEP=[];
+V.pathway=function(S){const {t,lt,n,st}=S;
+  const shrink=eio(ramp(t,216.9,218.4)); // diagram shrinks to the top for the factory
+  const sc=lerp(1,.5,shrink),oy=lerp(0,-620,shrink);
+  ctx.save();ctx.translate(CX,CY+oy);ctx.scale(sc,sc);ctx.translate(-CX,-CY);
+  const ex=760,ey=CY+60,bx=2520,by=CY+20;
+  // brain outline with SCN and pineal
+  const b=drawBrain(bx,by,520,{color:PINK,glow:24,lw:.026,alpha:eo(ramp(lt,0,1))});const scnx=bx-120,scny=by+230;
+  // eye
+  const eyeA=eo(ramp(t,200.9,202));drawEye(ex,ey,260,{alpha:Math.max(.25,eyeA),glow:eyeA>.5,retinaA:.5+.5*eyeA});
+  if(n>=48){const q=ramp(t-200.94,.6,2);for(let i=0;i<9;i++){const an=-Math.PI*.38+i/8*Math.PI*.76;const rr2=260*.9;const px=ex+Math.cos(an)*rr2,py=ey+Math.sin(an)*rr2;ctx.save();ctx.globalAlpha*=ramp(q,i/9,i/9+.2);ctx.fillStyle=CYAN;ctx.shadowColor=CYAN;ctx.shadowBlur=30;circ(px,py,14+6*pulse(t,2,i/9));ctx.fill();ctx.restore()}
+    txt('LIGHT-SENSING CELLS',ex,ey+400,52,{color:CYAN,weight:800,ls:4,alpha:q});txt('(ipRGCs in the retina)',ex,ey+460,38,{color:MUTED,weight:500,alpha:q})}
+  // incoming light
+  if(n>=47){for(let i=-1;i<=1;i++)arrow(120,ey-120+i*110,ex-290,ey+i*30,{p:ramp(lt,.3,1.2),color:ICE,w:5,alpha:.8,head:18,glow:true,dash:[30,30],t})}
+  // SCN
+  if(n>=49){const q=ramp(t-204.96,0,1.2);arrow(ex+260*2.6,ey+70,scnx-60,scny,{p:q,color:CYAN,w:10,bend:.15,glow:true});
+    const sp=1+.08*pulse(t,1.6);ctx.save();ctx.translate(scnx,scny);ctx.scale(sp,sp);ctx.globalAlpha=ramp(q,.6,1);for(let i=0;i<7;i++){const an=i/7*TAU;circ(Math.cos(an)*34,Math.sin(an)*34,22);ctx.fillStyle=rgba(CYAN,.85);ctx.shadowColor=CYAN;ctx.shadowBlur=40;ctx.fill()}circ(0,0,20);ctx.fill();ctx.restore();
+    txt(n>=50?'MASTER CLOCK':'SUPRACHIASMATIC NUCLEI',scnx-20,scny+230,52,{color:CYAN,weight:800,ls:4,alpha:ramp(q,.7,1)});if(n>=50)txt('suprachiasmatic nuclei · hypothalamus',scnx-20,scny+290,36,{color:MUTED,weight:500,alpha:ramp(t-208.86,.3,1)})}
+  if(n>=50){const q=ramp(t-208.86,.2,1.2);ctx.save();ctx.globalAlpha*=q;ctx.strokeStyle=rgba(CYAN,.6);ctx.lineWidth=5;const r=110+40*((t*.5)%1);ctx.globalAlpha*=1-((t*.5)%1);circ(scnx,scny,r);ctx.stroke();ctx.restore()}
+  // clock -> pineal
+  if(n>=51){const q=ramp(t-212.24,.3,1.6);arrow(scnx+60,scny-30,b.px-30,b.py+10,{p:q,color:AMBER,w:10,bend:.35,glow:true});drawPineal(b.px,b.py,30,ramp(q,.8,1),t);txt('PINEAL GLAND',b.px+80,b.py-200,52,{align:'left',color:AMBER,weight:800,ls:4,alpha:ramp(q,.8,1)})}
+  else{drawPineal(b.px,b.py,30,.35+.2*pulse(t,1),t);if(n===47)txt('buried deep inside',b.px,b.py-170,52,{color:AMBER,weight:800,alpha:ramp(lt,.8,1.6)})}
+  if(n===51){const q=ramp(st,0,1);['EYE','CLOCK','GLAND'].forEach((s,i)=>pill([ex,scnx,b.px][i],330,s,{color:[CYAN,CYAN,AMBER][i],size:44,alpha:ramp(q,i*.3,i*.3+.3)}))}
+  ctx.restore();
+  // factory (scenes 52-54)
+  if(n>=52&&n<=55){const base=t-216.9;const a=eo(ramp(base,.6,1.6))*(n===55?1-eo(ramp(st,0,.8)):1);ctx.save();ctx.globalAlpha*=a;const fy=CY+300;
+    card(360,fy-400,3120,760,{r:70,stroke:'rgba(255,255,255,0.14)'});tag(440,fy-330,'THE MELATONIN ASSEMBLY LINE · pineal cell',{align:'left',size:38});
+    const day=n>=53?eio(ramp(t-222.22,.6,2.2)):0; // daylight state
+    // belt
+    for(let i=0;i<40;i++){const u=((i/40)+(day?0:t*.08))%1;ctx.fillStyle='rgba(255,255,255,0.08)';rr(520+u*2800,fy+180,60,24,8);ctx.fill()}line(520,fy+170,3320,fy+170,'rgba(255,255,255,0.25)',4);
+    // serotonin boxes moving right
+    for(let i=0;i<5;i++){const u=((i/5)+(day?0:t*.08))%1;const x=600+u*2700;const isM=x>2000;ctx.save();ctx.globalAlpha*=sat((1-u)*4)*sat(u*4);circ(x,fy+100,46);ctx.fillStyle=isM?rgba(GOLD,.9):rgba(VIOLET,.8);ctx.shadowColor=isM?GOLD:VIOLET;ctx.shadowBlur=30;ctx.fill();txt(isM?'MEL':'SER',x,fy+102,28,{color:INK,weight:900});ctx.restore()}
+    // enzyme gear in the middle
+    const gx=1920,gy=fy+20;const broken=n>=53?eio(ramp(t-222.22,2.4,4.4)):0;
+    if(broken<1){ctx.save();ctx.globalAlpha*=1-broken;const rot=day?0:t*1.5;drawGear(gx,gy,140,10,rot,GREEN);txt('ENZYME',gx,gy+2,40,{color:GREEN,weight:900});ctx.restore()}
+    if(broken>0){for(let i=0;i<8;i++){const an=i/8*TAU,d=broken*420;ctx.save();ctx.globalAlpha*=(1-broken)*.9;ctx.translate(gx+Math.cos(an)*d,gy+Math.sin(an)*d+broken*broken*300);ctx.rotate(an+broken*5);ctx.fillStyle=rgba(GREEN,.6);rr(-30,-18,60,36,8);ctx.fill();ctx.restore()}
+      txt('BROKEN DOWN',gx,gy-220,70,{color:RED,weight:900,ls:6,alpha:ramp(broken,.2,.6),glow:RED,blur:30})}
+    txt('(AANAT — the rate-limiting step)',gx,gy+210,34,{color:DIM,weight:500});
+    // norepinephrine messenger arrives at night
+    if(!day){if(NEP.length<24&&Math.random()<.5)NEP.push({u:0});NEP.forEach(p=>p.u+=.012);NEP=NEP.filter(p=>p.u<1);
+      NEP.forEach(p=>{const x=lerp(2900,gx,p.u),y=lerp(fy-330,gy-170,p.u);ctx.save();ctx.globalAlpha*=sat(p.u*4)*sat((1-p.u)*3);circ(x,y,16);ctx.fillStyle=CYAN;ctx.shadowColor=CYAN;ctx.shadowBlur=30;ctx.fill();ctx.restore()})}else NEP=[];
+    pill(2900,fy-330,day?'DAYLIGHT · SIGNAL STOPS':'NIGHT · NOREPINEPHRINE SIGNAL',{color:day?ICE:CYAN,size:40});
+    if(n===54){txt('daylight does not just pause the factory — it dismantles the machine',CX,fy+280,48,{color:WHITE,weight:700,alpha:ramp(st,.3,1.2)})}
+    ctx.restore()}
+  // half-life (scenes 55-56)
+  if(n>=55){const base=t-233.74;const a=eo(ramp(base,.6,1.6));ctx.save();ctx.globalAlpha*=a;const fy=CY+300;card(360,fy-400,3120,760,{r:70,stroke:rgba(AMBER,.35)});tag(440,fy-330,'MELATONIN IN THE BLOOD · HALF-LIFE',{align:'left',size:38});
+    // vessel with particles clearing
+    ctx.save();rr(440,fy-220,1500,440,220);ctx.clip();ctx.fillStyle='rgba(255,70,90,0.18)';ctx.fillRect(440,fy-220,1500,440);const clear=ramp(base,1,6);for(let i=0;i<60;i++){const alive=hash(i)>clear;const x=440+hash(i*3)*1500+Math.sin(t+i)*20,y=fy-220+hash(i*5)*440;ctx.save();ctx.globalAlpha*=alive?1:0;circ(x,y,16);ctx.fillStyle=GOLD;ctx.shadowColor=GOLD;ctx.shadowBlur=20;ctx.fill();ctx.restore()}ctx.restore();rr(440,fy-220,1500,440,220);ctx.strokeStyle=rgba(RED,.5);ctx.lineWidth=6;ctx.stroke();
+    // decay curve
+    const cx=2200,cy=fy-220,cw=1150,ch=440;axes(cx,cy,cw,ch,{ny:2});ctx.strokeStyle=AMBER;ctx.lineWidth=10;ctx.lineCap='round';ctx.shadowColor=AMBER;ctx.shadowBlur=30;ctx.beginPath();const prog=ramp(base,.8,3.5);for(let i=0;i<=100;i++){const u=i/100;if(u>prog)break;ctx.lineTo(cx+u*cw,cy+ch-Math.pow(.5,u*3)*ch*.9)}ctx.stroke();ctx.shadowColor='transparent';
+    ctx.strokeStyle='rgba(255,255,255,0.3)';ctx.setLineDash([14,14]);ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(cx,cy+ch*.55);ctx.lineTo(cx+cw/3,cy+ch*.55);ctx.lineTo(cx+cw/3,cy+ch);ctx.stroke();ctx.setLineDash([]);txt('½',cx-40,cy+ch*.55,36,{color:MUTED,weight:700});
+    if(n>=56){txt('20–50 min',cx+cw/2,cy+ch/2-40,110,{color:GOLD,weight:900,mono:true,alpha:ramp(st,.5,1.3),glow:AMBER,blur:40});txt('to clear half of it',cx+cw/2,cy+ch/2+60,40,{color:MUTED,weight:500,alpha:ramp(st,1,1.6)})}
+    ctx.restore()}};
+/* ---- 06 THE COLOR RULE (scenes 57-62) ---- */
+V.spectrum=function(S){const {t,lt,n,st}=S;const sx=420,sw=3000,sy=CY-80,sh=220;const X=wl=>sx+(wl-380)/(700-380)*sw;
+  const a=eo(ramp(lt,0,1));ctx.save();ctx.globalAlpha*=a;
+  if(n===57){headline("The simple rule starts with *color",CX,420,120,{p:ramp(lt,.2,1.3),hl:CYAN})}
+  // spectrum bar with draw-on
+  const reveal=ramp(lt,.4,2.0);ctx.save();rr(sx,sy,sw,sh,40);ctx.clip();for(let i=0;i<200;i++){const u=i/200;if(u>reveal)break;const wl=380+u*320;ctx.fillStyle=wlColor(wl);ctx.fillRect(sx+u*sw,sy,sw/200+2,sh)}ctx.restore();
+  rr(sx,sy,sw,sh,40);ctx.strokeStyle='rgba(255,255,255,0.3)';ctx.lineWidth=4;ctx.stroke();
+  [400,450,500,550,600,650,700].forEach(wl=>{txt(wl+' nm',X(wl),sy+sh+60,34,{color:DIM,weight:600,mono:true,alpha:ramp(reveal,(wl-380)/320,1)})});
+  // blue band highlight 460-480
+  if(n>=58){const q=eo(ramp(t-243.7,.4,1.6));ctx.save();ctx.globalAlpha*=q;ctx.globalCompositeOperation='screen';glow(X(470),sy+sh/2,520+60*pulse(t,1.3),CYAN,.9);ctx.restore();
+    ctx.save();ctx.globalAlpha*=q;rr(X(460),sy-30,X(480)-X(460),sh+60,20);ctx.strokeStyle=WHITE;ctx.lineWidth=8;ctx.shadowColor=CYAN;ctx.shadowBlur=40;ctx.stroke();ctx.restore();
+    // dim the rest
+    ctx.save();ctx.globalAlpha*=q*.55;ctx.fillStyle='rgba(3,4,12,1)';rr(sx,sy,X(460)-sx,sh,0);ctx.fill();rr(X(480),sy,sx+sw-X(480),sh,0);ctx.fill();ctx.restore();
+    txt('BLUE LIGHT',X(470),sy-220,100,{color:CYAN,weight:900,ls:8,alpha:q,glow:CYAN,blur:50});
+    if(n>=59){const q2=eo(ramp(t-248.54,.2,1));txt('460–480 nm',X(470),sy-110,70,{color:WHITE,weight:800,mono:true,alpha:q2});txt('suppresses melatonin the most',X(470),sy+sh+150,52,{color:ICE,weight:700,alpha:ramp(t-248.54,1.2,2)})}}
+  // scene 60: brightness + duration sliders
+  if(n>=60&&n<=60){const q=eo(ramp(st,.2,1));ctx.save();ctx.globalAlpha*=q;const by=sy+sh+330;
+    [['BRIGHTNESS','brighter'],['DURATION','longer']].forEach((r,i)=>{const x=760+i*1600,w=1000;const f=eo(ramp(st,.8+i*.6,3+i*.6));rr(x,by+i*0,w,36,18);ctx.fillStyle='rgba(255,255,255,0.1)';ctx.fill();rr(x,by,w*f,36,18);ctx.fillStyle=ICE;ctx.shadowColor=ICE;ctx.shadowBlur=30;ctx.fill();ctx.shadowColor='transparent';circ(x+w*f,by+18,36);ctx.fillStyle=WHITE;ctx.fill();
+      txt(r[0],x,by-70,44,{align:'left',color:MUTED,weight:800,ls:4});txt('↑ '+r[1],x+w+40,by+18,44,{align:'left',color:WHITE,weight:700})});
+    txt('→ stronger suppression',CX,by+200,80,{color:RED,weight:900,alpha:ramp(st,2.4,3.2),glow:RED,blur:30});ctx.restore()}
+  // scene 61-62: >530 nm no suppression
+  if(n>=61){const q=eo(ramp(t-257.62,.2,1.2));ctx.save();ctx.globalAlpha*=q;ctx.save();ctx.globalAlpha*=q*.45;ctx.fillStyle='rgba(3,4,12,1)';rr(sx,sy,X(530)-sx,sh,0);ctx.fill();ctx.restore();
+    line(X(530),sy-60,X(530),sy+sh+60,WHITE,6);txt('530 nm',X(530),sy-100,46,{color:WHITE,weight:800,mono:true});
+    ctx.save();ctx.globalCompositeOperation='screen';glow(X(615),sy+sh/2,800,GOLD,.3*q);ctx.restore();
+    txt('only wavelengths above 530 nm',X(615),sy+sh+150,52,{color:GOLD,weight:700});
+    if(n>=62){const q2=back(ramp(st,.1,.8));ctx.save();ctx.translate(X(615),sy+sh+330);ctx.scale(q2,q2);pill(0,0,'NO SUPPRESSION AT ALL',{color:GREEN,size:56});drawCheck(-620,0,60,ramp(st,.5,1.2));ctx.restore()}
+    ctx.restore()}
+  ctx.restore()};
+/* ---- 06 A HISTORY OF EVENING LIGHT (scenes 63-66) ---- */
+V.hist=function(S){const {t,lt,n,st}=S;
+  const items=[{s:63,label:'FIRE',sub:'mostly yellow · little blue',c:ORANGE,draw:(x,y)=>drawFire(x,y+220,170,t)},{s:64,label:'INCANDESCENT BULB',sub:'20th century · relatively little blue',c:WARM,draw:(x,y)=>drawBulb(x,y+40,260,{})},{s:65,label:'SCREENS & LED BULBS',sub:'shifted toward blue',c:CYAN,draw:(x,y)=>{drawPhone(x-150,y+40,260,520,{rot:-.15,glowColor:ICE,glowA:.6,screen:[rgba(ICE,.95),rgba(BLUE,.9)]});drawBulb(x+190,y-20,170,{color:ICE})}}];
+  const ya=400;
+  items.forEach((it,i)=>{const start=SCENES[it.s-1].s;const p=back(ramp(t,start+.1,start+1));if(p<=0)return;const x=720+i*1200;const act=n===it.s;ctx.save();ctx.globalAlpha*=sat(p*2)*(n>it.s?.55:1);ctx.translate(x,ya+(1-p)*200);
+    card(-500,0,1000,1140,{r:64,stroke:act?rgba(it.c,.6):undefined,accent:it.c});it.draw(0,420);
+    txt(it.label,0,900,52,{color:it.c,weight:900,ls:4});txt(it.sub,0,970,38,{color:MUTED,weight:500});
+    // mini spectrum: energy distribution
+    const mx=-380,my=1040,mw=760;const blueFrac=[.08,.18,.55][i];for(let k=0;k<60;k++){const u=k/60,wl=380+u*320;const e=i===2?(u<.3?1:0.55):(0.25+0.75*u);ctx.fillStyle=wlColor(wl);ctx.globalAlpha=sat(p*2)*(n>it.s?.5:1)*e;ctx.fillRect(mx+u*mw,my,mw/60+1,36)}
+    ctx.globalAlpha=sat(p*2);rr(mx,my,mw*.31,36,0);ctx.strokeStyle=CYAN;ctx.lineWidth=3;ctx.stroke();txt(Math.round(blueFrac*100)+'% blue',mx+mw*.31+20,my+18,30,{align:'left',color:CYAN,weight:700});
+    ctx.restore()});
+  if(n===63)txt('for most of human history…',CX,300,56,{color:MUTED,weight:500,alpha:ramp(lt,.2,1)});
+  if(n>=66){const q=eo(ramp(st,.1,.9));ctx.save();ctx.globalAlpha*=q;ctx.fillStyle='rgba(3,4,12,0.6)';ctx.fillRect(0,0,W,H);ctx.restore();
+    drawPhone(CX,CY-60,520,1060,{rot:-.1,glowColor:ICE,glowA:.7*q,screen:[rgba(ICE,.95),rgba(BLUE,.9)],content:(sw,sh)=>feed(sw,sh,t)});
+    headline('your *evening *routine',CX,CY+640,110,{p:ramp(st,.4,1.3),hl:CYAN,weight:900})}};
+/* ---- 07 THE FIXES (scenes 67-70) ---- */
+V.market=function(S){const {t,lt,n,st}=S;
+  const goods=[{l:'GLASSES',d:(x,y)=>drawGlasses(x,y,60),c:ORANGE},{l:'APPS',d:(x,y)=>{rr(x-110,y-110,220,220,50);ctx.fillStyle=rgba(VIOLET,.3);ctx.fill();ctx.strokeStyle=VIOLET;ctx.lineWidth=6;ctx.stroke();drawMoon(x,y,60,{})},c:VIOLET},{l:'SCREEN SETTINGS',d:(x,y)=>{rr(x-140,y-50,280,100,50);ctx.fillStyle=rgba(WARM,.35);ctx.fill();circ(x+90,y,42);ctx.fillStyle=WHITE;ctx.fill();txt('NIGHT',x-50,y+2,30,{color:WHITE,weight:800})},c:WARM},{l:'GUMMIES',d:(x,y)=>{drawGummy(x-50,y-20,70,RED);drawGummy(x+60,y+10,60,ORANGE)},c:RED},{l:'SPECIAL SNACKS',d:(x,y)=>{drawCherry(x-70,y,55);drawBanana(x+70,y+10,70)},c:GREEN}];
+  // shelf
+  const a=eo(ramp(lt,0,.8));ctx.save();ctx.globalAlpha*=a;headline('an *entire *market appeared',CX,330,96,{p:ramp(lt,.2,1.2),hl:AMBER});
+  const sy=1250;line(300,sy,W-300,sy,'rgba(255,255,255,0.25)',10);
+  goods.forEach((g,i)=>{const start=n>=68?283.94+.15+i*.5:lt+100;const p=back(ramp(t,start,start+.8));const x=600+i*660,y=sy-230;
+    // price tag jitter on scene 67 placeholders
+    if(n===67){const q=ramp(lt,.6+i*.3,1.4+i*.3);ctx.save();ctx.globalAlpha*=q;rr(x-220,y-260,440,460,40);ctx.fillStyle='rgba(255,255,255,0.04)';ctx.fill();ctx.setLineDash([16,16]);ctx.strokeStyle='rgba(255,255,255,0.3)';ctx.lineWidth=4;ctx.stroke();ctx.setLineDash([]);txt('?',x,y-30,160,{color:DIM,weight:900});ctx.restore();return}
+    if(p<=0)return;ctx.save();ctx.globalAlpha*=sat(p*2);ctx.translate(x,y+(1-p)*-150);ctx.scale(p,p);card(-220,-260,440,460,{r:40,stroke:rgba(g.c,.45)});g.d(0,-50);txt(g.l,0,140,34,{color:g.c,weight:800,ls:2});
+    // price tag
+    ctx.save();ctx.translate(150,-220);ctx.rotate(.25);rr(-70,-30,140,60,14);ctx.fillStyle=GOLD;ctx.fill();txt('$$$',0,2,30,{color:INK,weight:900});ctx.restore();
+    // verdict badges
+    if(n>=69){const ev=[1,0,.5,0,0][i];const q=ramp(t-288.32,.3+i*.2,.9+i*.2);if(ev===1)drawCheck(-170,-210,44,q);if(ev===.5){ctx.save();ctx.globalAlpha*=sat(q*3);circ(-170,-210,44);ctx.fillStyle=rgba(GOLD,.2);ctx.fill();ctx.strokeStyle=GOLD;ctx.lineWidth=6;ctx.stroke();txt('?',-170,-208,50,{color:GOLD,weight:900});ctx.restore()}}
+    if(n>=70&&i===3){const q=elastic(ramp(st,.2,1.2));ctx.save();ctx.translate(0,-40);ctx.rotate(-.2);ctx.scale(q,q);rr(-230,-60,460,120,20);ctx.fillStyle='rgba(3,4,12,0.8)';ctx.fill();ctx.lineWidth=10;ctx.strokeStyle=RED;ctx.stroke();txt('OFFICIAL VERDICT',0,3,44,{color:RED,weight:900,ls:4});ctx.restore()}
+    ctx.restore()});
+  if(n===69)txt('some have real evidence…',CX,1620,60,{color:GREEN,weight:700,alpha:ramp(st,.2,1)});
+  if(n===70)txt('…one has an official verdict against it',CX,1620,60,{color:RED,weight:700,alpha:ramp(st,.2,1)});
+  ctx.restore()};
+/* ---- 07 BLUE-BLOCKING GLASSES (scenes 71-75) ---- */
+V.glasses=function(S){const {t,lt,n,st}=S;const sx=2000,sw=1500,sy=CY-80,sh=180;const X=wl=>sx+(wl-380)/320*sw;
+  const a=eo(ramp(lt,0,1));ctx.save();ctx.globalAlpha*=a;
+  // light source -> glasses -> eye; spectrum before/after
+  const gX=1250,gY=CY-80;const block=n>=75?lerp(.95,.35+.6*pulse(t,.25),1):n>=72?eio(ramp(t-298.74,.5,2)):0; // fraction of blue stopped
+  drawGlasses(gX,gY,150,{tint:rgba(ORANGE,.2+.5*block)});
+  // incoming light beams (blue) from left; transmitted beams (warm) to right
+  for(let i=-2;i<=2;i++){arrow(300,gY+i*90,gX-470,gY+i*60,{p:ramp(lt,.3,1.2),color:ICE,w:8,glow:true,alpha:.9});
+    const tc=block>.5?WARM:ICE;arrow(gX+470,gY+i*60,sx-120,gY+i*60,{p:ramp(lt,.9,1.8),color:tc,w:8,glow:true,alpha:.9*(1-block*.4)})}
+  txt('SCREEN LIGHT',300,gY-260,40,{align:'left',color:ICE,weight:800,ls:4});
+  // spectrum after lens
+  ctx.save();rr(sx,sy,sw,sh,30);ctx.clip();for(let i=0;i<150;i++){const u=i/150,wl=380+u*320;const cut=wl<500?block:wl<530?block*.5:0;ctx.globalAlpha=a*(1-cut);ctx.fillStyle=wlColor(wl);ctx.fillRect(sx+u*sw,sy,sw/150+2,sh)}ctx.restore();rr(sx,sy,sw,sh,30);ctx.strokeStyle='rgba(255,255,255,0.3)';ctx.lineWidth=4;ctx.stroke();
+  rr(X(460),sy-20,X(480)-X(460),sh+40,12);ctx.strokeStyle=CYAN;ctx.lineWidth=5;ctx.stroke();txt('460–480',X(470),sy-60,34,{color:CYAN,weight:700,mono:true});
+  txt('what reaches your eyes',sx+sw/2,sy+sh+60,40,{color:MUTED,weight:600});
+  // suppression meter
+  const my=sy+sh+200;txt('MELATONIN SUPPRESSION',sx,my-50,36,{align:'left',color:MUTED,weight:800,ls:4});rr(sx,my,sw,40,20);ctx.fillStyle='rgba(255,255,255,0.1)';ctx.fill();const supp=1-block*.8;rr(sx,my,sw*supp,40,20);ctx.fillStyle=supp>.6?RED:supp>.35?ORANGE:GREEN;ctx.fill();
+  if(n>=72)txt(block>.5?'reduced':'high',sx+sw+40,my+20,40,{align:'left',color:supp>.6?RED:GREEN,weight:800});
+  if(n===73){const q=back(ramp(st,.2,1));ctx.save();ctx.globalAlpha*=sat(q*2);ctx.translate(gX,gY+620);ctx.scale(q,q);drawClock(-300,0,120,{h:23-2*eo(ramp(st,.8,2.5)),m:0,night:[Math.PI*1.5,Math.PI*2.1]});arrow(-120,-120,80,-120,{color:GREEN,w:8,bend:.5});txt('shift to an',150,-40,44,{align:'left',color:WHITE,weight:600});txt('EARLIER BEDTIME',150,30,54,{align:'left',color:GREEN,weight:900,ls:3});ctx.restore()}
+  if(n>=74){const q=eo(ramp(t-307.64,.2,1));ctx.save();ctx.globalAlpha*=q;ctx.globalCompositeOperation='screen';glow(gX-190,gY,330,ORANGE,.35+.2*pulse(t,1.5));ctx.restore();ctx.save();ctx.globalAlpha*=q;circ(gX-190,gY,180);ctx.strokeStyle=WHITE;ctx.lineWidth=8;ctx.setLineDash([24,18]);ctx.lineDashOffset=-t*100;ctx.stroke();ctx.setLineDash([]);
+    txt('THE CATCH IS IN THE LENS',gX,gY+560,70,{color:ORANGE,weight:900,ls:6});ctx.restore()}
+  if(n>=75){const q=eo(ramp(st,.2,1));ctx.save();ctx.globalAlpha*=q;txt(Math.round(block*100)+'% of the blue band stopped',gX,gY+660,56,{color:WHITE,weight:700,mono:true});txt('cheap "clear" lenses often stop very little',gX,gY+730,40,{color:MUTED,weight:500});ctx.restore()}
+  ctx.restore()};
+/* ---- 07 NIGHT MODE (scenes 76-82) ---- */
+V.nightmode=function(S){const {t,lt,n,st}=S;
+  const px=CX,py=CY-200,pw=760,ph=1300;const split=eio(ramp(lt,.4,2.0))*.5; // right side (night mode) wipes in
+  const bright=n>=81?eio(ramp(t-326.96,.3,1.8)):n>=80?.5:.75;
+  const a=eo(ramp(lt,0,.6));ctx.save();ctx.globalAlpha*=a;
+  // glows
+  ctx.save();ctx.globalCompositeOperation='screen';glow(px-pw/2,py,1100,ICE,.45*(1-split*.5)*(.5+bright));glow(px+pw/2,py,1100,ORANGE,.5*split*(.5+bright));ctx.restore();
+  // standard phone (full) then clip for night half
+  drawPhone(px,py,pw,ph,{screen:[rgba(ICE,.95),rgba(BLUE,.9)],content:(sw,sh)=>{feed(sw,sh,t);ctx.fillStyle=`rgba(3,4,12,${(1-bright)*.5})`;ctx.fillRect(-sw,-sh,sw*2,sh*2)}});
+  ctx.save();ctx.beginPath();ctx.rect(px-pw/2+ (1-split)*pw,py-ph/2-40,pw,ph+80);ctx.clip();drawPhone(px,py,pw,ph,{screen:[rgba(WARM,.95),rgba(ORANGE,.85)],content:(sw,sh)=>{feed(sw,sh,t,1);ctx.fillStyle=`rgba(3,4,12,${(1-bright)*.5})`;ctx.fillRect(-sw,-sh,sw*2,sh*2)}});ctx.restore();
+  const lx=px-pw/2+(1-split)*pw;line(lx,py-ph/2-60,lx,py+ph/2+60,WHITE,8);circ(lx,py-ph/2-60,22);ctx.fillStyle=WHITE;ctx.fill();
+  // labels
+  if(n>=77)txt('STANDARD DISPLAY',px-pw/2-560,py-300,56,{color:ICE,weight:900,ls:4,alpha:ramp(t-315.56,.2,.9)});
+  if(n>=78){txt('NIGHT MODE',px+pw/2+560,py-300,56,{color:WARM,weight:900,ls:4,alpha:ramp(t-317.52,.2,.9)});txt('shifted toward warm orange',px+pw/2+560,py-230,38,{color:MUTED,weight:500,alpha:ramp(t-317.52,.8,1.5)})}
+  // mini spectra under labels
+  if(n>=77){const draw=(x,warm,al)=>{const mw=700,mx=x-mw/2,my=py-120;for(let k=0;k<70;k++){const u=k/70,wl=380+u*320;const e=warm?(u<.35?.25:1):(u<.35?1:.7);ctx.globalAlpha=a*al*e;ctx.fillStyle=wlColor(wl);ctx.fillRect(mx+u*mw,my,mw/70+1,40)}ctx.globalAlpha=a*al;rr(mx,my,mw*.31,40,0);ctx.strokeStyle=CYAN;ctx.lineWidth=3;ctx.stroke()};
+    draw(px-pw/2-560,0,ramp(t-315.56,.4,1));if(n>=78)draw(px+pw/2+560,1,ramp(t-317.52,.4,1))}
+  if(n===79||n===80){const q=back(ramp(t-321.08,.2,1));ctx.save();ctx.globalAlpha*=sat(q*2);ctx.translate(px+pw/2+560,py+20);ctx.scale(q,q);drawCheck(-330,0,54,ramp(t-321.08,.5,1.2));txt('less blue → fits the',-250,-30,44,{align:'left',color:WHITE,weight:600});txt('MECHANISM',-250,40,54,{align:'left',color:GREEN,weight:900,ls:3});ctx.restore()}
+  // brightness + duration (scene 80+)
+  if(n>=80){const q=eo(ramp(t-323.62,.2,1));const by=py+ph/2+120;ctx.save();ctx.globalAlpha*=q;
+    const row=(x,label,f,val,c)=>{const w=900;txt(label,x,by-50,40,{align:'left',color:MUTED,weight:800,ls:4});rr(x,by,w,36,18);ctx.fillStyle='rgba(255,255,255,0.1)';ctx.fill();rr(x,by,w*f,36,18);ctx.fillStyle=c;ctx.shadowColor=c;ctx.shadowBlur=30;ctx.fill();ctx.shadowColor='transparent';circ(x+w*f,by+18,32);ctx.fillStyle=WHITE;ctx.fill();txt(val,x+w+40,by+18,48,{align:'left',color:WHITE,weight:800,mono:true})};
+    const dur=n>=81?eio(ramp(t-326.96,.3,2.4)):.3;row(300,'BRIGHTNESS',bright,Math.round(bright*100)+'%',bright>.8?RED:ICE);row(2300,'DURATION',dur,(dur*4).toFixed(1)+' h',dur>.7?RED:ICE);ctx.restore()}
+  if(n===81){const q=ramp(st,1.8,2.6);txt('warm, but still A LOT of light',CX,300,70,{color:RED,weight:900,alpha:q,glow:RED,blur:30})}
+  if(n>=82){const q=back(ramp(st,.2,1));ctx.save();ctx.globalAlpha*=sat(q*2);ctx.translate(px+pw/2+560,py+120);ctx.scale(q,q);txt('?',0,0,300,{color:GOLD,weight:900,glow:AMBER,blur:60});txt('how much sleep changes:',0,230,44,{color:WHITE,weight:600});txt('OPEN QUESTION',0,300,54,{color:GOLD,weight:900,ls:4});ctx.restore()}
+  ctx.restore()};
+/* ---- 07 THE OTHER GLOWS (scenes 83-86) ---- */
+V.room=function(S){const {t,lt,n,st}=S;const a=eo(ramp(lt,0,.8));ctx.save();ctx.globalAlpha*=a;
+  ctx.fillStyle='rgba(0,0,0,0.35)';ctx.fillRect(0,1560,W,H);line(0,1560,W,1560,'rgba(255,255,255,0.08)',4);
+  // master clock at top center
+  const cx=CX,cy=360;const on=n>=84?eo(ramp(t-337.74,.3,1)):0;
+  const srcs=[{l:'OVERHEAD LIGHT',d:(k)=>drawLamp(CX+700,120,120,{on:k}),px:CX+700,py:260,lx:CX+700,ly:520,d0:.2},{l:'TELEVISION',d:(k)=>drawTV(600,1180,900,{on:k}),px:600,py:900,lx:600,ly:1520,d0:.8},{l:'LAPTOP',d:(k)=>drawLaptop(3200,1420,620,{on:k}),px:3200,py:1050,lx:3200,ly:1520,d0:1.4},{l:'PHONE',d:(k)=>{drawBed(1900,1480,1500,{});drawPerson(1700,1420,420,{});drawPhone(1830,1250,150,300,{rot:.5,glowColor:ICE,glowA:.6*k,screen:[rgba(ICE,.95),rgba(BLUE,.85)]})},px:1830,py:1100,lx:2150,ly:1250,d0:0}];
+  srcs.forEach((s,i)=>{const k=ramp(lt,.2+i*.35,.9+i*.35);ctx.save();ctx.globalAlpha*=k;s.d(k);ctx.restore();if(n>=84){const q=ramp(t-337.74,s.d0+.2,s.d0+1.4);arrow(s.px,s.py,cx+(s.px<cx?-90:90),cy+40,{p:q,color:ICE,w:6,bend:s.px<cx?-.2:.2,glow:true,dash:[26,26],t,alpha:.85});txt(s.l,s.lx,s.ly,36,{color:ICE,weight:800,ls:3,alpha:q})}});
+  // the clock (SCN) icon
+  ctx.save();ctx.globalAlpha*=ramp(lt,.6,1.4);ctx.globalCompositeOperation='screen';glow(cx,cy,420+40*pulse(t,1.2),CYAN,.3+.3*on);ctx.restore();
+  drawClock(cx,cy,150,{h:23,m:(t*12)%60,color:CYAN,hand:WHITE,alpha:ramp(lt,.6,1.4)});txt('THE SAME CLOCK',cx,cy+230,52,{color:CYAN,weight:900,ls:6,alpha:ramp(lt,1,1.6)});
+  // sleep quality meter (scene 85)
+  if(n>=85){const q=eo(ramp(t-342.48,.2,1));const f=1-.55*eio(ramp(t-342.48,.8,3));ctx.save();ctx.globalAlpha*=q;ctx.translate(CX,1660);card(-620,-100,1240,200,{r:50,stroke:rgba(RED,.5)});txt('SLEEP QUALITY',-560,-50,40,{align:'left',color:MUTED,weight:800,ls:4});rr(-560,0,1120,44,22);ctx.fillStyle='rgba(255,255,255,0.1)';ctx.fill();rr(-560,0,1120*f,44,22);ctx.fillStyle=f>.7?GREEN:f>.5?ORANGE:RED;ctx.fill();txt(f<.6?'poorer':'',600,20,40,{align:'left',color:RED,weight:800});ctx.restore()}
+  if(n>=86){headline('disrupted *melatonin may be the reason',CX,CY-120,72,{p:ramp(st,.1,1),hl:AMBER,weight:700})}
+  ctx.restore()};
+/* ---- 08 WHO IT HITS HARDEST (scenes 87-92) ---- */
+V.people=function(S){const {t,lt,n,st}=S;const a=eo(ramp(lt,0,.8));ctx.save();ctx.globalAlpha*=a;
+  if(n===87){headline('this matters more for *some *people than others',CX,CY-80,110,{p:ramp(lt,.2,1.4),hl:VIOLET});for(let i=0;i<7;i++){const p=back(ramp(lt,.3+i*.12,1+i*.12));drawPerson(700+i*410,CY+500,380*p,{color:i===2||i===5?rgba(VIOLET,.6):'#0d1020'})}}
+  // teens panel (left)
+  if(n>=88){const base=t-350.42;const q=eo(ramp(base,0,1));const sh=n>=92?eio(ramp(t-364.24,.5,2.5)):0;ctx.save();ctx.globalAlpha*=q;ctx.translate(0,(1-q)*100);card(260,330,1600,1500,{r:70,stroke:rgba(VIOLET,.5),accent:VIOLET});
+    txt('TEENAGERS',1060,440,60,{color:VIOLET,weight:900,ls:6});drawPerson(640,1500,560,{color:rgba(VIOLET,.35)});
+    const late=eio(ramp(base,.8,3.2));const h=22+2.5*late+2.5*sh;drawClock(1350,1000,260,{h,m:(late*180)%60,color:VIOLET,hand:WHITE,night:[Math.PI*1.5,Math.PI*1.5+TAU*.3]});
+    arrow(1350+Math.cos(-Math.PI/2+.2)*330,1000+Math.sin(-Math.PI/2+.2)*330,1350+Math.cos(-Math.PI/2+1.2+sh*.8)*330,1000+Math.sin(-Math.PI/2+1.2+sh*.8)*330,{p:late,color:VIOLET,w:8,bend:.5});
+    txt('melatonin timing shifts',1350,1360,42,{color:WHITE,weight:600,alpha:ramp(base,1,1.8)});txt('LATER',1350,1430,80,{color:VIOLET,weight:900,ls:6,alpha:ramp(base,1.2,2)});
+    if(n>=89){const q2=back(ramp(t-355.5,.2,1));ctx.save();ctx.globalAlpha*=sat(q2*2);ctx.translate(1060,1620);ctx.scale(q2,q2);pill(0,0,'DELAYED SLEEP PHASE DISORDER',{color:RED,size:40});ctx.restore();if(n>=90)txt('the body clock runs late',1060,1740,40,{color:MUTED,weight:500,alpha:ramp(t-359.6,.2,.9)})}
+    ctx.restore()}
+  // aging panel (right)
+  if(n>=91){const base=t-361.52;const q=eo(ramp(base,0,1));ctx.save();ctx.globalAlpha*=q;ctx.translate(0,(1-q)*100);card(1980,330,1600,1500,{r:70,stroke:rgba(AMBER,.5),accent:AMBER});txt('WITH AGE',2780,440,60,{color:AMBER,weight:900,ls:6});
+    const ages=['20s','40s','60s','80s'],vals=[1,.8,.55,.35];const gx=2200,gy=1500,gw=1160;axes(gx,gy-900,gw,900,{ny:3});
+    ages.forEach((ag,i)=>{const x=gx+80+i*280;bar(x,gy,180,vals[i]*820,i<2?GOLD:ORANGE,ramp(base,.4+i*.3,1.2+i*.3),{glow:true});txt(ag,x+90,gy+60,38,{color:MUTED,weight:700,mono:true})});
+    txt('nightly melatonin production',2780,1660,40,{color:MUTED,weight:500});arrow(2320,760,3320,1120,{p:ramp(base,1.4,2.2),color:RED,w:8});txt('declines',2780,760,54,{color:RED,weight:900,ls:3,alpha:ramp(base,1.8,2.4)});ctx.restore()}
+  if(n>=92){const q=back(ramp(st,.3,1.1));ctx.save();ctx.globalAlpha*=sat(q*2);ctx.translate(2600,215);ctx.scale(q,q);drawPhone(-640,0,110,220,{rot:-.2,glowColor:ICE,glowA:.6,screen:[rgba(ICE,.95),rgba(BLUE,.85)]});txt('+ bright evening screens → EVEN LATER',60,2,54,{color:WHITE,weight:800});ctx.restore()}
+  ctx.restore()};
+/* ---- 09 THE OFFICIAL VERDICT (scenes 93-100) ---- */
+V.verdict=function(S){const {t,lt,n,st}=S;const a=eo(ramp(lt,0,.8));ctx.save();ctx.globalAlpha*=a;
+  if(n===93){const q=elastic(ramp(lt,.2,1.3));ctx.save();ctx.translate(CX,CY-60);ctx.rotate(-.08);ctx.scale(q,q);rr(-900,-180,1800,360,40);ctx.fillStyle='rgba(3,4,12,0.6)';ctx.fill();ctx.lineWidth=18;ctx.strokeStyle=RED;ctx.shadowColor=RED;ctx.shadowBlur=50;ctx.stroke();txt('OFFICIAL VERDICT',0,6,150,{color:RED,weight:900,ls:10});ctx.restore()}
+  // supplements (left column) from scene 94
+  if(n>=94){const base=t-370.46;const q=eo(ramp(base,0,.9));ctx.save();ctx.globalAlpha*=q;const x=700,y=CY+40;card(x-520,y-760,1040,1540,{r:70});txt('MELATONIN',x,y-650,56,{color:GOLD,weight:900,ls:6});txt('sold as a supplement',x,y-580,38,{color:MUTED,weight:500});
+    const p1=back(ramp(base,.3,1.1)),p2=back(ramp(base,.7,1.5)),p3=back(ramp(base,1.1,1.9));
+    ctx.save();ctx.translate(x-250,y-150);ctx.scale(p1,p1);drawBottle(0,0,170,GOLD,'MELATONIN');ctx.restore();txt('PILLS',x-250,y+120,34,{color:MUTED,weight:700,ls:3,alpha:p1});
+    ctx.save();ctx.translate(x+230,y-120);ctx.scale(p2,p2);drawGummy(-60,0,90,RED);drawGummy(70,20,80,ORANGE);ctx.restore();txt('GUMMIES',x+230,y+120,34,{color:MUTED,weight:700,ls:3,alpha:p2});
+    ctx.save();ctx.translate(x,y+420);ctx.scale(p3,p3);rr(-90,-150,180,300,40);ctx.fillStyle='#1a2240';ctx.fill();rr(-30,-230,60,90,16);ctx.fillStyle='#2a3150';ctx.fill();rr(-90,-60,180,170,0);ctx.fillStyle=rgba(GOLD,.9);ctx.fill();ctx.restore();txt('LIQUIDS',x,y+640,34,{color:MUTED,weight:700,ls:3,alpha:p3});ctx.restore()}
+  // AASM card (scenes 95-96)
+  if(n>=95){const base=t-374.64;const q=eo(ramp(base,0,1));const fade=n>=97?1-eo(ramp(t-383.6,0,.9)):1;ctx.save();ctx.globalAlpha*=q*fade;ctx.translate(0,(1-q)*120);const x=2500,y=CY+40;card(x-1000,y-760,2000,1540,{r:70,stroke:rgba(RED,.5),accent:RED});
+    txt('2017',x,y-620,120,{color:WHITE,weight:900,mono:true});txt('AMERICAN ACADEMY OF SLEEP MEDICINE',x,y-500,46,{color:MUTED,weight:800,ls:4});txt('clinical practice guideline · chronic insomnia',x,y-440,36,{color:DIM,weight:500});
+    const sp=elastic(ramp(base,1.2,2.2));ctx.save();ctx.translate(x,y-180);ctx.rotate(-.1);ctx.scale(sp,sp);rr(-760,-110,1520,220,30);ctx.lineWidth=14;ctx.strokeStyle=RED;ctx.shadowColor=RED;ctx.shadowBlur=40;ctx.stroke();txt('RECOMMENDED AGAINST',0,4,96,{color:RED,weight:900,ls:6});ctx.restore();txt('for treating insomnia',x,y+10,48,{color:WHITE,weight:600,alpha:ramp(base,2.2,2.8)});
+    if(n>=96){['poor effectiveness','very low quality evidence'].forEach((s,i)=>{const p=back(ramp(t-380.22,.2+i*.7,1+i*.7));if(p<=0)return;ctx.save();ctx.globalAlpha*=sat(p*2);ctx.translate((1-p)*200,0);drawCross(x-700,y+200+i*200,46,p);txt(s,x-600,y+200+i*200,56,{align:'left',color:WHITE,weight:700});ctx.restore()})}
+    ctx.restore()}
+  // European guideline card (scenes 97-100)
+  if(n>=97){const base=t-383.6;const q=eo(ramp(base,.3,1.3));ctx.save();ctx.globalAlpha*=q;ctx.translate(0,(1-q)*120);const x=2500,y=CY+40;card(x-1000,y-760,2000,1540,{r:70,stroke:rgba(BLUE,.5),accent:BLUE});
+    txt('2023',x,y-620,120,{color:WHITE,weight:900,mono:true});txt('EUROPEAN INSOMNIA GUIDELINE',x,y-500,46,{color:MUTED,weight:800,ls:4});txt('a narrower view',x,y-440,36,{color:DIM,weight:500});
+    if(n>=98){const b2=t-388.24;const p=back(ramp(b2,.2,1));ctx.save();ctx.globalAlpha*=sat(p*2);ctx.translate((1-p)*-200,0);drawCheck(x-820,y-230,50,p);txt('PROLONGED-RELEASE melatonin',x-730,y-230,54,{align:'left',color:GREEN,weight:800});txt('(the one approved form)',x-730,y-165,36,{align:'left',color:MUTED,weight:500});ctx.restore();
+      if(n>=99){const b3=t-391.44;[['55+','people 55 and older'],['≤ 3 mo','for up to three months']].forEach((r,i)=>{const pp=back(ramp(b3,.2+i*.8,1+i*.8));if(pp<=0)return;ctx.save();ctx.globalAlpha*=sat(pp*2);ctx.translate(x-650+i*900,y+20);ctx.scale(pp,pp);pill(0,0,r[0],{color:GREEN,size:60});txt(r[1],0,110,36,{color:MUTED,weight:500});ctx.restore()})}}
+    if(n>=100){const b4=t-394.26;['fast-release melatonin','over-the-counter melatonin'].forEach((s,i)=>{const p=back(ramp(b4,.3+i*.8,1.1+i*.8));if(p<=0)return;ctx.save();ctx.globalAlpha*=sat(p*2);ctx.translate((1-p)*200,0);drawCross(x-820,y+330+i*180,50,p);txt(s,x-730,y+330+i*180,54,{align:'left',color:WHITE,weight:700});ctx.restore()});txt('recommended against · for insomnia',x,y+690,40,{color:RED,weight:800,ls:3,alpha:ramp(b4,2,2.8)})}
+    ctx.restore()}
+  ctx.restore()};
+/* ---- 09 TIMING · JET LAG (scenes 101-103) ---- */
+V.jetlag=function(S){const {t,lt,n,st}=S;const a=eo(ramp(lt,0,.8));ctx.save();ctx.globalAlpha*=a;
+  const gx=1300,gy=CY-60,r=620;drawGlobe(gx,gy,r,t,{});
+  // eastward flight arc
+  const fp=ramp(lt,.5,2.2);const ang0=Math.PI*1.15,ang1=Math.PI*1.85;const an=lerp(ang0,ang1,eio(fp));
+  ctx.save();ctx.strokeStyle=rgba(GOLD,.8);ctx.lineWidth=8;ctx.setLineDash([24,20]);ctx.beginPath();ctx.arc(gx,gy,r+80,ang0,an);ctx.stroke();ctx.setLineDash([]);ctx.restore();
+  drawPlane(gx+Math.cos(an)*(r+80),gy+Math.sin(an)*(r+80),70,an+Math.PI/2,GOLD);
+  txt('EASTWARD',gx,gy+r+150,54,{color:GOLD,weight:900,ls:8,alpha:ramp(lt,.5,1.2)});arrow(gx-300,gy+r+230,gx+300,gy+r+230,{p:ramp(lt,.8,1.6),color:GOLD,w:8});
+  // clocks: body clock vs destination
+  const cx=2850,cy=CY-80;drawClock(cx-380,cy,200,{h:22,m:0,color:MUTED,hand:WHITE});txt('BODY CLOCK',cx-380,cy+290,40,{color:MUTED,weight:800,ls:4});
+  const shiftH=n>=103?-3*eio(ramp(st,.6,2.4)):4*eio(ramp(lt,1.2,3));drawClock(cx+380,cy,200,{h:22+shiftH,m:0,color:n>=103?RED:GREEN,hand:WHITE});txt(n>=103?'WRONG TIME':'DESTINATION',cx+380,cy+290,40,{color:n>=103?RED:GREEN,weight:800,ls:4});
+  arrow(cx-150,cy,cx+150,cy,{p:ramp(lt,1,1.6),color:n>=103?RED:GREEN,w:8});
+  if(n===102){const q=back(ramp(lt,1.8,2.6));ctx.save();ctx.globalAlpha*=sat(q*2);ctx.translate(cx,cy+520);ctx.scale(q,q);drawCapsule(-420,0,70,-.4,GOLD,'#fff');txt('can ease JET LAG',60,2,60,{color:GREEN,weight:800});ctx.restore()}
+  if(n>=103){const q=back(ramp(st,.2,1));ctx.save();ctx.globalAlpha*=sat(q*2);ctx.translate(cx,cy+520);ctx.scale(q,q);drawCapsule(-420,0,70,-.4,GOLD,'#fff');drawCross(-420,0,70,ramp(st,.8,1.4));txt('wrong time → DELAYS adjustment',60,2,56,{color:RED,weight:800});ctx.restore()}
+  ctx.restore()};
+/* ---- 09 SPECIAL SNACKS (scenes 104-107) ---- */
+V.foods=function(S){const {t,lt,n,st}=S;const a=eo(ramp(lt,0,.8));ctx.save();ctx.globalAlpha*=a;
+  if(n===104){headline('and the *special *snacks?',CX,CY-120,150,{p:ramp(lt,.2,1.2),hl:GREEN});const q=ramp(lt,.5,1.4);drawCherry(CX-500,CY+300,110,q);drawBanana(CX-150,CY+300,150,q);drawOrange(CX+200,CY+300,110,q);drawMilk(CX+520,CY+300,120,q)}
+  else{const items=[{s:105,d:0,l:'TART CHERRIES',f:(x,y,q)=>drawCherry(x,y,100,q)},{s:105,d:.6,l:'RICE',f:(x,y,q)=>drawGrain(x,y,110,'#e8dcb8',q)},{s:105,d:1.0,l:'OATS',f:(x,y,q)=>drawGrain(x,y,110,'#d8b878',q)},{s:106,d:0,l:'BANANAS',f:(x,y,q)=>drawBanana(x,y,150,q)},{s:106,d:.6,l:'PINEAPPLE',f:(x,y,q)=>drawPineapple(x,y,120,q)},{s:106,d:1.0,l:'ORANGES',f:(x,y,q)=>drawOrange(x,y,110,q)},{s:107,d:0,l:'MILK',f:(x,y,q)=>drawMilk(x,y,120,q)},{s:107,d:.5,l:'SOUR CHERRIES',f:(x,y,q)=>drawCherry(x,y,100,q)}];
+    items.forEach((it,i)=>{const start=SCENES[it.s-1].s+it.d*.5;const p=back(ramp(t,start,start+.7));if(p<=0)return;const x=560+(i%4)*920,y=480+Math.floor(i/4)*640;ctx.save();ctx.globalAlpha*=sat(p*2);ctx.translate(x,y+(1-p)*150);ctx.scale(p,p);card(-380,-260,760,520,{r:60,stroke:rgba(GREEN,.35)});it.f(0,-40,1);txt(it.l,0,190,40,{color:WHITE,weight:800,ls:3});
+      if(it.s===107){const q=ramp(t,418.08+2.2,418.08+3);pill(0,-230,'MAY improve sleep',{color:GOLD,size:30,alpha:q})}ctx.restore()});
+    // blood melatonin rises (scene 106)
+    if(n>=106){const q=eo(ramp(t-412.08,1.8,2.8))*(1-ramp(t-418.08,0,.8));const rise=eio(ramp(t-412.08,2.4,5));ctx.save();ctx.globalAlpha*=q;ctx.translate(CX,1640);card(-900,-90,1800,180,{r:50,stroke:rgba(AMBER,.4),shadow:false});txt('BLOOD MELATONIN',-840,0,36,{align:'left',color:MUTED,weight:800,ls:4});rr(-420,-22,1200,44,22);ctx.fillStyle='rgba(255,255,255,0.1)';ctx.fill();rr(-420,-22,1200*(.25+.3*rise),44,22);ctx.fillStyle=GOLD;ctx.shadowColor=GOLD;ctx.shadowBlur=30;ctx.fill();ctx.restore()}
+    if(n>=107){headline('that is a *may, not a promise',CX,1620,80,{p:ramp(st,.3,1.4),hl:GOLD,weight:800})}else{headline('many plants contain *melatonin',CX,1560,80,{p:ramp(t-407.76,0,.8),hl:GREEN,weight:800,alpha:1-ramp(t-407.76,3.6,4.3)})}}
+  ctx.restore()};
+/* ---- 09 39 vs 7 MINUTES (scenes 108-113) ---- */
+V.compare=function(S){const {t,lt,n,st}=S;const a=eo(ramp(lt,0,.8));ctx.save();ctx.globalAlpha*=a;
+  if(n===108){headline('the comparison worth remembering: *sleep *timing',CX,CY-80,110,{p:ramp(lt,.2,1.4),hl:GREEN});drawClock(CX,CY+420,220,{h:23,m:(t*30)%60,color:GREEN,hand:WHITE,alpha:ramp(lt,.8,1.6)})}
+  if(n>=109){const b1=t-425.8;const q=eo(ramp(b1,0,.9));ctx.save();ctx.globalAlpha*=q;ctx.translate(0,(1-q)*150);const x=1060,y=CY;card(x-740,y-700,1480,1400,{r:70,stroke:rgba(GREEN,.5),accent:GREEN});
+    txt('BODY CLOCK RUNS LATE',x,y-580,52,{color:GREEN,weight:900,ls:5});txt('delayed sleep phase',x,y-510,38,{color:MUTED,weight:500});drawClock(x,y-230,160,{h:1.5,m:0,color:GREEN,hand:WHITE});
+    if(n>=110){const b2=t-427.84;const v=Math.round(39*eo(ramp(b2,.4,2.4)));txt('−'+v,x,y+240,260,{color:GREEN,weight:900,mono:true,glow:GREEN,blur:60,alpha:ramp(b2,.2,.8)});txt('MINUTES to fall asleep',x,y+420,48,{color:WHITE,weight:700,ls:3,alpha:ramp(b2,.8,1.4)});txt('one analysis · melatonin vs placebo',x,y+560,34,{color:DIM,weight:500,alpha:ramp(b2,1.2,1.8)})}
+    ctx.restore()}
+  if(n>=111){const b3=t-432.08;const q=eo(ramp(b3,0,.9));ctx.save();ctx.globalAlpha*=q;ctx.translate(0,(1-q)*150);const x=2780,y=CY;card(x-740,y-700,1480,1400,{r:70,stroke:rgba(RED,.5),accent:RED});
+    txt('INSOMNIA',x,y-580,52,{color:RED,weight:900,ls:5});txt('trouble falling or staying asleep',x,y-510,38,{color:MUTED,weight:500});drawClock(x,y-230,160,{h:23,m:0,color:RED,hand:WHITE});
+    const v=Math.round(7*eo(ramp(b3,.6,2.2)));txt('−'+v,x,y+240,260,{color:RED,weight:900,mono:true,glow:RED,blur:60,alpha:ramp(b3,.4,1)});txt('MINUTES to fall asleep',x,y+420,48,{color:WHITE,weight:700,ls:3,alpha:ramp(b3,1,1.6)});ctx.restore()}
+  if(n>=112){const q=back(ramp(t-435.62,.2,1));ctx.save();ctx.globalAlpha*=sat(q*2);ctx.translate(CX,CY);ctx.scale(q,q);drawMolecule(0,-40,48,t*.5,{});pill(0,160,'SAME MOLECULE',{color:GOLD,size:40});ctx.restore()}
+  if(n>=113){const q=eo(ramp(st,.2,1));ctx.save();ctx.globalAlpha*=q;ctx.fillStyle='rgba(3,4,12,0.55)';ctx.fillRect(0,0,W,H);ctx.translate(CX,CY-100);ctx.scale(lerp(.8,1,q),lerp(.8,1,q));
+    // stethoscope-ish / medical cross icon
+    circ(0,-120,170);ctx.fillStyle=rgba(ICE,.15);ctx.fill();ctx.lineWidth=10;ctx.strokeStyle=ICE;ctx.stroke();rr(-30,-230,60,220,16);ctx.fillStyle=ICE;ctx.fill();rr(-110,-150,220,60,16);ctx.fill();
+    txt('whether any of this fits you',0,170,60,{color:WHITE,weight:600});txt('IS A QUESTION FOR A DOCTOR',0,260,70,{color:ICE,weight:900,ls:6});ctx.restore()}
+  ctx.restore()};
+/* ---- 10 THE SECOND JOB (scenes 114-118) ---- */
+V.second=function(S){const {t,lt,n,st}=S;const a=eo(ramp(lt,0,.8));ctx.save();ctx.globalAlpha*=a;
+  ctx.save();ctx.globalCompositeOperation='screen';glow(CX,CY-100,900,AMBER,.2);ctx.restore();
+  drawMolecule(CX,CY-160,105,t*.3,{squash:.9});
+  if(n===114){txt('SLEEP HORMONE',CX,CY+470,110,{color:GOLD,weight:900,ls:10,alpha:ramp(lt,.4,1.2),glow:AMBER,blur:50})}
+  if(n>=115){const base=t-444.3;const q=ramp(base,.1,.9);ctx.save();ctx.globalAlpha*=q;txt('SLEEP HORMONE',CX,CY+470,110,{color:GOLD,weight:900,ls:10,alpha:.35});line(CX-480,CY+470,CX+480,CY+470,RED,14,q);ctx.restore();
+    const q2=back(ramp(base,.8,1.6));ctx.save();ctx.globalAlpha*=sat(q2*2);ctx.translate(CX,CY+640);ctx.scale(q2,q2);pill(0,0,'…may be its SECOND job',{color:WHITE,size:56});ctx.restore()}
+  // orbiting 'places that never sleep'
+  if(n>=116){const base=t-446.56;const orb=[{l:'PLANTS',d:(x,y,q)=>drawPlant(x,y+120,70,{g:q}),c:GREEN},{l:'BACTERIA',d:(x,y,q)=>{for(let i=0;i<3;i++){ctx.save();ctx.translate(x+(i-1)*70,y+Math.sin(t*2+i)*20);ctx.rotate(.4*i);ctx.beginPath();ctx.ellipse(0,0,60*q,26*q,0,0,TAU);ctx.fillStyle=rgba(CYAN,.5);ctx.fill();ctx.strokeStyle=CYAN;ctx.lineWidth=5;ctx.stroke();ctx.restore()}},c:CYAN},{l:'COFFEE BEANS',d:(x,y,q)=>drawCoffee(x,y,80*q,t),c:WARM}];
+    orb.forEach((o,i)=>{const start=i===0?base+.2:448.62-446.56+base+.3+(i-1)*.8;const q=back(ramp(base,start-base+0,start-base+.8));if(q<=0)return;const an=-Math.PI/2+i*TAU/3+t*.15;const x=CX+Math.cos(an)*820,y=CY-120+Math.sin(an)*520;ctx.save();ctx.globalAlpha*=sat(q*2);card(x-260,y-220,520,440,{r:50,stroke:rgba(o.c,.5),shadow:false});o.d(x,y-40,q);txt(o.l,x,y+160,36,{color:o.c,weight:800,ls:3});ctx.restore()})}
+  if(n>=117){headline('places that *never *sleep at all',CX,330,90,{p:ramp(t-448.62,.3,1.3),hl:CYAN})}
+  if(n>=118){headline('its *oldest role has nothing to do with bedtime',CX,330,90,{p:ramp(st,.2,1.4),hl:GREEN})}
+  ctx.restore()};
+/* ---- 10 PLANTS (scenes 119-128) ---- */
+V.plants=function(S){const {t,lt,n,st}=S;const a=eo(ramp(lt,0,.8));ctx.save();ctx.globalAlpha*=a;
+  // timeline strip at top: 1970s coffee -> 1987 plants
+  if(n<=123){const fade=n===123?1-eo(ramp(st,2.2,3.2)):1;ctx.save();ctx.globalAlpha*=fade;
+    if(n===119){headline('for decades, melatonin "belonged to *animals"',CX,CY-200,110,{p:ramp(lt,.2,1.4),hl:PINK});const q=ramp(lt,.8,1.8);drawFrog(CX-500,CY+320,150,{alpha:q});drawPerson(CX+500,CY+560,520,{alpha:q});drawBrain(CX,CY+330,180,{color:PINK,glow:20,alpha:q})}
+    if(n>=120&&n<=121){const base=t-457.64;const q=eo(ramp(base,0,.9));ctx.save();ctx.globalAlpha*=q;const x=1000,y=CY;card(x-640,y-640,1280,1280,{r:70});txt('1970s',x,y-520,110,{color:WARM,weight:900,mono:true});drawCoffee(x,y-60,170,t);txt('melatonin found in coffee extracts',x,y+260,44,{color:WHITE,weight:600});
+      const sp=elastic(ramp(base,1.6,2.6));ctx.save();ctx.translate(x,y+420);ctx.rotate(-.1);ctx.scale(sp,sp);rr(-460,-70,920,140,24);ctx.lineWidth=12;ctx.strokeStyle=RED;ctx.stroke();txt('"JUST A BYPRODUCT"',0,4,60,{color:RED,weight:900,ls:4});ctx.restore();ctx.restore()}
+    if(n>=121){const base=t-462.24;const q=eo(ramp(base,0,.9));ctx.save();ctx.globalAlpha*=q;const x=2800,y=CY;card(x-640,y-640,1280,1280,{r:70,stroke:rgba(GREEN,.5),accent:GREEN});txt('1987',x,y-520,110,{color:GREEN,weight:900,mono:true});drawPlant(x,y+300,150,{g:eo(ramp(base,.4,2.4)),roots:eo(ramp(base,1,2.4))});
+      txt('identified in plants',x,y+440,50,{color:WHITE,weight:700});ctx.restore()}
+    if(n>=122){headline('found in *every plant investigated',CX,300,90,{p:ramp(t-466.22,.2,1.2),hl:GREEN});if(n>=123){['roots','leaves','fruits','seeds'].forEach((s,i)=>pill(900+i*680,CY+780,s,{color:GREEN,size:44,alpha:ramp(st,.2+i*.4,.8+i*.4)}))}}
+    ctx.restore()}
+  // stress + lettuce experiment (124-128)
+  if(n>=124||(n===123&&st>2.2)){const base=n>=124?t-472.02:st-2.2;const q=eo(ramp(base,0,1));ctx.save();ctx.globalAlpha*=q;
+    const stressors=[{l:'DROUGHT',d:(x,y)=>drawSun(x,y,46,{t})},{l:'EXTREME TEMPERATURES',d:(x,y)=>{rr(x-20,y-70,40,110,20);ctx.strokeStyle=WHITE;ctx.lineWidth=6;ctx.stroke();circ(x,y+60,34);ctx.fillStyle=RED;ctx.fill();rr(x-8,y-40,16,100,8);ctx.fill()}},{l:'SALTY SOIL',d:(x,y)=>{for(let i=0;i<7;i++){ctx.save();ctx.translate(x+(hash(i)-.5)*140,y+(hash(i+3)-.5)*100);ctx.rotate(hash(i+6)*3);rr(-18,-18,36,36,6);ctx.fillStyle='rgba(255,255,255,0.85)';ctx.fill();ctx.restore()}}},{l:'FUNGAL INFECTION',d:(x,y)=>{for(let i=0;i<5;i++){const xx=x+(i-2)*32,yy=y+30-Math.abs(i-2)*10;line(xx,yy+40,xx,yy-10,'#c9a36a',8);circ(xx,yy-20,22-Math.abs(i-2)*4);ctx.fillStyle='#d9b07a';ctx.fill()}}}];
+    const px=900,py=CY+120;drawPlant(px,py+420,190,{g:1,roots:1});
+    const sh=n>=128?eo(ramp(t-484.3,.2,1.2)):0;if(sh>0){drawShield(px,py,420+20*pulse(t,1.3),GREEN,sh*.9);txt('PROTECTOR',px,py-520,80,{color:GREEN,weight:900,ls:8,alpha:sh,glow:GREEN,blur:40})}
+    if(n>=124&&n<=127){txt('under STRESS, plants make MORE',1000,330,54,{color:WHITE,weight:700,alpha:ramp(base,.3,1)})}
+    if(n>=125){const b2=t-473.86;stressors.forEach((s,i)=>{const p=back(ramp(b2,.2+i*.6,1+i*.6));if(p<=0)return;const an=-Math.PI*.95+i*Math.PI*.3;const x=px+Math.cos(an)*640,y=py+Math.sin(an)*560;ctx.save();ctx.globalAlpha*=sat(p*2);ctx.translate(x,y);ctx.scale(p,p);card(-200,-160,400,320,{r:40,shadow:false,stroke:rgba(RED,.4)});s.d(0,-30);txt(s.l,0,110,24,{color:RED,weight:800,ls:2});ctx.restore();
+      if(p>.9){ctx.save();ctx.globalAlpha*=.9;const u=(t*.6+i*.25)%1;const gx=lerp(x,px,u),gy=lerp(y,py+100,u);circ(gx,gy,12);ctx.fillStyle=GOLD;ctx.shadowColor=GOLD;ctx.shadowBlur=20;ctx.fill();ctx.restore()}})}
+    // lettuce experiment (126-127)
+    if(n>=126){const b3=t-478.08;const q2=eo(ramp(b3,0,1));ctx.save();ctx.globalAlpha*=q2;const x=2750,y=CY;card(x-900,y-700,1800,1400,{r:70,stroke:rgba(GREEN,.5)});txt('LETTUCE IN SALTY SOIL',x,y-600,50,{color:GREEN,weight:900,ls:5});
+      const spray=n>=127?eo(ramp(t-480.78,.2,2.6)):0;
+      const pot=(cx,cy,boost,label)=>{ctx.fillStyle='#5a4631';ctx.beginPath();ctx.moveTo(cx-220,cy);ctx.lineTo(cx+220,cy);ctx.lineTo(cx+170,cy+220);ctx.lineTo(cx-170,cy+220);ctx.closePath();ctx.fill();for(let i=0;i<8;i++){ctx.save();ctx.translate(cx+(hash(i+20)-.5)*380,cy+20+hash(i+30)*160);rr(-10,-10,20,20,4);ctx.fillStyle='rgba(255,255,255,0.7)';ctx.fill();ctx.restore()}
+        const nL=Math.round(5+5*boost);for(let i=0;i<nL;i++){const an=Math.PI+i/(nL-1)*Math.PI;const g=`rgb(${Math.round(lerp(150,60,boost))},${Math.round(lerp(190,200,boost))},${Math.round(lerp(90,80,boost))})`;drawLeaf(cx+Math.cos(an)*90,cy-10,110+40*boost,an+Math.PI/2,g)}txt(label,cx,cy+300,36,{color:MUTED,weight:700,ls:2})};
+      pot(x-420,y+100,0,'CONTROL');pot(x+420,y+100,spray,'+ MELATONIN SPRAY');
+      if(n>=127){const b4=t-480.78;// spray bottle & mist
+        ctx.save();ctx.translate(x+100,y-300);rr(-50,-120,100,200,30);ctx.fillStyle=rgba(GOLD,.8);ctx.fill();rr(-30,-190,60,80,16);ctx.fillStyle='#2a3150';ctx.fill();for(let i=0;i<10;i++){const u=(t*.9+hash(i))%1;ctx.globalAlpha=(1-u)*.8;circ(80+u*300+hash(i+4)*60,-150+u*300+(hash(i+8)-.5)*140,10);ctx.fillStyle=GOLD;ctx.fill()}ctx.restore();
+        txt('↑ leaf number   ↑ chlorophyll',x,y+500,50,{color:GREEN,weight:800,alpha:ramp(b4,1.6,2.4)})}
+      ctx.restore()}
+    ctx.restore()}
+  ctx.restore()};
+/* ---- 10 4 BILLION YEARS (scenes 129-134) ---- */
+V.tree=function(S){const {t,lt,n,st}=S;const a=eo(ramp(lt,0,.8));ctx.save();ctx.globalAlpha*=a;
+  const x0=420,x1=3420,ty=CY+520;const X=bya=>x0+(4-bya)/4*(x1-x0);
+  // timeline bar
+  const prog=ramp(lt,.3,2.4);line(x0,ty,x0+(x1-x0)*prog,ty,'rgba(255,255,255,0.35)',10);
+  [[4,'4 bya'],[3,'3 bya'],[2,'2 bya'],[1,'1 bya'],[0,'TODAY']].forEach(([b,l])=>{const q=ramp(prog,(4-b)/4,(4-b)/4+.05);line(X(b),ty-30,X(b),ty+30,'rgba(255,255,255,0.5)',6,q);txt(l,X(b),ty+90,38,{color:MUTED,weight:700,mono:true,alpha:q})});
+  tag(x0,ty-110,'TIMELINE OF LIFE ON EARTH · bya = billion years ago',{align:'left',size:36});
+  const mark=(bya,label,sub,c,q,drawIc,dy=0)=>{if(q<=0)return;const x=X(bya),y=ty-330-dy;ctx.save();ctx.globalAlpha*=sat(q*2);const p=back(q);line(x,ty,x,y+140,c,6);ctx.translate(x,y);ctx.scale(p,p);card(-300,-170,600,340,{r:40,stroke:rgba(c,.5),shadow:false});drawIc(0,-50);txt(label,0,80,36,{color:c,weight:900,ls:2});txt(sub,0,130,28,{color:MUTED,weight:500});ctx.restore()};
+  if(n>=130){const b=t-489.88;mark(3.5,'BACTERIA','incl. cyanobacteria',GREEN,ramp(b,.2,1),(x,y)=>{for(let i=0;i<6;i++){ctx.save();ctx.translate(x-125+i*50,y+Math.sin(t*2+i)*8);rr(-22,-28,44,56,18);ctx.fillStyle=rgba(GREEN,.45);ctx.fill();ctx.strokeStyle=GREEN;ctx.lineWidth=4;ctx.stroke();ctx.restore()}})}
+  if(n>=131){const b=t-494.42;mark(3.0,'ARCHAEA','key enzyme found · 2022',CYAN,ramp(b,.2,1),(x,y)=>{ctx.save();ctx.translate(x,y);ctx.beginPath();for(let i=0;i<18;i++){const an=i/18*TAU,r=58+(i%2?14:0)+Math.sin(t*3+i)*4;ctx.lineTo(Math.cos(an)*r,Math.sin(an)*r)}ctx.closePath();ctx.fillStyle=rgba(CYAN,.35);ctx.fill();ctx.strokeStyle=CYAN;ctx.lineWidth=5;ctx.stroke();drawGear(0,0,26,8,t,GOLD);ctx.restore()},420);
+    if(n>=132)txt('a single-celled microbe',X(3.0),ty-980,40,{color:MUTED,weight:500,alpha:ramp(t-498.34,.2,.9)})}
+  // tree of life (133)
+  if(n>=133){const b=t-500.56;const q=eo(ramp(b,.2,1.4));ctx.save();ctx.globalAlpha*=q;const rx=2900,ry=ty-380;
+    ctx.strokeStyle='rgba(255,255,255,0.6)';ctx.lineWidth=10;ctx.lineCap='round';const br=[['BACTERIA',-420,GREEN],['ARCHAEA',0,CYAN],['EUKARYA',420,PINK]];
+    br.forEach(([l,dx,c],i)=>{const p=ramp(b,.4+i*.3,1.2+i*.3);ctx.beginPath();ctx.moveTo(rx,ry+300);ctx.quadraticCurveTo(rx,ry+100,rx+dx*p,ry-120*p);ctx.strokeStyle=c;ctx.stroke();txt(l,rx+dx,ry-200,38,{color:c,weight:900,ls:3,alpha:ramp(p,.8,1)});circ(rx+dx,ry-120,22*p);ctx.fillStyle=c;ctx.fill()});
+    line(rx,ty,rx,ry+300,'rgba(255,255,255,0.4)',8);
+    const you=back(ramp(b,2.6,3.4));if(you>0){ctx.save();ctx.translate(rx+420,ry-320);ctx.scale(you,you);drawPerson(0,60,170,{color:rgba(PINK,.5)});pill(0,-120,'YOU',{color:PINK,size:40});ctx.restore()}
+    txt('all three great branches of life',rx,ry+420,40,{color:WHITE,weight:600,alpha:ramp(b,1.4,2.2)});ctx.restore()}
+  if(n>=134){const q=eo(ramp(st,.2,1.2));const v=(4*eo(ramp(st,.2,2.2))).toFixed(1);ctx.save();ctx.globalAlpha*=q;ctx.globalCompositeOperation='screen';glow(X(3.9),ty-200,700,AMBER,.3);ctx.restore();txt('≈ '+v+' billion years',1000,330,150,{color:GOLD,weight:900,alpha:q,glow:AMBER,blur:60});txt('roots of melatonin-making',1000,460,46,{color:MUTED,weight:500,alpha:ramp(st,1,1.8)})}
+  else if(n===129){headline('this *timeline *of *life holds the answer',CX,330,100,{p:ramp(lt,.2,1.3),hl:GREEN})}
+  ctx.restore()};
+/* ---- 10 PROTECTION · OXYGEN (scenes 135-140) ---- */
+let ROS=[];
+V.oxygen=function(S){const {t,lt,n,st}=S;const a=eo(ramp(lt,0,.8));ctx.save();ctx.globalAlpha*=a;
+  if(n<=139||n===140){// early Earth + cell
+    const ex=900,ey=CY-60;const o2=n>=137?eio(ramp(t-513.38,.3,4)):0;
+    ctx.save();ctx.globalCompositeOperation='screen';glow(ex,ey,900,ORANGE,.25);ctx.restore();
+    circ(ex,ey,460);const g=ctx.createRadialGradient(ex-150,ey-150,50,ex,ey,460);g.addColorStop(0,'#b8532a');g.addColorStop(.6,'#5e2a1a');g.addColorStop(1,'#2a1410');ctx.fillStyle=g;ctx.fill();ctx.strokeStyle='rgba(255,255,255,0.3)';ctx.lineWidth=6;ctx.stroke();
+    // atmosphere haze turning blue as O2 rises
+    ctx.save();ctx.globalCompositeOperation='screen';glow(ex,ey,560,CYAN,.35*o2);ctx.restore();
+    txt('EARLY EARTH',ex,ey+560,52,{color:WHITE,weight:900,ls:6});
+    if(n>=137){const q=ramp(t-513.38,.2,1);txt('O₂',ex-120,ey-600,90,{color:CYAN,weight:900,alpha:q});rr(ex+20,ey-660,500,60,30);ctx.fillStyle='rgba(255,255,255,0.1)';ctx.fill();rr(ex+20,ey-660,500*o2,60,30);ctx.fillStyle=CYAN;ctx.shadowColor=CYAN;ctx.shadowBlur=30;ctx.fill();ctx.shadowColor='transparent';txt('rising',ex+560,ey-630,36,{align:'left',color:CYAN,weight:700,alpha:q})}
+    // cell on the right
+    const cx=2800,cy=CY-60;const ca=eo(ramp(lt,.6,1.6));ctx.save();ctx.globalAlpha*=ca;ctx.beginPath();for(let i=0;i<=40;i++){const an=i/40*TAU,r=520+Math.sin(an*5+t*.8)*24;ctx.lineTo(cx+Math.cos(an)*r,cy+Math.sin(an)*r)}ctx.closePath();ctx.fillStyle='rgba(255,255,255,0.05)';ctx.fill();ctx.strokeStyle='rgba(255,255,255,0.6)';ctx.lineWidth=10;ctx.stroke();
+    circ(cx,cy,150);ctx.fillStyle=rgba(VIOLET,.35);ctx.fill();ctx.strokeStyle=VIOLET;ctx.lineWidth=6;ctx.stroke();txt('AN EARLY CELL',cx,cy+660,52,{color:WHITE,weight:900,ls:6});ctx.restore();
+    // ROS particles attacking, melatonin neutralizing
+    if(n>=138){const spawn=n===138||n===139?.6:.0;if(Math.random()<spawn&&ROS.length<40)ROS.push({x:ex+460,y:ey+(Math.random()-.5)*600,vx:14+Math.random()*8,vy:(Math.random()-.5)*4,l:1,hit:0});
+      const neut=n>=139?eo(ramp(t-519.2,.2,1)):0;
+      ROS=ROS.filter(p=>p.l>0&&p.x<W);ROS.forEach(p=>{p.x+=p.vx;p.y+=p.vy;const d=Math.hypot(p.x-cx,p.y-cy);if(d<540&&neut>.5&&!p.hit){p.hit=1}if(p.hit)p.l-=.06;else if(d<540){p.l-=.03}
+        ctx.save();ctx.globalAlpha*=sat(p.l);ctx.translate(p.x,p.y);ctx.rotate(t*4);ctx.beginPath();for(let i=0;i<12;i++){const an=i/12*TAU,r=i%2?34:18;ctx.lineTo(Math.cos(an)*r,Math.sin(an)*r)}ctx.closePath();ctx.fillStyle=RED;ctx.shadowColor=RED;ctx.shadowBlur=30;ctx.fill();
+        if(p.hit){ctx.globalAlpha=sat(p.l)*.9;circ(0,0,50*(1-p.l)+20);ctx.strokeStyle=GOLD;ctx.lineWidth=6;ctx.stroke()}ctx.restore()});
+      // damage flashes on membrane when not neutralized
+      if(neut<.5){ctx.save();ctx.globalAlpha*=.5*pulse(t,3);ctx.strokeStyle=RED;ctx.lineWidth=14;ctx.beginPath();ctx.arc(cx,cy,540,Math.PI*.8,Math.PI*1.2);ctx.stroke();ctx.restore()}
+      txt(neut>.5?'melatonin NEUTRALIZES them':'REACTIVE MOLECULES damage cells',CX,330,80,{color:neut>.5?GOLD:RED,weight:900,alpha:ramp(t-515.68,.3,1),glow:neut>.5?AMBER:RED,blur:30});
+      if(neut>.5){ctx.save();ctx.globalCompositeOperation='screen';glow(cx,cy,620,AMBER,.3*neut);ctx.restore();for(let i=0;i<12;i++){const an=i/12*TAU+t*.4;circ(cx+Math.cos(an)*540,cy+Math.sin(an)*540,16);ctx.fillStyle=GOLD;ctx.shadowColor=GOLD;ctx.shadowBlur=20;ctx.fill()}}}
+    if(n===136){headline('the leading idea: *protection',CX,330,110,{p:ramp(st,.2,1.2),hl:GREEN})}
+    if(n===135){headline('why would early cells need it?',CX,330,100,{p:ramp(lt,.2,1.2)})}
+    // vitamin E comparison (140)
+    if(n>=140){const q=eo(ramp(st,.2,1));ctx.save();ctx.globalAlpha*=q;ctx.fillStyle='rgba(3,4,12,0.55)';ctx.fillRect(0,0,W,H);const gx=1100,gy=CY+420,gw=1700,gh=900;axes(gx,gy-gh,gw,gh,{ny:4});tag(gx,gy-gh-70,'ANTIOXIDANT EFFECT · one type of reactive molecule · lab studies',{align:'left',size:36});
+      bar(gx+300,gy,360,gh*.42,ICE,ramp(st,.4,1.6),{glow:true});txt('VITAMIN E',gx+480,gy+70,44,{color:ICE,weight:800,ls:3});bar(gx+1000,gy,360,gh*.84,GOLD,ramp(st,.9,2.3),{glow:true});txt('MELATONIN',gx+1180,gy+70,44,{color:GOLD,weight:800,ls:3});
+      txt('2×',gx+1180,gy-gh*.84-100,140,{color:GOLD,weight:900,alpha:ramp(st,2,2.6),glow:AMBER,blur:50});txt('as effective',gx+1180,gy-gh*.84-220,40,{color:MUTED,weight:600,alpha:ramp(st,2.2,2.8)});ctx.restore()}}
+  ctx.restore()};
+/* ---- 10 MITOCHONDRIA (scenes 141-143) ---- */
+V.cell=function(S){const {t,lt,n,st}=S;const a=eo(ramp(lt,0,1));ctx.save();ctx.globalAlpha*=a;const cx=CX,cy=CY-40;
+  // cutaway cell: big blob with a wedge removed
+  ctx.save();ctx.beginPath();for(let i=0;i<=60;i++){const an=i/60*TAU,r=820+Math.sin(an*4+t*.5)*30;ctx.lineTo(cx+Math.cos(an)*r,cy+Math.sin(an)*r*.78)}ctx.closePath();const g=ctx.createRadialGradient(cx,cy,100,cx,cy,900);g.addColorStop(0,'rgba(80,110,220,0.25)');g.addColorStop(1,'rgba(30,40,110,0.35)');ctx.fillStyle=g;ctx.fill();ctx.strokeStyle='rgba(180,200,255,0.7)';ctx.lineWidth=14;ctx.stroke();
+  // inner membrane line (cutaway look)
+  ctx.beginPath();for(let i=0;i<=60;i++){const an=i/60*TAU,r=760+Math.sin(an*4+t*.5)*30;ctx.lineTo(cx+Math.cos(an)*r,cy+Math.sin(an)*r*.78)}ctx.closePath();ctx.strokeStyle='rgba(180,200,255,0.25)';ctx.lineWidth=6;ctx.stroke();
+  // nucleus
+  circ(cx-120,cy+40,230);ctx.fillStyle=rgba(VIOLET,.4);ctx.fill();ctx.strokeStyle=VIOLET;ctx.lineWidth=8;ctx.stroke();circ(cx-150,cy+10,70);ctx.fillStyle=rgba(VIOLET,.7);ctx.fill();txt('NUCLEUS',cx-120,cy+320,34,{color:rgba(VIOLET,.9),weight:800,ls:3});
+  // ER squiggles
+  ctx.strokeStyle='rgba(180,200,255,0.35)';ctx.lineWidth=6;for(let k=0;k<3;k++){ctx.beginPath();for(let i=0;i<=30;i++){const u=i/30;ctx.lineTo(cx-600+u*400,cy-250+k*70+Math.sin(u*14+k)*18)}ctx.stroke()}
+  // mitochondria
+  const mitos=[[cx+380,cy-260,.4],[cx+520,cy+120,-.3],[cx+140,cy+330,.9],[cx-420,cy+300,-.6],[cx+230,cy-380,-1],[cx-450,cy-330,.5]];
+  const hl=eo(ramp(lt,.8,2.2));mitos.forEach((m,i)=>{const q=ramp(hl,i/6*.6,i/6*.6+.4);drawMito(m[0],m[1],90,m[2],{glow:q*(.7+.3*pulse(t,1.3,i/6)),color:lerpColor(ICE,ORANGE,q)});
+    if(n>=143){const q2=ramp(t-532.1,.3+i*.15,1+i*.15);for(let k=0;k<4;k++){const u=(t*.5+k/4+hash(i*4+k))%1;ctx.save();ctx.globalAlpha*=q2*(1-u)*.9;ctx.translate(m[0],m[1]);ctx.rotate(m[2]);circ((u-.5)*260,Math.sin(u*TAU+k)*40,10);ctx.fillStyle=GOLD;ctx.shadowColor=GOLD;ctx.shadowBlur=20;ctx.fill();ctx.restore()}}});
+  txt('MITOCHONDRIA',cx+540,cy-480,60,{color:ORANGE,weight:900,ls:6,alpha:hl});line(cx+480,cy-440,cx+430,cy-320,ORANGE,4,hl);
+  if(n>=142)txt('the tiny energy factories',cx+540,cy-410,40,{color:MUTED,weight:500,alpha:ramp(t-529.88,.2,.9)});
+  if(n>=143){headline('much of your melatonin may be made *inside them',CX,330,86,{p:ramp(st,.2,1.3),hl:GOLD})}
+  else{txt('A CELL · CUTAWAY',CX,330,54,{color:MUTED,weight:800,ls:8,alpha:ramp(lt,.3,1)})}
+  ctx.restore()};
+function lerpColor(a,b,t){const pa=parseInt(a.slice(1),16),pb=parseInt(b.slice(1),16);const r=Math.round(lerp(pa>>16&255,pb>>16&255,t)),g=Math.round(lerp(pa>>8&255,pb>>8&255,t)),bl=Math.round(lerp(pa&255,pb&255,t));return `rgb(${r},${g},${bl})`}
+/* ---- 10 WHALES & DOLPHINS (scenes 144-147) ---- */
+V.whales=function(S){const {t,lt,n,st}=S;const a=eo(ramp(lt,0,.8));ctx.save();ctx.globalAlpha*=a;
+  // ocean
+  const g=ctx.createLinearGradient(0,600,0,H);g.addColorStop(0,'rgba(10,40,90,0)');g.addColorStop(.3,'rgba(10,40,90,0.55)');g.addColorStop(1,'rgba(3,10,30,0.9)');ctx.fillStyle=g;ctx.fillRect(0,600,W,H);
+  ctx.strokeStyle='rgba(120,200,255,0.35)';ctx.lineWidth=5;ctx.beginPath();for(let i=0;i<=80;i++){const x=i/80*W;ctx.lineTo(x,700+Math.sin(i*.4+t*1.4)*18+Math.sin(i*.9-t*.8)*10)}ctx.stroke();
+  // light shafts
+  ctx.save();ctx.globalCompositeOperation='screen';for(let i=0;i<5;i++){const x=500+i*700+Math.sin(t*.3+i)*60;const lg=ctx.createLinearGradient(x,700,x+200,1800);lg.addColorStop(0,rgba(CYAN,.12));lg.addColorStop(1,rgba(CYAN,0));ctx.fillStyle=lg;ctx.beginPath();ctx.moveTo(x-60,700);ctx.lineTo(x+60,700);ctx.lineTo(x+360,1900);ctx.lineTo(x-40,1900);ctx.closePath();ctx.fill()}ctx.restore();
+  const wx=1200+Math.sin(t*.25)*120,wy=1250+Math.sin(t*.6)*40;drawWhale(wx,wy,260,{});const dx=2900+Math.sin(t*.4)*150,dy=1000+Math.sin(t*.9)*60;drawDolphin(dx,dy,170,{rot:Math.sin(t*.9)*.15});
+  if(n===144){headline('one group proves the sleep link from the *opposite side',CX,330,90,{p:ramp(lt,.2,1.4),hl:CYAN})}
+  if(n>=145){const b=t-538.84;const q=eo(ramp(b,.2,1));ctx.save();ctx.globalAlpha*=q;ctx.translate(CX,420);card(-1200,-230,2400,460,{r:60,stroke:rgba(CYAN,.4)});drawDNA(-900,0,120,380,t,{});
+    const genes=['melatonin-making genes','melatonin receptor genes'];genes.forEach((s,i)=>{const p=ramp(b,.8+i*.9,1.6+i*.9);txt(s,-640,-80+i*160,54,{align:'left',color:WHITE,weight:700,alpha:ramp(p,0,.4)});const w=measure(s,54,700);line(-650,-80+i*160,-650+(w+20)*eo(ramp(p,.4,1)),-80+i*160,RED,14);txt('LOST',-640+w+60,-80+i*160,46,{align:'left',color:RED,weight:900,ls:4,alpha:ramp(p,.8,1)})});ctx.restore()}
+  if(n>=146){const b=t-543.44;const q=eo(ramp(b,.2,1));ctx.save();ctx.globalAlpha*=q;const bx=CX,by=1500;const side=Math.floor(b*.7)%2;
+    // brain top-view: two hemispheres
+    for(const sx of[-1,1]){const asleep=(sx<0?0:1)===side;ctx.save();ctx.translate(bx+sx*170,by);ctx.beginPath();ctx.ellipse(0,0,160,240,0,0,TAU);ctx.fillStyle=asleep?rgba(VIOLET,.35):rgba(PINK,.35);ctx.fill();ctx.strokeStyle=asleep?VIOLET:PINK;ctx.lineWidth=8;ctx.shadowColor=asleep?VIOLET:PINK;ctx.shadowBlur=asleep?10:50;ctx.stroke();ctx.shadowColor='transparent';
+      ctx.strokeStyle='rgba(255,255,255,0.3)';ctx.lineWidth=4;for(let k=0;k<4;k++){ctx.beginPath();ctx.moveTo(-100,-150+k*90);ctx.bezierCurveTo(-30,-190+k*90,30,-110+k*90,100,-150+k*90);ctx.stroke()}
+      if(asleep){txt('z',sx*40,-300,70,{color:VIOLET,weight:900});txt('z',sx*90,-360,50,{color:VIOLET,weight:900,alpha:.7})}else{for(let k=0;k<6;k++){const u=(t*2+k/6)%1;ctx.save();ctx.globalAlpha*=1-u;circ((hash(k)-.5)*200,-200+u*-120,8);ctx.fillStyle=PINK;ctx.fill();ctx.restore()}}ctx.restore()}
+    txt('one half of the brain sleeps at a time',bx,by+330,48,{color:WHITE,weight:700});ctx.restore()}
+  if(n>=147){const q=eo(ramp(st,.2,1));ctx.save();ctx.globalAlpha*=q;arrow(CX-900,700,CX-420,1240,{p:q,color:GOLD,w:8,bend:-.3,glow:true});arrow(CX+900,700,CX+420,1240,{p:q,color:GOLD,w:8,bend:.3,glow:true});pill(CX,1000,'CONNECTED',{color:GOLD,size:56});ctx.restore()}
+  ctx.restore()};
+/* ---- 11 THE ANSWER (scenes 148-156) ---- */
+V.answer=function(S){const {t,lt,n,st}=S;const a=eo(ramp(lt,0,.8));ctx.save();ctx.globalAlpha*=a;
+  if(n===148){headline('THE *ANSWER',CX,CY-120,240,{p:ramp(lt,.2,1.2),weight:900,hl:GOLD,blur:80});txt('to the question behind all of it',CX,CY+120,60,{color:MUTED,weight:500,alpha:ramp(lt,1,1.8)})}
+  if(n>=149&&n<=152){// top statement area with molecule + flow
+    const b=t-551.06;const q=eo(ramp(b,0,.9));ctx.save();ctx.globalAlpha*=q;
+    const mx=760,my=CY-380;ctx.save();ctx.globalCompositeOperation='screen';glow(mx,my,600,AMBER,.22);ctx.restore();drawMolecule(mx,my,90,t*.3,{});drawMoon(mx+520,my-260,70,{});
+    txt('AN ANCIENT SIGNAL',mx+700,my-120,76,{align:'left',color:GOLD,weight:900,ls:6});txt('built to read darkness · ~4 billion years old',mx+700,my-30,44,{align:'left',color:MUTED,weight:500});
+    if(n>=150){const b2=t-554.7;const p=back(ramp(b2,.2,1));ctx.save();ctx.globalAlpha*=sat(p*2);ctx.translate(mx+700,my+160);ctx.scale(p,p);drawPhone(0,0,110,220,{rot:-.15,glowColor:ICE,glowA:.5,screen:[rgba(ICE,.95),rgba(BLUE,.85)]});txt('does NOT damage it',120,2,60,{align:'left',color:WHITE,weight:800});drawCheck(880,0,44,ramp(b2,.8,1.4));ctx.restore()}
+    if(n>=151){const b3=t-557.02;const y=my+400;const nodes=[['SCREEN',ICE,(x)=>drawPhone(x,y,90,180,{rot:-.1,screen:[rgba(ICE,.95),rgba(BLUE,.85)]})],['EYES',CYAN,(x)=>drawEye(x,y,80,{retinaA:1})],['MASTER CLOCK',CYAN,(x)=>drawClock(x,y,80,{h:12,m:0,color:CYAN,hand:WHITE})],['PINEAL',AMBER,(x)=>drawPineal(x,y,22,1,t)]];
+      nodes.forEach((nd,i)=>{const x=mx+i*820;const p=ramp(b3,.2+i*.5,.8+i*.5);ctx.save();ctx.globalAlpha*=p;nd[2](x);txt(nd[0],x,y+170,38,{color:nd[1],weight:800,ls:4});ctx.restore();if(i<3)arrow(x+160,y,x+820-180,y,{p:ramp(b3,.6+i*.5,1.2+i*.5),color:i<2?ICE:AMBER,w:8,glow:true})});
+      pill(mx+1230,y-200,'"IT IS DAYTIME"',{color:ICE,size:44,alpha:ramp(b3,1.6,2.2)})}
+    if(n>=152){const b4=t-561.34;headline('what protects it is *LESS of that message',CX,CY+560,96,{p:ramp(b4,.2,1.4),hl:GOLD,weight:800})}
+    ctx.restore()}
+  if(n>=153){// checklist cards
+    const items=[{s:153,title:'DIMMER · WARMER · SHORTER',sub:'evening light',c:GOLD,d:(x,y)=>{drawBulb(x-160,y,90,{on:.4});drawSun(x,y,34,{t,alpha:.9});drawClock(x+170,y,60,{h:21,m:0,color:GOLD,hand:WHITE})},v:'✓'},{s:154,title:'GLASSES',sub:'only if they truly block the blue band',c:ORANGE,d:(x,y)=>drawGlasses(x,y,52),v:'if'},{s:155,title:'NIGHT MODE',sub:'cuts some blue · brightness still counts',c:WARM,d:(x,y)=>drawPhone(x,y,120,240,{rot:-.1,screen:[rgba(WARM,.95),rgba(ORANGE,.85)],glowColor:ORANGE,glowA:.3}),v:'partly'},{s:156,title:'MELATONIN PILLS',sub:'a separate tool · mixed evidence',c:RED,d:(x,y)=>{drawCapsule(x-60,y,70,-.4,GOLD,'#fff');drawGummy(x+90,y+10,60,RED)},v:'mixed'}];
+    const fadeTop=n>=153?eo(ramp(t-564.44,0,.8)):0;
+    items.forEach((it,i)=>{const start=SCENES[it.s-1].s+.15;const p=back(ramp(t,start,start+.9));if(p<=0)return;const act=n===it.s;const x=560+i*920,y=n>=153?lerp(1200,CY-20,fadeTop):1200;ctx.save();ctx.globalAlpha*=sat(p*2)*(act?1:.75);ctx.translate(x,y+(1-p)*200);ctx.scale(p,p);card(-420,-380,840,760,{r:60,stroke:act?rgba(it.c,.7):undefined,accent:it.c});it.d(0,-120);
+      txt(it.title,0,120,40,{color:it.c,weight:900,ls:2});const lines=wrapLines(it.sub,700,36,500);lines.forEach((l,k)=>txt(l,0,190+k*44,36,{color:MUTED,weight:500}));
+      ctx.save();ctx.translate(0,300);pill(0,0,it.v==='✓'?'✓  DO THIS':it.v==='if'?'✓  IF THEY REALLY BLOCK':it.v==='partly'?'~  HELPS A BIT':'?  MIXED EVIDENCE',{color:it.v==='✓'?GREEN:it.v==='if'?ORANGE:it.v==='partly'?WARM:RED,size:30});ctx.restore();ctx.restore()});
+    if(n>=153){const b=t-564.44;ctx.save();ctx.globalAlpha*=fadeTop;txt('WHAT ACTUALLY PROTECTS IT',CX,330,70,{color:WHITE,weight:900,ls:10});ctx.restore()}}
+  ctx.restore()};
+/* ---- OUTRO (scenes 157-158) ---- */
+V.outro=function(S){const {t,lt,n,st}=S;const a=eo(ramp(lt,0,.8));ctx.save();ctx.globalAlpha*=a;
+  ctx.save();ctx.globalCompositeOperation='screen';glow(CX,CY-120,1400,AMBER,.18);glow(CX,CY-120,700,VIOLET,.2);ctx.restore();
+  const q=back(ramp(lt,.2,1.1));ctx.save();ctx.translate(CX,CY-220);ctx.scale(q,q);drawMoon(-760,0,120,{});txt('DAILY WELLNESS',120,0,190,{color:WHITE,weight:900,ls:14,glow:ICE,blur:40});ctx.restore();
+  txt('real science vs wellness myths · every week',CX,CY+40,56,{color:MUTED,weight:500,alpha:ramp(lt,.9,1.7)});
+  const pp=back(ramp(lt,1.4,2.2));ctx.save();ctx.globalAlpha*=sat(pp*2);ctx.translate(CX,CY+220);ctx.scale(pp,pp);pill(0,0,'NEW EPISODE EVERY WEEK',{color:GOLD,size:48,fill:rgba(GOLD,.18)});ctx.restore();
+  // orbiting molecule + icons
+  for(let i=0;i<3;i++){const an=t*.3+i*TAU/3;const x=CX+Math.cos(an)*1500,y=CY-120+Math.sin(an)*420;ctx.save();ctx.globalAlpha*=.35;if(i===0)drawMolecule(x,y,40,t*.5,{});else if(i===1)drawGlasses(x,y,30,{});else drawBook(x,y,50,{});ctx.restore()}
+  if(n>=158){const p=eo(ramp(st,.2,1));ctx.save();ctx.globalAlpha*=p;ctx.translate(CX,CY+560);card(-1000,-110,2000,220,{r:60,stroke:'rgba(255,255,255,0.25)',shadow:false});txt('General education · not medical advice',0,0,54,{color:WHITE,weight:700});ctx.restore()}
+  ctx.restore()};
+
+/* =====================================================================
+   START — autoplay. Uses the requestAnimationFrame timestamp, so
+   virtual-time frame renderers (puppeteer/timecut style) stay in sync.
+   ===================================================================== */
+const Q=new URLSearchParams(location.search);const startAt=parseFloat(Q.get('t'))||0;const DEBUG=Q.get('debug')==='1';let T0=null;
+function frame(now){if(T0===null)T0=now-startAt*1000;const t=Math.min((now-T0)/1000,TOTAL-.001);try{render(t)}catch(e){console.error(e)}requestAnimationFrame(frame)}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
