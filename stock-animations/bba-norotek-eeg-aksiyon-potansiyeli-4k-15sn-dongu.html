@@ -1,8 +1,8 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="tr">
 <head>
 <meta charset="utf-8">
-<title>Neurotech - EEG to Action Potential - 4K 15s Loop</title>
+<title>Nörotek - EEG'den Aksiyon Potansiyeline - 4K 15 sn Döngü</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
   html,body{margin:0;padding:0;width:100%;height:100%;background:#03040a;overflow:hidden;cursor:none}
@@ -14,14 +14,14 @@
 <canvas id="c" width="3840" height="2160"></canvas>
 <script>
 /*
-  NEUROTECH  -  EEG  >  ALPHA  >  BCI 1973  >  CORTEX  >  SCALE  >  ACTION POTENTIAL
+  NÖROTEK  -  EEG  >  ALFA  >  BBA 1973  >  KORTEKS  >  ÖLÇEK  >  AKSİYON POTANSİYELİ
   -------------------------------------------------------------------------------------
-  * 3840x2160 canvas, 15.000 s, seamless loop (frame at t=15 == frame at t=0), autoplays instantly from frame 0.
-  * Everything is a pure function of time t, so it is frame-exact for offline/virtual-time renderers.
-  * Hooks for render tools:
-        ?t=7.25         freeze on one time (seconds)
-        ?labels=0       hide every text label (pure visuals, language neutral)
-        window.renderAt(seconds)   draw an exact frame      window.DURATION = 15
+  * 3840x2160 tuval, 15.000 sn, kusursuz döngü (t=15 karesi == t=0 karesi), ilk kareden itibaren anında otomatik oynar.
+  * Her şey t zamanının saf bir fonksiyonudur; çevrimdışı / sanal zamanlı render araçlarında kare kare birebir çıkar.
+  * Render araçları için kancalar:
+        ?t=7.25         tek bir ana sabitle (saniye)
+        ?labels=0       tüm yazıları gizle (saf görsel, dilden bağımsız)
+        window.renderAt(saniye)   tam bir kare çiz      window.DURATION = 15
 */
 (() => {
 'use strict';
@@ -391,7 +391,7 @@ function eegPanel(tt, E) {
   const X = 980, Y = 190, Wd = 840, Hh = 700;
   panel(X, Y, Wd, Hh, 30, 1);
   text('EEG', X + 38, Y + 58, { size: 22, font: MONO, ls: 9, a: .95, weight: 500 });
-  text('10 CH  ·  256 Hz', X + Wd - 38, Y + 58, { size: 17, font: MONO, ls: 4, a: .45, align: 'right' });
+  text('10 KANAL  ·  256 Hz', X + Wd - 38, Y + 58, { size: 17, font: MONO, ls: 4, a: .45, align: 'right' });
   al(.12); ctx.fillStyle = '#fff'; ctx.fillRect(X + 38, Y + 84, Wd - 76, 1);
   const x0 = X + 118, x1 = X + Wd - 38, span = 1.5, pps = (x1 - x0) / span, tau = tt + 5.37;
   const gC = hgrad(x0, x1, C.cy, [[0, 0], [.4, .55], [1, 1]]), gB = hgrad(x0, x1, C.wh, [[0, 0], [.4, .35], [1, .8]]);
@@ -410,7 +410,7 @@ function eegPanel(tt, E) {
   }
   // time axis
   for (let i = 0; i <= 6; i++) { const x = x0 + (x1 - x0) * i / 6; al(.25); ctx.fillStyle = '#fff'; ctx.fillRect(x, Y + Hh - 52, 1, 8); }
-  text('0.25 s', x0, Y + Hh - 22, { size: 14, font: MONO, a: .4, ls: 2 });
+  text('0,25 s', x0, Y + Hh - 22, { size: 14, font: MONO, a: .4, ls: 2 });
   al(.5); ctx.fillStyle = rgba(C.cy, 1); ctx.fillRect(X + Wd - 38 - 36, Y + Hh - 44, 36, 1.5);
   text('50 µV', X + Wd - 38 - 46, Y + Hh - 38, { size: 14, font: MONO, a: .4, align: 'right', ls: 2 });
 }
@@ -457,7 +457,7 @@ function beatA(tt) {
 /* =============================================================================================
    BEAT B  -  ALPHA WAVE   (scenes 30-34)
 ============================================================================================= */
-const BANDS = [['δ', '0.5–4', .5], ['θ', '4–8', 1.2], ['α', '8–13', 2.3], ['β', '13–30', 4.2], ['γ', '30+', 8]];
+const BANDS = [['δ', '0,5–4', .5], ['θ', '4–8', 1.2], ['α', '8–13', 2.3], ['β', '13–30', 4.2], ['γ', '30+', 8]];
 function beatB(u, t) {
   const grow = eout(clamp(u / .8)), flat = 1 - sstep(4.45, 5.05, t), Amp = 150 * grow * flat;
   const cy = 560, x0 = 100, x1 = 1820, per = 344, NL = 15;
@@ -487,14 +487,14 @@ function beatB(u, t) {
   const kc = Math.ceil(870 / per - .75 * u - .25), xa = per * (.75 * u + .25 + kc), xb = xa + per, by = cy - Amp - 34;
   const bA = grow * flat * sstep(.5, 1, u);
   ctx.strokeStyle = rgba(C.wh, 1); ctx.lineWidth = 1.4; al(.55 * bA); ctx.beginPath(); ctx.moveTo(xa, by); ctx.lineTo(xb, by); ctx.moveTo(xa, by - 10); ctx.lineTo(xa, by + 10); ctx.moveTo(xb, by - 10); ctx.lineTo(xb, by + 10); ctx.stroke();
-  text('T ≈ 0.1 s', (xa + xb) / 2, by - 18, { size: 20, font: MONO, align: 'center', a: .8 * bA, ls: 3 });
+  text('T ≈ 0,1 s', (xa + xb) / 2, by - 18, { size: 20, font: MONO, align: 'center', a: .8 * bA, ls: 3 });
 
   // big alpha glyph + captions
   const gA = eout(clamp((u - .1) / .6)), fl = flat;
   text('α', 104, 408, { size: 400, weight: 200, grad: [C.cy, C.vi], a: gA * fl });
-  text('ALPHA WAVE', 440, 236, { size: 24, font: MONO, ls: 10, weight: 500, a: .95 * gA * fl });
+  text('ALFA DALGASI', 440, 236, { size: 24, font: MONO, ls: 10, weight: 500, a: .95 * gA * fl });
   text('8 – 13 Hz', 436, 326, { size: 92, weight: 200, a: gA * fl });
-  text('BERGER WAVE', 440, 376, { size: 20, font: MONO, ls: 7, a: .55 * gA * fl, color: rgba(C.cy, 1) });
+  text('BERGER DALGASI', 440, 376, { size: 20, font: MONO, ls: 7, a: .55 * gA * fl, color: rgba(C.cy, 1) });
 
   // spectrum
   const sx = 1290, sy = 120, sw = 520, sh = 200, sA = eout(clamp((u - .3) / .6)) * fl;
@@ -506,7 +506,7 @@ function beatB(u, t) {
     al(sA * (inA ? 1 : .45)); ctx.fillStyle = inA ? rgba(C.cy, 1) : rgba(C.wh, .8); rr(x, y - h, 6, h, 3); ctx.fill();
     if (inA && i === 9) glow(x + 3, y - h, 30, C.cy, .7 * sA);
   }
-  text('SPECTRUM', sx + 30, sy + 40, { size: 15, font: MONO, ls: 5, a: .6 * sA });
+  text('SPEKTRUM', sx + 30, sy + 40, { size: 15, font: MONO, ls: 5, a: .6 * sA });
   [0, 10, 20, 30, 40].forEach(f => text(String(f), sx + 33 + f * ((sw - 60) / 46), sy + sh - 14, { size: 12, font: MONO, a: .38 * sA, align: 'center' }));
 
   // band selector
@@ -563,7 +563,7 @@ function beatC(u) {
   }
   if (ba > 0) {
     const x = px(1970), a = sstep(0, .3, ba);
-    text('1970s', x, cy - 78, { size: 26, font: MONO, align: 'center', ls: 6, a: .9 * a * (1 - arrive * .0) , color: rgba(C.cy, 1) });
+    text('1970\'ler', x, cy - 78, { size: 26, font: MONO, align: 'center', ls: 6, a: .9 * a * (1 - arrive * .0) , color: rgba(C.cy, 1) });
     al(.5 * a); ctx.fillStyle = rgba(C.cy, 1); ctx.fillRect(x - .7, cy - 62, 1.4, 34);
   }
   // playhead
@@ -579,17 +579,17 @@ function beatC(u) {
     const bp = eback(clamp((u - 1.45) / .55)), bx = 1305, bs = 1 + .0 * bp;
     ctx.save(); ctx.translate(bx, 0); ctx.scale(.86 + .14 * bp, .86 + .14 * bp); ctx.translate(-bx, 0);
     ctx.font = '300 236px ' + SANS; ctx.letterSpacing = '8px';
-    const tw = LABELS ? ctx.measureText('BCI').width : 520, sweep = fract((u - 1.6) * .7);
+    const tw = LABELS ? ctx.measureText('BBA').width : 520, sweep = fract((u - 1.6) * .7);
     const g = ctx.createLinearGradient(bx - tw / 2, 0, bx + tw / 2, 0);
     g.addColorStop(0, rgba(C.cy, 1)); g.addColorStop(1, rgba(C.vi, 1));
     if (LABELS) {
-      ctx.textAlign = 'center'; ctx.fillStyle = g; al(clamp(bp)); ctx.fillText('BCI', bx, 412);
+      ctx.textAlign = 'center'; ctx.fillStyle = g; al(clamp(bp)); ctx.fillText('BBA', bx, 412);
       const g2 = ctx.createLinearGradient(bx - tw / 2 + sweep * tw * 1.6 - tw * .3, 0, bx - tw / 2 + sweep * tw * 1.6, 0);
       g2.addColorStop(0, 'rgba(255,255,255,0)'); g2.addColorStop(.5, 'rgba(255,255,255,.95)'); g2.addColorStop(1, 'rgba(255,255,255,0)');
-      ctx.fillStyle = g2; al(clamp(bp) * .9); ctx.fillText('BCI', bx, 412);
+      ctx.fillStyle = g2; al(clamp(bp) * .9); ctx.fillText('BBA', bx, 412);
     }
     ctx.restore();
-    text('BRAIN–COMPUTER INTERFACE', bx, 470, { size: 22, font: MONO, align: 'center', ls: 7, a: .75 * clamp(bp), weight: 500 });
+    text('BEYİN–BİLGİSAYAR ARAYÜZÜ', bx, 470, { size: 22, font: MONO, align: 'center', ls: 7, a: .75 * clamp(bp), weight: 500 });
     // connector
     const ca = sstep(1.55, 1.95, u); ctx.strokeStyle = rgba(C.wh, 1); ctx.lineWidth = 1.8; al(.7 * ca);
     ctx.beginPath(); ctx.moveTo(840, 330); ctx.lineTo(930 + 20 * ca, 330); ctx.moveTo(918 + 20 * ca, 316); ctx.lineTo(932 + 20 * ca, 330); ctx.lineTo(918 + 20 * ca, 344); ctx.stroke();
@@ -628,7 +628,7 @@ function beatC(u) {
     if (st > .5) checkMark(dx + 54, dy + 81, 20, clamp((st - .5) * 2), [4, 20, 14], 4);
   }
   ctx.restore();
-  text('PEER REVIEWED', dx, dy + 160, { size: 17, font: MONO, align: 'center', ls: 8, a: .55 * sa });
+  text('HAKEMLİ MAKALE', dx, dy + 160, { size: 17, font: MONO, align: 'center', ls: 8, a: .55 * sa });
 }
 
 /* =============================================================================================
@@ -724,18 +724,18 @@ function beatD(u, t) {
   drawLens(u, t);
   // numbers
   const cnt = eout(clamp((u - .45) / 1.3)), na = sstep(.4, .9, u);
-  text('CEREBRAL CORTEX  ·  NEURONS', 1010, 826, { size: 19, font: MONO, ls: 7, a: .7 * na, weight: 500 });
+  text('SEREBRAL KORTEKS  ·  NÖRON', 1010, 826, { size: 19, font: MONO, ls: 7, a: .7 * na, weight: 500 });
   text(Math.round(15 * cnt) + '–' + Math.round(33 * cnt), 1004, 960, { size: 150, weight: 200, grad: [C.wh, C.cy], a: na, ls: 2 });
   ctx.font = '200 150px ' + SANS; ctx.letterSpacing = '2px';
   const nw = LABELS ? ctx.measureText(Math.round(15 * cnt) + '–' + Math.round(33 * cnt)).width : 0;
-  text('× 10⁹', 1004 + Math.max(nw, 330) + 26, 960, { size: 64, weight: 300, a: .8 * na, color: rgba(C.cy, 1) });
+  text('milyar', 1004 + Math.max(nw, 330) + 26, 960, { size: 64, weight: 300, a: .8 * na, color: rgba(C.cy, 1) });
   // synapse chip
   const cx = 1636, cy = 842, ca = sstep(.9, 1.4, u);
   panel(cx - 26, cy - 50, 262, 100, 22, ca);
   for (let i = 0; i < 7; i++) { const a = i / 7 * TAU + t * .6; al(.8 * ca); ctx.strokeStyle = rgba(C.cy, 1); ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(cx + 38, cy); ctx.lineTo(cx + 38 + Math.cos(a) * 24, cy + Math.sin(a) * 24); ctx.stroke(); glow(cx + 38 + Math.cos(a) * 24, cy + Math.sin(a) * 24, 7, C.cy, .8 * ca); }
   glow(cx + 38, cy, 20, C.wh, .9 * ca);
   text('~10³+', cx + 80, cy + 6, { size: 38, weight: 300, a: ca });
-  text('SYNAPSES / NEURON', cx + 78, cy + 30, { size: 10, font: MONO, ls: 1.5, a: .55 * ca });
+  text('SİNAPS / NÖRON', cx + 78, cy + 30, { size: 10, font: MONO, ls: 1.5, a: .55 * ca });
 }
 
 /* =============================================================================================
@@ -748,10 +748,10 @@ function beatE(u) {
     ctx.fillStyle = '#cfe0ff'; al((v ? .09 : .3) * e0); ctx.fillRect(330, y(v), 1260, 1);
     text(String(v), 306, y(v) + 6, { size: 18, font: MONO, align: 'right', a: .45 * e0 });
   }
-  text('× 10⁹', 306, y(36) + 6, { size: 18, font: MONO, align: 'right', a: .45 * e0, color: rgba(C.cy, 1) });
+  text('milyar', 306, y(36) + 6, { size: 18, font: MONO, align: 'right', a: .45 * e0, color: rgba(C.cy, 1) });
   const bars = [
-    { x: 520, w: 270, v: 8.1, col: C.wm, col2: C.wm, label: 'WORLD POPULATION', big: '≈ 8' },
-    { x: 1090, w: 270, v: 33, col: C.cy, col2: C.vi, label: 'CORTICAL NEURONS', big: '15–33', lo: 15 }];
+    { x: 520, w: 270, v: 8.1, col: C.wm, col2: C.wm, label: 'DÜNYA NÜFUSU', big: '≈ 8' },
+    { x: 1090, w: 270, v: 33, col: C.cy, col2: C.vi, label: 'KORTEKS NÖRONLARI', big: '15–33', lo: 15 }];
   const sp = 13, rad = 3.7;
   bars.forEach((b, bi) => {
     const hpx = k * b.v, cols = Math.floor(b.w / sp), rows = Math.ceil(hpx / sp);
@@ -776,7 +776,7 @@ function beatE(u) {
     if (nd) glow(b.x + b.w / 2, lastTop, 160, b.col, .35 * e0 * (bi ? 1 : .7));
     const v0 = bi ? 33 : 8.1;
     text(b.big, b.x + b.w / 2, y(v0) - 34, { size: 62, weight: 200, align: 'center', a: sstep(.2, 1, u - (.3 + 1.25 * hpx / 640) + .3) * e0, grad: [C.wh, b.col] });
-    text('× 10⁹', b.x + b.w / 2 + (bi ? 130 : 80), y(v0) - 34, { size: 22, font: MONO, a: .5 * reached * e0, color: rgba(b.col, 1) });
+    text('milyar', b.x + b.w / 2 + (bi ? 130 : 80), y(v0) - 34, { size: 22, font: MONO, a: .5 * reached * e0, color: rgba(b.col, 1) });
     // icon
     const ic = b.x + b.w / 2, iy = base + 56, ia = sstep(.15, .6, u);
     if (bi === 0) { person(ic, iy, 38, C.wm, .95 * ia, 2.2); person(ic - 34, iy + 8, 30, C.wm, .55 * ia, 1.8); person(ic + 34, iy + 8, 30, C.wm, .55 * ia, 1.8); }
@@ -797,7 +797,6 @@ function beatE(u) {
   ctx.save(); ctx.translate(1530, y(24)); ctx.scale(.8 + .2 * rp, .8 + .2 * rp);
   panel(-20, -62, 310, 124, 26, clamp(rp));
   text('≈ 2–4×', 4, 18, { size: 70, weight: 200, grad: [C.wh, C.cy], a: clamp(rp) });
-  text('PER PERSON-SCALE', 2, 46, { size: 12, font: MONO, ls: 4, a: .0 });
   ctx.restore();
   glow(1640, y(24), 240, C.cy, .12 * ra);
 }
@@ -829,7 +828,7 @@ function beatF(u, t) {
 
   /* ---- membrane panel ---- */
   panel(90, 190, 860, 700, 30, 1);
-  text('MEMBRANE  ·  ION CHANNELS', 126, 248, { size: 19, font: MONO, ls: 7, a: .85, weight: 500 });
+  text('HÜCRE ZARI  ·  İYON KANALLARI', 126, 248, { size: 19, font: MONO, ls: 7, a: .85, weight: 500 });
   const my = 545, wob = x => 1.6 * Math.sin(t * 2.2 + x * .07);
   // lipids
   const lip = new Path2D(), heads = new Path2D(), heads2 = new Path2D();
@@ -880,17 +879,17 @@ function beatF(u, t) {
     }
   });
   // legend
-  [['Na⁺', C.cy], ['K⁺', C.vi], ['Ca²⁺', C.am], ['Cl⁻', C.mi]].forEach((l, i) => {
-    const x = 138 + i * 120; ctx.beginPath(); ctx.arc(x, 858, 5, 0, TAU); ctx.fillStyle = rgba(l[1], 1); al(.95); ctx.fill();
+  [['Na⁺ sodyum', C.cy], ['K⁺ potasyum', C.vi], ['Ca²⁺ kalsiyum', C.am], ['Cl⁻ klorür', C.mi]].forEach((l, i) => {
+    const x = 138 + i * 200; ctx.beginPath(); ctx.arc(x, 858, 5, 0, TAU); ctx.fillStyle = rgba(l[1], 1); al(.95); ctx.fill();
     text(l[0], x + 14, 864, { size: 16, font: MONO, a: .65 });
   });
-  text('INSIDE', 914, 800, { size: 13, font: MONO, align: 'right', ls: 5, a: .3 });
-  text('OUTSIDE', 914, 282, { size: 13, font: MONO, align: 'right', ls: 5, a: .3 });
+  text('HÜCRE İÇİ', 914, 800, { size: 13, font: MONO, align: 'right', ls: 5, a: .3 });
+  text('HÜCRE DIŞI', 914, 282, { size: 13, font: MONO, align: 'right', ls: 5, a: .3 });
 
   /* ---- voltage graph ---- */
   const GX = 980, GY = 190, GW = 840, GH = 430;
   panel(GX, GY, GW, GH, 30, 1);
-  text('ACTION POTENTIAL', GX + 38, GY + 58, { size: 19, font: MONO, ls: 7, a: .85, weight: 500 });
+  text('AKSİYON POTANSİYELİ', GX + 38, GY + 58, { size: 19, font: MONO, ls: 7, a: .85, weight: 500 });
   const vc = mixc(C.cy, C.am, sstep(-62, 30, V));
   text((V < -.5 ? '−' : V > .5 ? '+' : '') + Math.abs(Math.round(V)), GX + GW - 112, GY + 70, { size: 62, weight: 200, align: 'right', color: rgba(vc, 1) });
   text('mV', GX + GW - 38, GY + 66, { size: 20, font: MONO, align: 'right', a: .6, ls: 3 });
@@ -900,7 +899,7 @@ function beatF(u, t) {
     text(lab, pX0 - 14, yv(v) + 6, { size: 17, font: MONO, align: 'right', a: .6 });
   }
   ctx.setLineDash([7, 7]); ctx.strokeStyle = rgba(C.am, 1); ctx.lineWidth = 1.3; al(.7); ctx.beginPath(); ctx.moveTo(pX0, yv(-55)); ctx.lineTo(pX1, yv(-55)); ctx.stroke(); ctx.setLineDash([]);
-  text('THRESHOLD', pX1, yv(-55) - 10, { size: 13, font: MONO, align: 'right', ls: 4, a: .75, color: rgba(C.am, 1) });
+  text('EŞİK', pX1, yv(-55) - 10, { size: 13, font: MONO, align: 'right', ls: 4, a: .75, color: rgba(C.am, 1) });
   const past = new Path2D(), fut = new Path2D();
   for (let x = pX0; x <= pX1; x += 2) {
     const tv = tau - (curX - x) / pps, v = apV(Math.max(tv, -1)), yy = yv(v);
@@ -918,7 +917,7 @@ function beatF(u, t) {
   /* ---- axon ---- */
   const AX = 980, AY = 650, AW = 840, AH = 240;
   panel(AX, AY, AW, AH, 30, 1);
-  text('AXON', AX + 38, AY + 58, { size: 19, font: MONO, ls: 7, a: .85, weight: 500 });
+  text('AKSON', AX + 38, AY + 58, { size: 19, font: MONO, ls: 7, a: .85, weight: 500 });
   const ay = AY + 135, a0 = AX + 120, a1 = AX + AW - 110;
   glow(AX + 78, ay, 70, C.vi, .5); ctx.beginPath(); ctx.arc(AX + 78, ay, 24, 0, TAU); ctx.fillStyle = '#e6dcff'; al(.95); ctx.fill();
   for (let i = 0; i < 4; i++) { const a = Math.PI * (.65 + i * .23) ; ctx.beginPath(); ctx.moveTo(AX + 78, ay); ctx.lineTo(AX + 78 + Math.cos(a) * 46, ay + Math.sin(a) * 46 + (i < 2 ? 0 : 0)); ctx.strokeStyle = rgba(C.vi, 1); ctx.lineWidth = 2; al(.7); ctx.stroke(); }
@@ -939,7 +938,7 @@ function beatF(u, t) {
 /* =============================================================================================
    HUD  +  POST
 ============================================================================================= */
-const CHAPTERS = ['EEG · SCALP ELECTRODES', 'ALPHA RHYTHM · 8–13 Hz', 'BCI · 1973', 'CEREBRAL CORTEX', 'SCALE · PEOPLE vs NEURONS', 'ACTION POTENTIAL'];
+const CHAPTERS = ['EEG · KAFA DERİSİ ELEKTROTLARI', 'ALFA RİTMİ · 8–13 Hz', 'BBA · 1973', 'SEREBRAL KORTEKS', 'ÖLÇEK · İNSANLAR / NÖRONLAR', 'AKSİYON POTANSİYELİ'];
 function hud(alphas) {
   GA = 1; mode('lighter'); ctx.setTransform(U, 0, 0, U, 0, 0);
   const m = 56, L = 34; ctx.strokeStyle = 'rgba(205,224,255,1)'; ctx.lineWidth = 1.4; al(.26);
