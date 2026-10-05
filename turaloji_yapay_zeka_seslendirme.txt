@@ -1,0 +1,77 @@
+Yapay zekâ senin işini elinden alacak mı? Kısa cevap: Evet. Ama çoğu insanın düşündüğü şekilde değil.
+
+Dünya Ekonomik Forumu'nun raporuna göre, 2030'a kadar dünyada 92 milyon iş ortadan kalkacak. Doksan iki milyon.
+
+Ama aynı raporda bir rakam daha var. Ve bu konuyu anlatan çoğu kişi o rakamı sana söylemiyor. İşte o rakam, işini kaybedenlerle kariyerini katlayanlar arasındaki farkı anlatıyor. Birazdan açıklıyorum.
+
+Ben Turaloji. Bu videoda sana korku satmayacağım, "her şey çok güzel olacak" masalı da anlatmayacağım. Sadece gerçek rakamlar, gerçek şirket hikâyeleri. Hangi işler gidiyor, hangileri büyüyor ve en önemlisi: sen hangi tarafta olacaksın? Videonun sonunda bugün başlayabileceğin üç hamleyi vereceğim. O yüzden sakın erken ayrılma.
+
+Hadi başlayalım.
+
+Önce tabloya bakalım. Üç dev kurum, üç ayrı alarm.
+
+Birinci alarm: Goldman Sachs. Üretken yapay zekâ, dünyanın büyük ekonomilerinde 300 milyon tam zamanlı işi otomasyona açık hale getirebilir. Üç yüz milyon. En çok risk altında olanlar arasında idari işler ve hukuk var. Ama aynı rapor bir şey daha söylüyor: Bu dönüşüm, küresel ekonomiyi yüzde 7 büyütebilir. Yani pasta küçülmüyor. Pasta el değiştiriyor. Soru şu: Sen pastanın hangi tarafında olacaksın?
+
+İkinci alarm: IMF. Dünyadaki işlerin yaklaşık yüzde 40'ı yapay zekâdan etkilenecek. Gelişmiş ülkelerde bu oran yüzde 60'a kadar çıkıyor. IMF Başkanı Kristalina Georgieva bunu şöyle tarif etti: "İş piyasasına çarpan bir tsunami."
+
+Dur, bir saniye. "Etkilenmek" ile "işini kaybetmek" aynı şey değil. IMF'ye göre bu işlerin kabaca yarısında yapay zekâ çalışanı güçlendirecek, daha verimli hale getirecek. Diğer yarısında ise... işi doğrudan yapay zekâ yapacak.
+
+Şimdi söz verdiğim gizli rakama geliyorum. Dünya Ekonomik Forumu: 92 milyon iş kaybolurken, aynı dönemde 170 milyon yeni iş doğacak. Yüz yetmiş milyon. Net kazanç: 78 milyon iş.
+
+İyi haber gibi duruyor, değil mi? Ama tuzak tam burada. Kaybolan iş ile doğan iş, aynı kişiye, aynı şehre, aynı maaşla gelmiyor. Aynı rapor diyor ki: işlerdeki becerilerin yaklaşık yüzde 40'ı değişecek ve çalışanların yüzde 59'u yeniden eğitime ihtiyaç duyacak.
+
+Yani asıl soru "iş kalacak mı?" değil. Asıl soru şu: Sen yeni işe hazır mısın?
+
+Ama bunlar geleceğe dair tahminler. Asıl korkutucu olan şey, şu anda, şu dakika yaşanıyor. Ve ilk darbeyi alanlar, gençler.
+
+Stanford Üniversitesi'nden bir ekip, Amerika'da milyonlarca çalışanın maaş bordrosu verisini inceledi. Sonuç şok edici: Yapay zekâya en açık mesleklerde, 22 ile 25 yaş arasındaki çalışanların istihdamı yaklaşık yüzde 13 geriledi. Peki aynı mesleklerdeki deneyimli çalışanlar? Neredeyse hiç etkilenmedi.
+
+Neden mi? Çünkü yapay zekâ, kitaplardan öğrenilebilen bilgide harika. Başlangıç seviyesi işlerin çoğu da tam olarak bu: ilk taslağı yazmak, standart raporu hazırlamak, basit kodu yazmak. Yıllarla kazanılan sezgi ve tecrübe ise henüz onun güçlü olduğu yer değil.
+
+Şimdi bu detayı çok iyi dinle. Aynı çalışma, düşüşün sadece yapay zekânın insanın yerini aldığı alanlarda yaşandığını gösteriyor. Yapay zekâ insana yardımcı olarak kullanıldığında ise aynı düşüş yok. Bu cümleyi aklında tut. Videonun kilit noktası bu.
+
+Bir de şu var. Yapay zekâ şirketi Anthropic'in CEO'su Dario Amodei, giriş seviyesindeki beyaz yaka işlerinin yarısının önümüzdeki bir ile beş yıl içinde yok olabileceğini söyledi. İşsizlik oranının yüzde 10 ile 20 arasına çıkabileceğini de ekledi. Bunu, bu teknolojiyi yapan şirketin başındaki isim söylüyor. Hem de "gerçeği şekerle kaplamayı bırakalım" diyerek.
+
+Bunun en tehlikeli yanı ne biliyor musun? Gürültü yok. Hiçbir şirket sabah kalkıp "yapay zekâ yüzünden seni işten çıkarıyoruz" demiyor. Bunun yerine sessizce yeni mezun almayı bırakıyor. İlan açılmıyor. Kimse kovulmuyor, ama kimse de işe girmiyor. İşsizlik manşetlerde değil, açılmayan ilanlarda saklanıyor. Buna sessiz erime diyebiliriz.
+
+Tamam, tablo karanlık. Peki neden herkes işini bırakıp köye kaçmıyor? Çünkü hikâyenin bir de ters yüzü var.
+
+İsveçli ödeme şirketi Klarna'yı hatırla. 2024'te gururla duyurdu: "Yapay zekâ asistanımız 700 müşteri temsilcisinin işini yapıyor." Manşetler hazırdı: "İnsanlar bitti."
+
+Bir yıl sonra ne oldu? CEO Sebastian Siemiatkowski, maliyetin fazla ön plana çıktığını ve bunun düşük kaliteye yol açtığını itiraf etti. Şirket yeniden insan almaya başladı. Hem de müşteri hizmetleri için.
+
+Ders çok net: Yapay zekâ bir işi alabilir. Ama her işi iyi yapamaz. Ve kalite düştüğünde müşteri bunu hisseder.
+
+Bu arada, buraya kadar izlediysen videoyu beğenerek bize destek olabilirsin. Henüz Turaloji'ye abone olmadıysan, bu tür derin analizler için abone ol ve zili aç. Çünkü şimdi işin tarih kısmına geliyoruz ve bu kısım korkunu epey azaltacak.
+
+Yıl 1940. O yıl çalışanlar, bugün sıradan saydığımız mesleklerin hiçbirini duymamıştı bile. MIT'den ekonomist David Autor'un araştırması şunu gösteriyor: Bugün çalışanların yaklaşık yüzde 60'ı, 1940'ta hiç var olmayan mesleklerde çalışıyor. Mobil uygulama geliştirici. Sosyal medya yöneticisi. Drone pilotu. İçerik üreticisi.
+
+Bir de ATM'leri hatırla. ATM'ler yayılmaya başlayınca herkes banka veznedarlarının sonunun geldiğini söyledi. Ama ne oldu? ATM'ler şube açmayı ucuzlattı, şube sayısı arttı ve veznedar sayısı uzun yıllar düşmek yerine arttı. Meslek yok olmadı, içeriği değişti. Veznedar artık sadece para saymıyor, müşteriye danışmanlık yapıyor.
+
+Ama dürüst olalım: Bu sefer farklı. Önceki teknolojiler kas gücünü ve tekrar eden işleri yuttu. Yapay zekâ ilk kez düşünce işine giriyor. Üstelik hızı da farklı. ChatGPT yaklaşık iki ayda 100 milyon kullanıcıya ulaştı. Elektriğin yaygınlaşması ise onlarca yıl sürmüştü. Uyum sağlamak için çok daha az zamanımız var.
+
+Yani "bir şey olmaz, hep böyle oldu" demek de yanlış, "her şey bitti" demek de. Gerçek tam ortada ve biraz rahatsız edici.
+
+Bir de büyük bir yanılgı var: "Ben yaratıcı bir işte çalışıyorum, bana bir şey olmaz." Maalesef olur. Bugün yapay zekâ saniyeler içinde görsel, müzik, metin ve video üretiyor. Yani yaratıcılık tek başına artık kalkan değil. Kalkan olan şey; senin zevkin, bakış açın ve kimliğin. Herkes aynı araçla üretebilir, ama kimse senin gibi bakamaz.
+
+Şimdi Türkiye'ye gelelim. Çağrı merkezleri, veri girişi, tekrar eden ofis işleri, standart raporlama. Uzmanlar bu alanları yapay zekânın ilk vuracağı yerler olarak gösteriyor. Öbür tarafta ise yapay zekâ, yazılım, siber güvenlik ve veri alanlarında uzman açığı her geçen yıl büyüyor. Türkiye'nin genç nüfusu büyük bir avantaj. Ama bu avantaj, sadece bu araçları kullanmayı öğrenen gençler için geçerli.
+
+Hemen kendini test et. Sadece üç soru. Birincisi: İşinin büyük kısmı, her seferinde aynı adımları tekrar etmekten mi oluşuyor? İkincisi: İşini yaparken karar mı veriyorsun, yoksa sadece bilgi mi aktarıyorsun? Üçüncüsü: Yaptığın işin sonucu, kimse kontrol etmeden sisteme girebilir mi? Eğer üçüne de "evet" dediysen, uyarı lambası yanıyor demektir. Ama panik yok. Çünkü çözümü şimdi vereceğim.
+
+Ve işte çoğu insanın yaptığı en büyük hata tam burada: Yapay zekâdan kaçmak. "Ben kullanmam, işime zarar verir" demek. Gerçek şu: Seni yapay zekâ işsiz bırakmayacak. Seni, yapay zekâyı senden iyi kullanan biri işsiz bırakacak.
+
+Peki ne yapmalı? İşte üç hamle. Üçüncüsünü özellikle sona sakladım, çünkü en çok insanı o şaşırtıyor.
+
+Birinci hamle: Bugün başla. Yarın değil. Bu hafta işinin en sıkıcı, en tekrar eden görevini seç ve onu yapay zekâya yaptırmayı dene. E-posta taslakları, rapor özetleri, araştırma, veri düzenleme. Ama ona sadece soru sorma. İş arkadaşın gibi davran: ona bağlam ver, çıktısını eleştir, yeniden yazdır. Yapay zekâyla yarışan değil, ona yön veren kazanır. Günde sadece yirmi dakika. Bir ay sonra çevrendeki insanların çoğundan bir adım öndesin.
+
+İkinci hamle: Yapay zekânın zayıf olduğu yerde güçlen. Karar vermek. Sorumluluk almak. İnsanı ikna etmek, güven vermek, bağlamı okumak. Yapay zekâ taslağı yazar, ama imzayı sen atarsın. Bir hata çıkarsa hesap soracakları kişi o değil, sensin. Bu yüzden asıl değerin, kontrol eden ve karar veren kişi olmakta yatıyor.
+
+Üçüncü hamle: Öğrenmeyi öğren. Becerilerin yüzde 40'ı değişiyorsa, seni ayakta tutacak şey bildiklerin değil, ne kadar hızlı öğrendiğin. Kendi alanında derinleş ve yanına yapay zekâyı koy. Alan bilgisi artı yapay zekâ. Durdurulması çok zor bir kombinasyon.
+
+Toparlayalım. 92 milyon iş gidiyor, 170 milyon iş geliyor. Ama onlar aynı insanlara gelmiyor. İşler bitmiyor, dönüşüyor. Ve dönüşümü ilk fark edenler kazanıyor.
+
+Şimdi sana bir soru: Senin mesleğin bu tabloda nerede? Risk altında mı, yoksa yapay zekâyla birlikte büyüme yolunda mı? Yorumlara mesleğini yaz. En çok merak edilen meslekleri bir sonraki videoda tek tek analiz edeceğim.
+
+Videoyu beğenmeyi unutma, Turaloji'ye abone ol ve bildirim zilini aç. Çünkü yapay zekâ çağında kazananlar, gelişmeleri ilk bilenler olacak. Ekrandaki diğer videoya da göz at, orada seni yine şaşırtacak bir şey var.
+
+Bir sonraki videoda görüşmek üzere. Kendine iyi bak, Turaloji'yle kal.
