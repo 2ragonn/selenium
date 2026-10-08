@@ -1,0 +1,1082 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Human Cells Inside a Mouse</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@500;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#03060E}
+  #stage{position:absolute;left:0;top:0;width:3840px;height:2160px;transform-origin:0 0;overflow:hidden}
+  canvas{display:block;width:3840px;height:2160px}
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="c" width="3840" height="2160"></canvas></div>
+<script>
+/*
+  HUMAN CELLS INSIDE A MOUSE — chimera explainer animation
+  3840x2160 · autoplay · 568.34 s · synced to the voice-over timeline
+
+  COLOR THEORY (built from the topic):
+    The whole story is a contrast between two kinds of cells living in one body,
+    so the palette is anchored on a COMPLEMENTARY pair:
+      TEAL/CYAN  #2DE2E6  -> mouse / host tissue / lab science (cool, clinical)
+      CORAL      #FF4D6D  -> human cells (warm, alive, "us")
+    Split-complementary accents widen it without breaking harmony:
+      AMBER      #FFB547  -> dates, discoveries, hybrids, highlights
+      VIOLET     #8B5CFF  -> brain, consciousness, ethics (the "uneasy" line)
+      MINT       #3DFFA2  -> stem cells, success, "it worked"
+      RED        #FF2E4D  -> failure, warnings, disease
+    All set on a deep blue-black (#03060E) so the bioluminescent hues glow.
+*/
+'use strict';
+// ================================================================ CORE
+const cv=document.getElementById('c'),g=cv.getContext('2d',{alpha:false});
+const W=3840,H=2160,CX=1920,CY=1080,TAU=Math.PI*2,PI=Math.PI;
+const FH='"Space Grotesk","Inter","Segoe UI",Roboto,system-ui,sans-serif';
+const FB='"Inter","Segoe UI",Roboto,system-ui,sans-serif';
+const FM='"JetBrains Mono","Cascadia Code",Consolas,ui-monospace,monospace';
+const C={bg:'#03060E',ink:'#0A1226',cyan:'#2DE2E6',coral:'#FF4D6D',amber:'#FFB547',violet:'#8B5CFF',mint:'#3DFFA2',red:'#FF2E4D',blue:'#3D8BFF',white:'#F4F7FF',dim:'#7F8DB5',gold:'#E8C27A',rbc:'#C21838',pink:'#FF9EB0'};
+let G=0; // global clock (s)
+
+const clamp=(v,a=0,b=1)=>v<a?a:v>b?b:v;
+const lerp=(a,b,t)=>a+(b-a)*t;
+const eo=t=>{t=clamp(t);return t>=1?1:1-Math.pow(2,-10*t)};
+const eio=t=>{t=clamp(t);return t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2};
+const eback=t=>{t=clamp(t);const c1=1.70158,c3=c1+1;return 1+c3*Math.pow(t-1,3)+c1*Math.pow(t-1,2)};
+const seg=(v,a,b)=>clamp((v-a)/(b-a));
+const sin=Math.sin,cos=Math.cos,sq=Math.sqrt;
+function rng(seed){let s=seed|0;return function(){s=s+0x6D2B79F5|0;let t=Math.imul(s^s>>>15,1|s);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+function hash(n){let x=Math.sin(n*127.1+311.7)*43758.5453;return x-Math.floor(x)}
+function hex2rgb(h){const n=parseInt(h.slice(1),16);return[n>>16&255,n>>8&255,n&255]}
+const _rc={};function rgba(h,a){const c=_rc[h]||(_rc[h]=hex2rgb(h));return`rgba(${c[0]},${c[1]},${c[2]},${a})`}
+function mixc(h1,h2,t){const a=hex2rgb(h1),b=hex2rgb(h2);return'#'+[0,1,2].map(i=>Math.round(lerp(a[i],b[i],clamp(t))).toString(16).padStart(2,'0')).join('')}
+const scratch=document.createElement('canvas').getContext('2d');
+
+// ---------- glow sprites
+const _gl={};
+function glowSprite(col){if(_gl[col])return _gl[col];const c=document.createElement('canvas');c.width=c.height=256;const x=c.getContext('2d');const gr=x.createRadialGradient(128,128,0,128,128,128);gr.addColorStop(0,rgba(col,1));gr.addColorStop(.22,rgba(col,.5));gr.addColorStop(.55,rgba(col,.12));gr.addColorStop(1,rgba(col,0));x.fillStyle=gr;x.fillRect(0,0,256,256);return _gl[col]=c}
+function glow(x,y,r,col,a=1){if(a<=0||r<=0)return;const p=g.globalCompositeOperation,pa=g.globalAlpha;g.globalCompositeOperation='lighter';g.globalAlpha=pa*a;g.drawImage(glowSprite(col),x-r,y-r,2*r,2*r);g.globalCompositeOperation=p;g.globalAlpha=pa}
+
+// ---------- cell sprites
+const _cs={};
+function cellSprite(col,v,col2){const k=col+v+(col2||'');if(_cs[k])return _cs[k];
+  const c=document.createElement('canvas');c.width=c.height=256;const x=c.getContext('2d');const R=rng(v*97+7);const r=96;x.translate(128,128);
+  let gr=x.createRadialGradient(0,0,r*.7,0,0,r*1.32);gr.addColorStop(0,rgba(col,.28));gr.addColorStop(1,rgba(col,0));x.fillStyle=gr;x.fillRect(-128,-128,256,256);
+  x.beginPath();for(let i=0;i<=60;i++){const a=i/60*TAU,w=1+.05*sin(a*3+v)+.035*sin(a*5+v*2.3);const px=cos(a)*r*w,py=sin(a)*r*w;i?x.lineTo(px,py):x.moveTo(px,py)}x.closePath();
+  gr=x.createRadialGradient(-r*.3,-r*.3,r*.1,0,0,r);gr.addColorStop(0,rgba(col,.38));gr.addColorStop(.75,rgba(col,.16));gr.addColorStop(1,rgba(col,.5));x.fillStyle=gr;x.fill();x.lineWidth=5;x.strokeStyle=rgba(col,.95);x.stroke();
+  for(let i=0;i<8;i++){const a=R()*TAU,d=R()*r*.72;x.beginPath();x.ellipse(cos(a)*d,sin(a)*d,6+R()*10,4+R()*6,R()*3,0,TAU);x.fillStyle=rgba(col,.3+R()*.35);x.fill()}
+  const nx=(R()-.5)*r*.3,ny=(R()-.5)*r*.3,nr=r*.4;
+  if(col2){x.save();x.beginPath();x.arc(nx,ny,nr,0,TAU);x.clip();x.translate(nx,ny);x.rotate(.7);for(let i=-6;i<6;i++){x.fillStyle=i&1?col:col2;x.fillRect(i*nr*.3,-nr*2,nr*.3,nr*4)}x.restore()}
+  else{gr=x.createRadialGradient(nx-nr*.3,ny-nr*.3,2,nx,ny,nr);gr.addColorStop(0,'#ffffff');gr.addColorStop(.35,col);gr.addColorStop(1,rgba(col,.65));x.fillStyle=gr;x.beginPath();x.arc(nx,ny,nr,0,TAU);x.fill()}
+  x.beginPath();x.arc(nx,ny,nr,0,TAU);x.lineWidth=3;x.strokeStyle='rgba(255,255,255,.55)';x.stroke();
+  return _cs[k]=c}
+function cell(x,y,r,col,rot=0,a=1,v=0,col2=null){if(a<=0||r<=0)return;const s=cellSprite(col,v%6,col2);const pa=g.globalAlpha;g.globalAlpha=pa*a;g.save();g.translate(x,y);g.rotate(rot);g.drawImage(s,-r*1.333,-r*1.333,r*2.667,r*2.667);g.restore();g.globalAlpha=pa}
+function dot(x,y,r,col,a=1){if(a<=0||r<=0)return;const pa=g.globalAlpha;g.globalAlpha=pa*a;g.fillStyle=col;g.beginPath();g.arc(x,y,r,0,TAU);g.fill();g.globalAlpha=pa}
+
+// ---------- text
+function font(sz,w=700,f=FH){g.font=`${w} ${sz}px ${f}`}
+function T(s,x,y,sz,col=C.white,o={}){font(sz,o.w||700,o.f||FH);g.textAlign=o.al||'center';g.textBaseline=o.bl||'middle';g.letterSpacing=(o.ls!=null?o.ls:0)+'px';const pa=g.globalAlpha;g.globalAlpha=pa*(o.a??1);if(o.glow){g.shadowColor=o.glow===true?col:o.glow;g.shadowBlur=o.gb||sz*.3}if(o.stroke){g.lineWidth=o.stroke;g.strokeStyle=col;g.strokeText(s,x,y)}else{g.fillStyle=col;g.fillText(s,x,y)}g.shadowBlur=0;g.globalAlpha=pa;g.letterSpacing='0px'}
+const MARK={'*':C.coral,'_':C.cyan,'~':C.amber,'^':C.violet,'+':C.mint,'!':C.red};
+function parseLine(ln){const out=[];const re=/([*_~^+!])([^*_~^+!]+)\1|(\S+)/g;let m;while((m=re.exec(ln))){if(m[3])out.push({w:m[3],c:null});else m[2].trim().split(/\s+/).forEach(w=>out.push({w,c:MARK[m[1]]}))}return out}
+// kinetic headline: words rise from a mask, staggered
+function HL(str,x,y,sz,t,o={}){const lines=str.split('\n'),lh=sz*(o.lh||1.02);font(sz,o.w||700,o.f||FH);g.letterSpacing=(o.ls??-sz*.035)+'px';g.textBaseline='alphabetic';g.textAlign='left';
+  const sp=sz*.26;let wi=0;const y0=y-(lines.length-1)*lh/2+sz*.36;
+  for(let li=0;li<lines.length;li++){const ws=parseLine(lines[li]);const wd=ws.map(w=>g.measureText(w.w).width);const tw=wd.reduce((a,b)=>a+b,0)+sp*(ws.length-1);
+    let cx=o.al==='left'?x:o.al==='right'?x-tw:x-tw/2;const ly=y0+li*lh;
+    for(let i=0;i<ws.length;i++){const k=eo((t-(o.d||0)-wi*(o.st??.06))/.6);
+      if(k>0){g.save();g.beginPath();g.rect(cx-sz*.3,ly-sz*1.08,wd[i]+sz*.6,sz*1.42);g.clip();const col=ws[i].c||o.col||C.white;g.globalAlpha*=(o.a??1);g.fillStyle=col;if(ws[i].c&&!o.noglow){g.shadowColor=col;g.shadowBlur=sz*.3}g.fillText(ws[i].w,cx,ly+(1-k)*sz*1.2);g.restore()}
+      cx+=wd[i]+sp;wi++}}
+  g.letterSpacing='0px'}
+function TOP(t,str,sub,o={}){const y=o.y||300,sz=o.sz||150;HL(str,o.x||CX,y,sz,t,o);if(sub){const nl=str.split('\n').length;tag(o.x||CX,y+nl*sz*.55+90,sub,o.pc||C.cyan,{a:eo((t-.3)/.5),al:o.al})}}
+function tag(x,y,s,col=C.cyan,o={}){const sz=o.sz||46;font(sz,700,FM);g.letterSpacing=(sz*.12)+'px';const tw=g.measureText(s).width;const h=sz*1.75,w=tw+h*1.35;const a=o.a??1;if(a<=0){g.letterSpacing='0px';return}
+  const x0=o.al==='left'?x:o.al==='right'?x-w:x-w/2;g.save();g.globalAlpha*=a;g.beginPath();g.roundRect(x0,y-h/2,w,h,h/2);g.fillStyle='rgba(8,14,30,.78)';g.fill();g.lineWidth=3;g.strokeStyle=rgba(col,.9);g.stroke();
+  g.beginPath();g.arc(x0+h*.52,y,h*.13,0,TAU);g.fillStyle=col;g.fill();glow(x0+h*.52,y,h*.6,col,.7);
+  g.fillStyle=o.tc||C.white;g.textAlign='left';g.textBaseline='middle';g.fillText(s,x0+h*.9,y+sz*.05);g.restore();g.letterSpacing='0px'}
+function stamp(s,x,y,sz,col,t,o={}){if(t<0)return;const k=clamp(t/.38);const sc=lerp(2.6,1,eback(k));g.save();g.translate(x,y);g.rotate(o.rot??-.05);g.scale(sc,sc);g.globalAlpha*=clamp(k*3);font(sz,800,FH);g.letterSpacing=(sz*.03)+'px';const w=g.measureText(s).width+sz*.9,h=sz*1.42;
+  g.beginPath();g.roundRect(-w/2,-h/2,w,h,sz*.16);g.fillStyle=rgba(col,o.fill??.14);g.fill();g.lineWidth=sz*.08;g.strokeStyle=col;g.shadowColor=col;g.shadowBlur=sz*.4;g.stroke();g.shadowBlur=0;
+  g.fillStyle=o.tc||col;g.textAlign='center';g.textBaseline='middle';g.fillText(s,0,sz*.05);g.restore();g.letterSpacing='0px';
+  if(t<.7){const r=eo((t-.15)/.5);g.save();g.globalAlpha*=(1-r)*.8;g.strokeStyle=col;g.lineWidth=10;g.beginPath();g.ellipse(x,y,sz*4*r+10,sz*1.6*r+10,0,0,TAU);g.stroke();g.restore()}}
+
+// ---------- strokes & marks
+function polyPart(pts,k){let L=0;const ls=[];for(let i=1;i<pts.length;i++){const l=Math.hypot(pts[i][0]-pts[i-1][0],pts[i][1]-pts[i-1][1]);ls.push(l);L+=l}let rem=L*clamp(k);g.beginPath();g.moveTo(pts[0][0],pts[0][1]);for(let i=1;i<pts.length&&rem>0;i++){const l=ls[i-1],f=Math.min(1,rem/l);g.lineTo(lerp(pts[i-1][0],pts[i][0],f),lerp(pts[i-1][1],pts[i][1],f));rem-=l}g.stroke()}
+function check(x,y,s,col,k){if(k<=0)return;g.save();g.translate(x,y);g.lineCap='round';g.lineJoin='round';g.lineWidth=s*.15;g.strokeStyle=col;g.shadowColor=col;g.shadowBlur=s*.25;polyPart([[-.45*s,0],[-.12*s,.32*s],[.5*s,-.38*s]],k);g.restore()}
+function cross(x,y,s,col,k){if(k<=0)return;g.save();g.translate(x,y);g.lineCap='round';g.lineWidth=s*.15;g.strokeStyle=col;g.shadowColor=col;g.shadowBlur=s*.25;polyPart([[-.4*s,-.4*s],[.4*s,.4*s]],clamp(k*2));if(k>.5)polyPart([[.4*s,-.4*s],[-.4*s,.4*s]],clamp(k*2-1));g.restore()}
+function badge(x,y,r,col,kind,k){if(k<=0)return;g.save();g.globalAlpha*=clamp(k*2);g.beginPath();g.arc(x,y,r*eback(k),0,TAU);g.fillStyle=rgba(col,.16);g.fill();g.lineWidth=r*.09;g.strokeStyle=col;g.stroke();g.restore();glow(x,y,r*2.2,col,.35*k);(kind==='x'?cross:check)(x,y,r*1.05,col,seg(k,.3,1))}
+function ringHUD(x,y,r,col,a=.5){if(a<=0)return;g.save();g.translate(x,y);g.globalAlpha*=a;g.strokeStyle=col;g.lineWidth=3;g.setLineDash([2,22]);g.beginPath();g.arc(0,0,r,0,TAU);g.stroke();g.setLineDash([]);g.lineWidth=7;
+  for(let i=0;i<3;i++){const s=G*(.22+i*.13)*(i%2?-1:1)+i*2;g.beginPath();g.arc(0,0,r*(.88+i*.07),s,s+.5+i*.35);g.stroke()}
+  g.lineWidth=2.5;for(let i=0;i<90;i++){const a=i/90*TAU+G*.04;const l=i%5?12:36;g.beginPath();g.moveTo(cos(a)*r*1.1,sin(a)*r*1.1);g.lineTo(cos(a)*(r*1.1+l),sin(a)*(r*1.1+l));g.stroke()}g.restore()}
+function rays(x,y,col,a=.08,n=20){g.save();g.translate(x,y);g.rotate(G*.08);g.globalCompositeOperation='lighter';for(let i=0;i<n;i++){const an=i/n*TAU;const gr=g.createLinearGradient(0,0,cos(an)*2600,sin(an)*2600);gr.addColorStop(0,rgba(col,a));gr.addColorStop(1,rgba(col,0));g.fillStyle=gr;g.beginPath();g.moveTo(0,0);g.arc(0,0,2600,an-.045,an+.045);g.closePath();g.fill()}g.restore()}
+function floaters(seed,n,cols,a=.5,rmin=10,rmax=40){const R=rng(seed);for(let i=0;i<n;i++){const x=(R()*W+G*(20+R()*40)*(R()<.5?-1:1)+W*4)%W,y=(R()*H+sin(G*.4+i)*40);const r=rmin+R()*(rmax-rmin);cell(x,y,r,cols[i%cols.length],G*.3+i,a*(.3+R()*.7),i)}}
+function speedLines(x,y,col,a,n=90){if(a<=0)return;const R=rng(77);g.save();g.strokeStyle=col;for(let i=0;i<n;i++){const an=R()*TAU,r0=500+R()*900,l=200+R()*700;g.globalAlpha=a*(.2+R()*.6);g.lineWidth=2+R()*5;g.beginPath();g.moveTo(x+cos(an)*r0,y+sin(an)*r0);g.lineTo(x+cos(an)*(r0+l),y+sin(an)*(r0+l));g.stroke()}g.restore()}
+function along(pts,f){f=((f%1)+1)%1;let L=0;const ls=[];for(let i=1;i<pts.length;i++){const l=Math.hypot(pts[i][0]-pts[i-1][0],pts[i][1]-pts[i-1][1]);ls.push(l);L+=l}let d=f*L;for(let i=1;i<pts.length;i++){if(d<=ls[i-1]){const u=d/ls[i-1];return[lerp(pts[i-1][0],pts[i][0],u),lerp(pts[i-1][1],pts[i][1],u)]}d-=ls[i-1]}return pts[pts.length-1]}
+function bez(p0,p1,p2,p3,u){const v=1-u;return[v*v*v*p0[0]+3*v*v*u*p1[0]+3*v*u*u*p2[0]+u*u*u*p3[0],v*v*v*p0[1]+3*v*v*u*p1[1]+3*v*u*u*p2[1]+u*u*u*p3[1]]}
+function panel(x,y,w,h,col,a=1,r=36){g.save();g.globalAlpha*=a;g.beginPath();g.roundRect(x,y,w,h,r);const gr=g.createLinearGradient(x,y,x+w,y+h);gr.addColorStop(0,'rgba(255,255,255,.07)');gr.addColorStop(1,'rgba(255,255,255,.02)');g.fillStyle=gr;g.fill();g.fillStyle='rgba(6,10,24,.55)';g.fill();g.lineWidth=3;g.strokeStyle=rgba(col,.75);g.stroke();
+  g.beginPath();g.moveTo(x+r,y+1.5);g.lineTo(x+w*.4,y+1.5);g.lineWidth=6;g.strokeStyle=col;g.stroke();g.restore()}
+
+// ---------- shapes (Path2D)
+const MOUSE=new Path2D('M -430 60 C -470 -120 -250 -260 -20 -250 C 150 -245 260 -190 330 -110 C 380 -70 450 -40 520 10 C 548 28 545 48 512 56 C 440 80 360 95 300 112 C 260 150 220 175 160 182 C 60 200 -150 212 -300 192 C -380 180 -425 140 -430 60 Z');
+const MEAR=(()=>{const p=new Path2D();p.ellipse(250,-205,95,108,-.3,0,TAU);return p})();
+const MBODY=(()=>{const p=new Path2D(MOUSE);p.addPath(MEAR);return p})();
+const MTAIL=new Path2D('M -425 95 C -560 175 -700 25 -820 75 C -920 117 -960 195 -1045 152');
+function drawMouse(x,y,s,o={}){const col=o.col||C.cyan,dp=o.draw??1;const L=n=>n/s;
+  g.save();g.translate(x,y);g.scale(o.flip?-s:s,s);g.globalAlpha*=(o.a??1);g.lineCap='round';g.lineJoin='round';
+  if(dp<1)g.setLineDash([3000*dp,8000]);g.strokeStyle=rgba(col,.22);g.lineWidth=L(30);g.stroke(MTAIL);g.strokeStyle=rgba(col,.9);g.lineWidth=L(9);g.stroke(MTAIL);g.setLineDash([]);
+  const fa=clamp(dp*1.6-.3);
+  g.save();g.globalAlpha*=fa;g.fillStyle=o.fill||rgba(col,.07);g.fill(MBODY);if(o.inner){g.save();g.clip(MBODY);o.inner();g.restore()}g.restore();
+  if(dp<1)g.setLineDash([4300*dp,9000]);if(o.dash)g.setLineDash([L(30),L(22)]);
+  for(const[lw,al]of[[46,.1],[18,.32],[6,1]]){g.strokeStyle=rgba(col,al);g.lineWidth=L(lw);g.stroke(MOUSE);g.stroke(MEAR)}
+  g.setLineDash([]);g.globalAlpha*=fa;
+  g.fillStyle=C.white;g.beginPath();g.arc(405,-42,15,0,TAU);g.fill();glow(405,-42,45,col,.8);
+  g.strokeStyle=rgba(col,.6);g.lineWidth=L(3);for(let i=-1;i<=1;i++){g.beginPath();g.moveTo(505,32);g.quadraticCurveTo(585,28+i*30,665,28+i*62);g.stroke()}
+  g.beginPath();g.ellipse(250,-205,55,66,-.3,0,TAU);g.strokeStyle=rgba(col,.45);g.stroke();
+  g.fillStyle=rgba(col,.55);g.beginPath();g.ellipse(170,192,48,20,0,0,TAU);g.fill();g.beginPath();g.ellipse(-250,200,55,22,0,0,TAU);g.fill();
+  g.restore()}
+let _mp=null;function mousePts(){if(_mp)return _mp;const R=rng(11);_mp=[];for(let y=-300;y<=230;y+=38)for(let x=-440;x<=550;x+=38){const px=x+(R()-.5)*20,py=y+(R()-.5)*20;if(scratch.isPointInPath(MBODY,px,py))_mp.push({x:px,y:py,h:R(),r:R()*TAU,v:(R()*6)|0,ph:R()*TAU})}return _mp}
+
+const PIG=new Path2D('M -420 0 C -420 -200 -200 -262 50 -256 C 260 -250 380 -170 420 -60 C 440 -10 440 60 420 110 C 380 200 200 242 0 242 C -220 242 -420 190 -420 0 Z');
+function drawPig(x,y,s,o={}){const col=o.col||C.amber;const L=n=>n/s;g.save();g.translate(x,y);g.scale(s,s);g.globalAlpha*=(o.a??1);g.lineCap='round';g.lineJoin='round';
+  g.fillStyle=rgba(col,.35);for(const lx of[-290,-140,150,290]){g.beginPath();g.roundRect(lx-38,180,76,150,20);g.fill()}
+  g.fillStyle=rgba(col,.07);g.fill(PIG);if(o.inner){g.save();g.clip(PIG);o.inner();g.restore()}
+  const ear=new Path2D('M 220 -225 L 320 -345 L 365 -185 Z');const snout=new Path2D();snout.ellipse(455,25,58,78,0,0,TAU);
+  for(const[lw,al]of[[42,.1],[16,.3],[6,1]]){g.strokeStyle=rgba(col,al);g.lineWidth=L(lw);g.stroke(PIG);g.stroke(ear);g.stroke(snout)}
+  g.fillStyle=col;g.beginPath();g.ellipse(445,0,10,18,0,0,TAU);g.fill();g.beginPath();g.ellipse(472,45,10,18,0,0,TAU);g.fill();
+  g.beginPath();g.arc(320,-70,15,0,TAU);g.fillStyle=C.white;g.fill();
+  g.strokeStyle=col;g.lineWidth=L(8);g.beginPath();for(let i=0;i<=40;i++){const a=i/40*TAU*1.6,r=10+i*1.4;const px=-430-cos(a)*r,py=-40+sin(a)*r;i?g.lineTo(px,py):g.moveTo(px,py)}g.stroke();
+  g.restore()}
+
+const HUMAN=new Path2D('M 0 -450 C 120 -450 270 -420 300 -330 L 360 40 C 366 80 318 92 306 56 L 240 -220 L 230 80 L 250 560 C 252 595 190 600 180 565 L 20 130 L -20 130 L -180 565 C -190 600 -252 595 -250 560 L -230 80 L -240 -220 L -306 56 C -318 92 -366 80 -360 40 L -300 -330 C -270 -420 -120 -450 0 -450 Z');
+const HHEAD=(()=>{const p=new Path2D();p.ellipse(0,-575,92,112,0,0,TAU);return p})();
+const HBODY=(()=>{const p=new Path2D(HUMAN);p.addPath(HHEAD);return p})();
+function drawHuman(x,y,s,o={}){const col=o.col||C.coral;const L=n=>n/s;g.save();g.translate(x,y);g.scale(s,s);g.globalAlpha*=(o.a??1);g.lineJoin='round';
+  g.fillStyle=rgba(col,.07);g.fill(HBODY);if(o.inner){g.save();g.clip(HBODY);o.inner();g.restore()}
+  if(o.dash)g.setLineDash([L(30),L(22)]);for(const[lw,al]of[[46,.1],[18,.3],[6,1]]){g.strokeStyle=rgba(col,al);g.lineWidth=L(lw);g.stroke(HUMAN);g.stroke(HHEAD)}g.restore()}
+
+const LIVER=new Path2D('M -600 -40 C -625 -230 -380 -305 -100 -292 C 150 -282 420 -245 560 -175 C 645 -132 605 -62 520 -42 C 380 -5 262 58 122 148 C 40 200 -10 160 -60 210 C -120 250 -230 248 -330 222 C -440 194 -540 130 -585 60 C -598 30 -600 0 -600 -40 Z');
+const BRAIN=(()=>{const p=new Path2D();for(let i=0;i<=240;i++){const a=i/240*TAU;const r=1+.03*sin(a*11)+.022*sin(a*17+1);let x=cos(a)*560*r,y=sin(a)*400*r;if(y>0)y*=.78;i?p.lineTo(x,y):p.moveTo(x,y)}p.closePath();return p})();
+const KIDNEY=new Path2D('M -60 -270 C 160 -300 270 -150 270 0 C 270 150 160 300 -60 270 C -200 250 -230 140 -140 70 C -90 35 -90 -35 -140 -70 C -230 -140 -200 -250 -60 -270 Z');
+const PANC=new Path2D('M -380 40 C -380 -60 -260 -95 -120 -60 C 20 -30 160 -115 300 -95 C 385 -85 405 -20 360 12 C 250 62 100 30 -40 72 C -160 112 -380 140 -380 40 Z');
+const BONE=(()=>{const p=new Path2D();p.roundRect(-420,-75,840,150,60);for(const sx of[-1,1])for(const sy of[-1,1]){p.moveTo(sx*430+90,sy*70);p.arc(sx*430,sy*70,90,0,TAU)}return p})();
+function strokeShape(path,col,s,o={}){const L=n=>n/s;if(o.dash)g.setLineDash([L(28),L(20)]);for(const[lw,al]of[[44,.1],[16,.3],[6,1]]){g.strokeStyle=rgba(col,al*(o.a??1));g.lineWidth=L(lw);g.stroke(path)}g.setLineDash([])}
+function drawBrainSulci(col,a){g.save();g.strokeStyle=rgba(col,a);g.lineWidth=6;g.lineCap='round';const cs=[[-420,-120,-200,-260,40,-150],[-300,40,-120,-80,120,20],[-60,-300,40,-150,-40,40],[150,-280,260,-120,180,60],[300,-200,420,-60,340,120],[-450,80,-300,160,-120,140],[60,120,200,180,380,120]];for(const c of cs){g.beginPath();g.moveTo(c[0],c[1]);g.quadraticCurveTo(c[2],c[3],c[4],c[5]);g.stroke()}g.restore()}
+
+// ---------- small biological props
+function virus(x,y,r,col,rot=0,a=1){if(a<=0)return;glow(x,y,r*2.6,col,.3*a);g.save();g.translate(x,y);g.rotate(rot);g.globalAlpha*=a;g.strokeStyle=col;g.fillStyle=col;g.lineWidth=r*.09;
+  for(let i=0;i<14;i++){const an=i/14*TAU;g.beginPath();g.moveTo(cos(an)*r,sin(an)*r);g.lineTo(cos(an)*r*1.32,sin(an)*r*1.32);g.stroke();g.beginPath();g.arc(cos(an)*r*1.42,sin(an)*r*1.42,r*.12,0,TAU);g.fill()}
+  g.beginPath();g.arc(0,0,r,0,TAU);g.fillStyle=rgba(col,.22);g.fill();g.lineWidth=r*.1;g.stroke();
+  g.beginPath();g.moveTo(-r*.3,-r*.5);g.lineTo(r*.3,-r*.3);g.lineTo(r*.15,r*.5);g.lineTo(-r*.25,r*.38);g.closePath();g.fillStyle=rgba(col,.65);g.fill();g.restore()}
+function bacterium(x,y,len,col,rot,a=1){if(a<=0)return;glow(x,y,len*1.1,col,.25*a);g.save();g.translate(x,y);g.rotate(rot);g.globalAlpha*=a;const r=len*.2;g.strokeStyle=rgba(col,.7);g.lineWidth=len*.02;
+  for(let k=0;k<6;k++){const sx=(k/5-.5)*len*.8,sy=(k%2?1:-1)*r;g.beginPath();g.moveTo(sx,sy);for(let i=1;i<=20;i++)g.lineTo(sx+sin(i*.6+G*8+k)*len*.04,sy+(k%2?1:-1)*i*len*.022);g.stroke()}
+  g.beginPath();g.roundRect(-len/2,-r,len,2*r,r);g.fillStyle=rgba(col,.3);g.fill();g.lineWidth=len*.035;g.strokeStyle=col;g.stroke();
+  g.fillStyle=rgba(col,.6);for(let i=0;i<4;i++){g.beginPath();g.arc((i/3-.5)*len*.6,(i%2-.5)*r*.6,r*.2,0,TAU);g.fill()}g.restore()}
+function parasite(x,y,s,col,rot,a=1){if(a<=0)return;glow(x,y,s*1.4,col,.3*a);g.save();g.translate(x,y);g.rotate(rot);g.globalAlpha*=a;g.beginPath();g.arc(0,0,s,PI*.15,PI*.85+PI,false);g.arc(0,-s*.35,s*.75,PI*.85+PI,PI*.15,true);g.closePath();g.fillStyle=rgba(col,.45);g.fill();g.lineWidth=s*.08;g.strokeStyle=col;g.stroke();g.beginPath();g.arc(0,s*.55,s*.16,0,TAU);g.fillStyle=col;g.fill();g.restore()}
+function rbc(x,y,r,rot,a=1){g.save();g.translate(x,y);g.rotate(rot);g.globalAlpha*=a;g.beginPath();g.ellipse(0,0,r,r*.82,0,0,TAU);g.fillStyle=C.rbc;g.fill();g.beginPath();g.ellipse(0,0,r*.5,r*.38,0,0,TAU);g.fillStyle='rgba(60,0,10,.45)';g.fill();g.lineWidth=r*.1;g.strokeStyle='rgba(255,90,110,.6)';g.beginPath();g.ellipse(0,0,r,r*.82,0,0,TAU);g.stroke();g.restore()}
+function capsule(x,y,len,rot,c1,c2,a=1){if(a<=0)return;g.save();g.translate(x,y);g.rotate(rot);g.globalAlpha*=a;const r=len*.22;g.beginPath();g.roundRect(-len/2,-r,len,2*r,r);g.save();g.clip();g.fillStyle=c1;g.fillRect(-len/2,-r,len/2,2*r);g.fillStyle=c2;g.fillRect(0,-r,len/2,2*r);g.fillStyle='rgba(255,255,255,.3)';g.fillRect(-len/2+r*.5,-r*.62,len-r,r*.3);g.restore();g.lineWidth=Math.max(2,len*.025);g.strokeStyle='rgba(255,255,255,.7)';g.stroke();g.restore()}
+function syringe(x,y,s,rot,push,col){g.save();g.translate(x,y);g.rotate(rot);g.scale(s,s);g.lineJoin='round';
+  g.strokeStyle='rgba(235,242,255,.95)';g.lineWidth=5;g.beginPath();g.moveTo(0,0);g.lineTo(170,0);g.stroke();
+  g.beginPath();g.roundRect(170,-48,430,96,16);g.fillStyle='rgba(255,255,255,.06)';g.fill();
+  const lw=395*(1-push);g.fillStyle=rgba(col,.8);g.fillRect(186,-34,lw,68);glow(186+lw/2,0,lw*.6+40,col,.4);
+  g.lineWidth=5;g.strokeStyle='rgba(235,242,255,.9)';g.beginPath();g.roundRect(170,-48,430,96,16);g.stroke();
+  g.lineWidth=3;for(let i=1;i<8;i++){g.beginPath();g.moveTo(186+i*50,-48);g.lineTo(186+i*50,-24);g.stroke()}
+  const px=186+lw;g.fillStyle='rgba(235,242,255,.95)';g.fillRect(px,-40,16,80);g.fillRect(px+16,-9,430,18);g.beginPath();g.roundRect(px+446,-62,24,124,8);g.fill();
+  g.fillRect(600,-70,18,140);g.restore()}
+function antibody(x,y,s,col,rot=0,a=1){g.save();g.translate(x,y);g.rotate(rot);g.globalAlpha*=a;g.strokeStyle=col;g.lineCap='round';g.lineWidth=s*.16;g.beginPath();g.moveTo(0,s*.55);g.lineTo(0,0);g.lineTo(-s*.42,-s*.48);g.moveTo(0,0);g.lineTo(s*.42,-s*.48);g.stroke();g.restore()}
+function neuron(x,y,s,col,seed,a=1){const R=rng(seed);g.save();g.translate(x,y);g.globalAlpha*=a;g.strokeStyle=col;g.lineCap='round';
+  for(let i=0;i<7;i++){const an=i/7*TAU+R();let px=0,py=0;g.lineWidth=s*.06;g.beginPath();g.moveTo(0,0);for(let j=0;j<4;j++){px+=cos(an+(R()-.5))*s*.25;py+=sin(an+(R()-.5))*s*.25;g.lineTo(px,py)}g.stroke()}
+  g.lineWidth=s*.05;g.beginPath();g.moveTo(0,0);g.bezierCurveTo(s*.5,s*.2,s*.8,-s*.2,s*1.3,s*.1);g.stroke();
+  g.beginPath();g.arc(0,0,s*.2,0,TAU);g.fillStyle=col;g.fill();g.restore();glow(x,y,s*.8,col,.5*a)}
+function astro(x,y,r,col,seed,a=1,n=8){const R=rng(seed);g.save();g.translate(x,y);g.globalAlpha*=a;g.strokeStyle=col;g.lineCap='round';
+  for(let i=0;i<n;i++){const an=i/n*TAU+R()*.5;let px=0,py=0,lw=r*.13;g.beginPath();g.moveTo(0,0);for(let j=0;j<5;j++){px+=cos(an+(R()-.5)*.8)*r*.22;py+=sin(an+(R()-.5)*.8)*r*.22;g.lineTo(px,py)}g.lineWidth=lw;g.stroke();
+    g.lineWidth=lw*.4;g.beginPath();g.moveTo(px*.6,py*.6);g.lineTo(px*.6+cos(an+1)*r*.3,py*.6+sin(an+1)*r*.3);g.stroke()}
+  g.beginPath();g.arc(0,0,r*.2,0,TAU);g.fillStyle=col;g.fill();g.restore();glow(x,y,r*1.2,col,.45*a)}
+function helix(x,y,len,amp,c1,c2,o={}){const n=o.n||26,lw=o.lw||10;g.save();g.translate(x,y);if(o.rot)g.rotate(o.rot);const tt=G*(o.sp??1.6);
+  for(let i=0;i<n;i++){const u=i/(n-1);const xx=-len/2+u*len;const ph=u*TAU*(o.turns||2)+tt;const y1=sin(ph)*amp,z=cos(ph);g.strokeStyle=rgba(o.rc||C.white,.18+.22*Math.abs(z));g.lineWidth=lw*.6;g.beginPath();g.moveTo(xx,y1);g.lineTo(xx,-y1);g.stroke()}
+  for(const[col,sg]of[[c1,1],[c2,-1]]){g.strokeStyle=col;g.lineWidth=lw;g.beginPath();for(let i=0;i<=90;i++){const u=i/90;const xx=-len/2+u*len;const yy=sg*sin(u*TAU*(o.turns||2)+tt)*amp;i?g.lineTo(xx,yy):g.moveTo(xx,yy)}g.stroke()}
+  for(let i=0;i<n;i++){const u=i/(n-1);const xx=-len/2+u*len;const ph=u*TAU*(o.turns||2)+tt;const y1=sin(ph)*amp,z=cos(ph);g.fillStyle=c1;g.beginPath();g.arc(xx,y1,lw*(1+.35*z),0,TAU);g.fill();g.fillStyle=c2;g.beginPath();g.arc(xx,-y1,lw*(1-.35*z),0,TAU);g.fill()}
+  g.restore()}
+function hexPath(x,y,r){g.beginPath();for(let i=0;i<6;i++){const a=i/6*TAU+PI/6;i?g.lineTo(x+cos(a)*r,y+sin(a)*r):g.moveTo(x+cos(a)*r,y+sin(a)*r)}g.closePath()}
+function embryo(x,y,r,col,o={}){const n=o.n||26;g.save();g.translate(x,y);g.rotate(o.rot||0);
+  g.beginPath();g.arc(0,0,r*1.08,0,TAU);g.fillStyle=rgba(col,.05);g.fill();g.lineWidth=4;g.strokeStyle=rgba(col,.35);g.stroke();
+  for(let i=0;i<n;i++){const a=i/n*TAU;g.save();g.translate(cos(a)*r*.9,sin(a)*r*.9);g.rotate(a+PI/2);g.beginPath();g.ellipse(0,0,r*.13,r*.07,0,0,TAU);g.fillStyle=rgba(col,.28);g.fill();g.lineWidth=3;g.strokeStyle=rgba(col,.8);g.stroke();g.restore()}
+  const icm=o.icm||[];for(const q of icm)cell(q[0]*r,q[1]*r,r*.11,q[2]||col,G*.2+q[0],1,(q[0]*13|0)+3);
+  g.restore()}
+function pin(x,y,s,col,k){if(k<=0)return;const yy=y-(1-eback(k))*400;g.save();g.translate(x,yy);g.globalAlpha*=clamp(k*3);g.beginPath();g.moveTo(0,0);g.bezierCurveTo(-s*.6,-s*.6,-s*.55,-s*1.4,0,-s*1.4);g.bezierCurveTo(s*.55,-s*1.4,s*.6,-s*.6,0,0);g.fillStyle=col;g.fill();g.beginPath();g.arc(0,-s*1.0,s*.22,0,TAU);g.fillStyle=C.bg;g.fill();g.restore();glow(x,y,s,col,.6*k);g.save();g.globalAlpha*=k*(1-((G*1.2)%1));g.strokeStyle=col;g.lineWidth=5;g.beginPath();g.ellipse(x,y,s*((G*1.2)%1)*2,s*((G*1.2)%1)*.7,0,0,TAU);g.stroke();g.restore()}
+function icon(kind,x,y,s,col,a=1){g.save();g.globalAlpha*=a;switch(kind){
+  case'immune':for(let i=0;i<3;i++)antibody(x+(i-1)*s*.55,y+(i%2)*s*.2,s*.6,col,(i-1)*.4);break;
+  case'liver':g.translate(x,y);g.scale(s/1100,s/1100);g.fillStyle=rgba(col,.2);g.fill(LIVER);strokeShape(LIVER,col,s/1100);break;
+  case'tumor':{const R=rng(3);for(let i=0;i<14;i++){const a2=R()*TAU,d=R()*s*.3;cell(x+cos(a2)*d,y+sin(a2)*d,s*.13,col,a2,1,i)}break}
+  case'embryo':embryo(x,y,s*.42,col,{n:18,icm:[[-.35,-.3],[-.15,-.45],[-.45,-.05],[-.2,-.15]]});break;
+  case'brain':g.translate(x,y);g.scale(s/1200,s/1200);g.fillStyle=rgba(col,.15);g.fill(BRAIN);strokeShape(BRAIN,col,s/1200);drawBrainSulci(col,.5);break;
+  case'germ':cell(x-s*.15,y,s*.3,C.amber,0,1,2);for(let i=0;i<2;i++){g.strokeStyle=C.cyan;g.lineWidth=s*.03;g.beginPath();for(let j=0;j<20;j++)g.lineTo(x+s*.25+j*s*.02,y+(i-.5)*s*.4+sin(j*.8+G*8)*s*.03);g.stroke();g.fillStyle=C.cyan;g.beginPath();g.ellipse(x+s*.22,y+(i-.5)*s*.4,s*.06,s*.04,0,0,TAU);g.fill()}break;
+}g.restore()}
+// ================================================================ VISUALS A — hook, hybrid vs chimera
+const V={};
+
+V.hookScan=(t,p,d,o)=>{const s=1.36,mx=2140,my=1170;const k=eio(seg(t,.2,d-.1));const sc=lerp(-1060,600,k);
+  ringHUD(2000,1110,860,C.cyan,.22*eo(t/.6));
+  let n=0;drawMouse(mx,my,s,{draw:eo(t/.7),inner:()=>{for(const q of mousePts()){const on=q.x<sc;const pul=.5+.5*sin(G*3+q.ph);
+      if(on&&q.h<.45){n++;glow(q.x,q.y,62,C.coral,.3+.25*pul);cell(q.x,q.y,19+3*pul,C.coral,q.r+G*.4,1,q.v)}else dot(q.x,q.y,on?8:6,C.cyan,on?.42:.16)}
+    const gr=g.createLinearGradient(sc-180,0,sc+4,0);gr.addColorStop(0,rgba(C.cyan,0));gr.addColorStop(1,rgba(C.cyan,.4));g.fillStyle=gr;g.fillRect(sc-180,-330,184,580)}});
+  const wx=mx+sc*s;g.fillStyle=C.white;g.fillRect(wx-3,640,6,1060);glow(wx,660,110,C.cyan,.9);glow(wx,1690,110,C.cyan,.9);
+  tag(240,250,'SCAN · MUS MUSCULUS',C.cyan,{al:'left',a:eo(t/.4)});
+  T('HUMAN CELLS DETECTED',3600,230,52,C.dim,{al:'right',f:FM,w:700,ls:6,a:eo(t/.4)});
+  T(String(n*7).padStart(4,'0'),3600,380,200,C.coral,{al:'right',glow:true,f:FM,w:700,a:eo(t/.4)});
+  const hb=1-((G*1.6)%1);glow(mx+405*s,my-42*s,120*hb,C.white,.4*hb);
+};
+
+V.inject=(t,p,d,o)=>{const R=rng(5);
+  for(let i=0;i<150;i++){const x=R()*W,y=480+R()*1350,r=8+R()*16;dot(x+sin(G*.5+i)*12,y,r,C.cyan,.08+R()*.14)}
+  if(o.mouse)drawMouse(1650,1260,1.05,{a:.75,inner:()=>{for(const q of mousePts())dot(q.x,q.y,6,C.cyan,.15)}});
+  const tipX=o.mouse?1900:1720,tipY=o.mouse?1080:1140;const inK=eo(t/.6),push=eio(seg(t,.45,d*.9));
+  const N=30;for(let i=0;i<N;i++){const born=i/N;if(push<born)continue;const age=clamp((push-born)*2.2);const R2=rng(100+i);const a=1.9+R2()*1.9,dist=age*(380+R2()*520);
+    const x=tipX+cos(a)*dist,y=tipY+sin(a)*dist*.8;glow(x,y,70,C.coral,.3);cell(x,y,26+R2()*14,C.coral,G+i,eo(age*4),i)}
+  syringe(tipX+(1-inK)*900,tipY-(1-inK)*560,1.75,-.55,push,C.coral);
+  tag(tipX+780,tipY-640,o.label||'HUMAN CELLS',C.coral,{a:eo((t-.3)/.4)});
+  if(o.weeks){const wk=1+Math.floor(eio(seg(t,.4,d))*7.99);T('WEEK',3500,1500,56,C.dim,{al:'right',f:FM,ls:8});T(String(wk).padStart(2,'0'),3500,1640,190,C.amber,{al:'right',f:FM,glow:true})}
+  if(o.stamp)stamp(o.stamp,CX-200,520,150,C.amber,t-.8);
+};
+
+V.mouseQ=(t,p,d,o)=>{T('?',2700,1080,1700,rgba(C.amber,.09+.03*sin(G*3)),{w:700});ringHUD(1850,1150,780,C.amber,.18*eo(t/.5));
+  drawMouse(1880,1190,1.15,{draw:eo(t/.6),inner:()=>{for(const q of mousePts())if(q.h<p*.6)cell(q.x,q.y,20,C.coral,q.r+G*.4,1,q.v);else dot(q.x,q.y,6,C.cyan,.15)}});
+  for(let i=0;i<12;i++){const a=G*.9+i/12*TAU;const r=1-p*.55;const x=1850+cos(a)*1250*r,y=1150+sin(a)*560*r;cell(x,y,34,C.coral,a,.9,i);glow(x,y,80,C.coral,.25)}
+  TOP(t,'WHAT ~IF~...?',null,{y:300,sz:170});
+};
+
+V.already=(t,p,d,o)=>{rays(CX,1180,C.mint,.06);ringHUD(CX,1180,640,C.mint,.3*eo(t/.4));
+  drawMouse(CX+80,1250,.95,{inner:()=>{for(const q of mousePts())q.h<.45?cell(q.x,q.y,20,C.coral,q.r+G*.4,1,q.v):dot(q.x,q.y,7,C.cyan,.3)}});
+  stamp('IT ALREADY CAN',CX,520,170,C.mint,t-.1);badge(CX+760,1600,110,C.mint,'v',eo((t-.6)/.5));
+};
+
+V.strike=(t,p,d,o)=>{const word=o.word||'HYBRID';let sz=o.sz||520;font(sz,800,FH);g.letterSpacing=(-sz*.03)+'px';const w=g.measureText(word).width;g.letterSpacing='0px';
+  const k=eo(t/.5);const y=o.y||1060;g.save();g.globalAlpha*=k;T(word,CX,y,sz,C.white,{w:800,ls:-sz*.03,stroke:6});T(word,CX,y,sz,rgba(C.white,.05),{w:800,ls:-sz*.03});g.restore();
+  const sk=eio(seg(t,.55,1.0));g.save();g.strokeStyle=C.red;g.lineCap='round';g.lineWidth=40;g.shadowColor=C.red;g.shadowBlur=60;g.beginPath();g.moveTo(CX-w/2-80,y+30);g.lineTo(CX-w/2-80+(w+160)*sk,y-30*sk+30*(1-sk)*0);g.stroke();g.restore();
+  if(o.top)TOP(t,o.top,null,{y:330,sz:130});
+  if(o.sub)tag(CX,y+sz*.55+120,o.sub,o.subc||C.cyan,{a:eo((t-1.0)/.4),sz:56});
+};
+
+V.medicine=(t,p,d,o)=>{const k=eback(clamp(t/.5));const s=300*k;g.save();g.translate(CX,1080);g.rotate((1-k)*.8);g.beginPath();g.roundRect(-s*.33,-s,s*.66,2*s,s*.14);g.roundRect(-s,-s*.33,2*s,s*.66,s*.14);g.fillStyle=rgba(C.cyan,.12);g.fill('nonzero');g.lineWidth=12;g.strokeStyle=C.cyan;g.shadowColor=C.cyan;g.shadowBlur=60;g.stroke();g.restore();
+  ringHUD(CX,1080,560,C.cyan,.4*k);
+  g.save();g.strokeStyle=C.coral;g.lineWidth=12;g.lineJoin='round';g.shadowColor=C.coral;g.shadowBlur=30;g.beginPath();const off=(G*900)%W;for(let x=0;x<=W;x+=12){const u=((x+off)%900)/900;let y=1080;if(u>.4&&u<.45)y-=(u-.4)/.05*380;else if(u>=.45&&u<.5)y-=380-(u-.45)/.05*620;else if(u>=.5&&u<.54)y+=240-(u-.5)/.04*240;x?g.lineTo(x,y):g.moveTo(x,y)}g.globalAlpha=.55;g.stroke();g.restore();
+  for(let i=0;i<8;i++){const a=G*.7+i/8*TAU;capsule(CX+cos(a)*820,1080+sin(a)*420,150,a*2,i%2?C.coral:C.amber,C.white,.9)}
+  TOP(t,"IT'S ABOUT ~MEDICINE~",null,{y:330,sz:150});
+};
+
+V.lookInside=(t,p,d,o)=>{const R=rng(9);
+  for(let i=0;i<16;i++){const z=((i/16)+G*.55)%1;const r=Math.pow(z,2.3)*2700;g.strokeStyle=rgba(i%3?C.cyan:C.coral,z*.45);g.lineWidth=2+z*16;g.beginPath();g.arc(CX,CY,r,0,TAU);g.stroke()}
+  for(let i=0;i<80;i++){const a=R()*TAU,z=(R()+G*.5)%1,sc=Math.pow(z,2.2);const r=sc*2300+60;cell(CX+cos(a)*r,CY+sin(a)*r,10+sc*140,i%3?C.cyan:C.coral,a+G,clamp(z*2)*(1-sc*.4),i)}
+  speedLines(CX,CY,C.white,.35*(1-p));glow(CX,CY,600,C.white,.12);
+  HL('LOOK ~INSIDE~',CX,CY,330,t,{w:700});
+};
+
+V.blood=(t,p,d,o)=>{const yT=760,yB=1420;g.save();
+  const gr=g.createLinearGradient(0,yT,0,yB);gr.addColorStop(0,'rgba(120,10,30,.25)');gr.addColorStop(.5,'rgba(60,0,20,.12)');gr.addColorStop(1,'rgba(120,10,30,.25)');g.fillStyle=gr;g.fillRect(0,yT,W,yB-yT);
+  for(const yy of[yT,yB]){g.strokeStyle=rgba(C.coral,.6);g.lineWidth=10;g.beginPath();for(let x=0;x<=W;x+=20)g.lineTo(x,yy+sin(x*.004+G*1.5)*18);g.stroke()}g.restore();
+  const R=rng(21);for(let i=0;i<70;i++){const sp=300+R()*250,y=yT+60+R()*(yB-yT-120);const x=((R()*W+G*sp)%(W+300))-150;rbc(x,y+sin(G*2+i)*10,30+R()*14,G*(R()-.5)*3+i,.7)}
+  let tx=0,ty=0;for(let i=0;i<14;i++){const sp=260+R()*120,y=yT+120+R()*(yB-yT-240);const x=((R()*W+G*sp)%(W+400))-200;glow(x,y,110,C.coral,.4);cell(x,y,46,C.coral,G+i,1,i);if(i===4){tx=x;ty=y}}
+  g.strokeStyle=C.white;g.lineWidth=3;g.beginPath();g.moveTo(tx,ty-50);g.lineTo(tx+90,ty-220);g.lineTo(tx+180,ty-220);g.stroke();tag(tx+180,ty-220,'HUMAN IMMUNE CELL',C.coral,{al:'left',sz:40});
+  TOP(t,'IN ITS ~BLOOD~',null,{y:340,sz:140});
+};
+
+let _hex=null;function liverHex(){if(_hex)return _hex;_hex=[];const R=rng(31);const r=34;for(let row=-12;row<=12;row++)for(let col=-20;col<=20;col++){const x=col*r*1.75+(row&1?r*.87:0),y=row*r*1.5;if(scratch.isPointInPath(LIVER,x,y))_hex.push({x,y,h:R(),v:(R()*6)|0,ph:R()*TAU})}return _hex}
+V.liver=(t,p,d,o)=>{const s=1.95,lx=CX+(o.mode==='plant'?260:0),ly=1180,mode=o.mode||'fill';
+  let f=0;if(mode==='fill')f=lerp(o.f0||0,o.f1||.9,eio(seg(t,.15,d-.2)));else if(mode==='die')f=0;else f=.92;
+  const die=mode==='die'?eio(seg(t,.2,d-.1)):0;
+  g.save();g.translate(lx,ly);g.scale(s,s);g.fillStyle=rgba(C.amber,.04);g.fill(LIVER);g.save();g.clip(LIVER);
+  for(const q of liverHex()){const hum=q.h<f;let col=hum?C.coral:C.cyan;let a=hum?.85:.35;
+    if(mode==='die'){a=.4*(1-clamp((die-q.h*.8)*4));}
+    hexPath(q.x,q.y,31);g.fillStyle=rgba(col,a*.35);g.fill();g.lineWidth=2.5;g.strokeStyle=rgba(col,a);g.stroke();dot(q.x,q.y,7,col,a);
+    if(hum&&mode==='fill'&&q.h>f-.08)glow(q.x,q.y,70,C.coral,.5)}
+  g.restore();strokeShape(LIVER,C.amber,s);g.restore();
+  if(mode==='fill'){const bw=1400,bx=CX-bw/2,by=1640;g.fillStyle='rgba(255,255,255,.08)';g.fillRect(bx,by,bw,22);g.fillStyle=C.coral;g.fillRect(bx,by,bw*f,22);glow(bx+bw*f,by+11,80,C.coral,.8);T('MOUSE',bx-30,by+11,44,C.cyan,{al:'right',f:FM});T('HUMAN',bx+bw+30,by+11,44,C.coral,{al:'left',f:FM})}
+  if(mode==='die'){const R=rng(4);for(let i=0;i<26;i++){const q=liverHex()[(R()*liverHex().length)|0];const k=clamp((die-q.h*.8)*4);if(k>0&&k<1){const x=lx+q.x*s,y=ly+q.y*s-k*200;dot(x,y,10*(1-k),C.cyan,.8*(1-k))}}tag(CX,1660,'MOUSE LIVER CELLS DIE OFF',C.cyan,{a:eo((t-.3)/.4)})}
+  if(mode==='virus'){const R=rng(8);for(let i=0;i<18;i++){const u=clamp((t*.6-R()*.4)/.8);const sx=R()*W,sy=R()<.5?-100:H+100;const q=liverHex()[(R()*liverHex().length)|0];const tx=lx+q.x*s,ty=ly+q.y*s;const x=lerp(sx,tx,eio(u)),y=lerp(sy,ty,eio(u));virus(x,y,26,C.amber,G+i,1);if(u>=1)glow(tx,ty,90,C.red,.5+.4*sin(G*6+i))}
+    tag(CX,1660,'HEPATITIS B & C · IN A LIVING ANIMAL',C.amber,{a:eo((t-.3)/.4)})}
+  if(mode==='malaria'){const R=rng(12);for(let i=0;i<16;i++){const q=liverHex()[(R()*liverHex().length)|0];const u=clamp((t-R()*1.2)/1.2);const x=lerp(q.x*s+lx+(R()-.5)*1400,lx+q.x*s,eio(u)),y=lerp(-150,ly+q.y*s,eio(u));parasite(x,y,30,C.violet,G*2+i,1)}
+    tag(CX,1660,'MALARIA PARASITE · LIVER STAGE',C.violet,{a:eo((t-.3)/.4)})}
+  if(mode==='plant'){const R=rng(5);for(let i=0;i<10;i++){const u=((G*.35+i/10)%1);const x=lerp(250,lx-400,u),y=ly+sin(i*2.3)*260;if(u<.95)capsule(x,y,130,G+i,C.amber,C.white,clamp(u*5))}
+    for(let i=0;i<30;i++){const u=((G*.3+i/30)%1);const x=lerp(lx+500,3750,u),y=ly+sin(i*1.7)*380+sin(G+i)*30;g.fillStyle=i%3?rgba(C.mint,.8):rgba(C.amber,.8);hexPath(x,y,16+(i%3)*6);g.fill()}
+    for(let i=0;i<3;i++){g.save();g.translate(lx-60+i*200,ly-80+(i%2)*180);g.rotate(G*(i%2?-1:1)*1.2);g.strokeStyle=rgba(C.white,.5);g.lineWidth=14;g.beginPath();g.arc(0,0,60,0,TAU);g.stroke();for(let j=0;j<8;j++){g.rotate(TAU/8);g.fillStyle=rgba(C.white,.5);g.fillRect(55,-12,32,24)}g.restore()}
+    if(!o.stage)TOP(t,"THE BODY'S ~CHEMICAL PROCESSING PLANT~",null,{y:300,sz:120});else TOP(t,'WATCH A *HUMAN LIVER* HANDLE A ~NEW DRUG~',null,{y:300,sz:120});
+    tag(330,ly-420,'DRUG IN',C.amber,{a:eo(t/.4)});tag(3500,ly-480,'BROKEN DOWN',C.mint,{a:eo(t/.4)});}
+  if(o.title)TOP(t,o.title,null,{y:300,sz:140});
+};
+
+V.tumorSkin=(t,p,d,o)=>{const k=eio(seg(t,.1,d));const R=rng(14);
+  const skinY=x=>820+sin(x*.003+G*.6)*20-Math.max(0,1-Math.abs(x-CX)/900)**2*260*k;
+  g.save();g.beginPath();g.moveTo(0,0);for(let x=0;x<=W;x+=20)g.lineTo(x,skinY(x));g.lineTo(W,0);g.closePath();g.fillStyle='rgba(255,180,200,.05)';g.fill();g.restore();
+  for(let j=0;j<3;j++){g.strokeStyle=rgba(C.pink,.55-j*.15);g.lineWidth=12-j*3;g.beginPath();for(let x=0;x<=W;x+=20)g.lineTo(x,skinY(x)+j*60);g.stroke()}
+  for(let i=0;i<46;i++){const x=i/45*W;cell(x,skinY(x)+30,24,C.cyan,i,.45,i)}
+  const n=Math.floor(18+k*90);for(let i=0;i<n;i++){const a=i*2.399,r=sq(i)*44*(.6+.4*k);const x=CX+cos(a)*r*1.35,y=1260+sin(a)*r*.75;cell(x,y,34+6*sin(G*2+i),C.coral,G*.3+i,1,i)}
+  glow(CX,1260,700*(.5+k*.5),C.coral,.3);
+  tag(CX+760,620,'HUMAN TUMOR',C.coral,{a:eo((t-.4)/.4)});tag(500,700,'MOUSE SKIN',C.pink,{a:eo(t/.4)});
+  g.save();panel(230,1300,620,420,C.cyan,1,28);drawMouse(560,1520,.32,{});g.strokeStyle=C.coral;g.lineWidth=5;g.strokeRect(520,1410,90,70);g.restore();
+};
+
+V.fourCards=(t,p,d,o)=>{const names=['IMMUNE\nSYSTEM','LIVER','AVATAR','GROW AN\nORGAN'],icons=['immune','liver','tumor','embryo'],cols=[C.coral,C.amber,C.violet,C.mint];
+  TOP(t,o.title||'~4~ SURPRISING USES',null,{y:270,sz:140});
+  for(let i=0;i<4;i++){const k=eo((t-.1-i*.12)/.5);if(k<=0)continue;const hl=o.hl===i;const x=CX+(i-1.5)*800,y=1130;const sc=hl?1.08+.02*sin(G*4):1;const w=640,h=900;
+    g.save();g.translate(x,y);g.scale(sc*k,sc);g.globalAlpha*=(o.hl!=null&&!hl)?.45:1;
+    panel(-w/2,-h/2,w,h,hl?cols[i]:rgba(C.white,.5),1,40);if(hl)glow(0,0,700,cols[i],.25);
+    T('0'+(i+1),-w/2+60,-h/2+90,90,cols[i],{al:'left',f:FM,w:700});
+    if(o.reveal){icon(icons[i],0,-40,300,cols[i]);const ls=names[i].split('\n');ls.forEach((l,j)=>T(l,0,h/2-200+j*86-(ls.length-1)*43,78,C.white,{w:700}))}
+    else{T('?',0,-20,380,rgba(cols[i],.8),{w:700,glow:true});T('• • •',0,h/2-150,60,C.dim,{f:FM})}
+    g.restore();if(hl&&o.hl===3)stamp('BOLDEST',x,y-560,70,C.mint,t-.5)}
+};
+
+V.versus=(t,p,d,o)=>{const k=eo(t/.5);const R=rng(3);
+  g.save();g.beginPath();g.moveTo(0,0);g.lineTo(CX+120-(1-k)*CX,0);g.lineTo(CX-120-(1-k)*CX,H);g.lineTo(0,H);g.closePath();g.clip();
+  for(let y=0;y<H;y+=120)for(let x=0;x<CX+200;x+=120){const c=hash(x*.3+y*1.7)<.5?C.violet:C.cyan;g.fillStyle=rgba(c,.1+.08*sin(G*2+x*.01+y*.02));g.fillRect(x+4,y+4,112,112)}
+  T('CHIMERA',CX/2+60,1060,300,C.violet,{w:800,glow:true});tag(CX/2+60,1300,'MOSAIC',C.violet,{});g.restore();
+  g.save();g.beginPath();g.moveTo(W,0);g.lineTo(CX+120+(1-k)*CX,0);g.lineTo(CX-120+(1-k)*CX,H);g.lineTo(W,H);g.closePath();g.clip();
+  const gr=g.createLinearGradient(CX,0,W,H);gr.addColorStop(0,rgba(C.amber,.22));gr.addColorStop(.5,rgba(C.coral,.18));gr.addColorStop(1,rgba(C.amber,.22));g.fillStyle=gr;g.fillRect(CX-200,0,CX+200,H);
+  T('HYBRID',CX+CX/2-60,1060,300,C.amber,{w:800,glow:true});tag(CX+CX/2-60,1300,'BLEND',C.amber,{});g.restore();
+  g.save();g.strokeStyle=C.white;g.lineWidth=8;g.shadowColor=C.white;g.shadowBlur=40;g.beginPath();for(let i=0;i<=24;i++){const u=i/24;g.lineTo(lerp(CX+120,CX-120,u)+(i%2?1:-1)*(20+R()*25),u*H)}g.stroke();g.restore();
+  const vk=eback(clamp((t-.3)/.4));g.save();g.translate(CX,1080);g.scale(vk,vk);g.beginPath();g.arc(0,0,150,0,TAU);g.fillStyle=C.bg;g.fill();g.lineWidth=8;g.strokeStyle=C.white;g.stroke();T('VS',0,8,110,C.white,{w:800});g.restore();
+};
+
+V.theLine=(t,p,d,o)=>{const k=eio(seg(t,.05,.9));const y=1180;
+  g.save();g.beginPath();g.rect(0,y,W,H-y);g.clip();for(let x=-400;x<W+400;x+=160){g.fillStyle=rgba(C.red,.08);g.beginPath();g.moveTo(x+((G*120)%160),y);g.lineTo(x+80+((G*120)%160),y);g.lineTo(x-120+((G*120)%160),y+260);g.lineTo(x-200+((G*120)%160),y+260);g.fill()}g.restore();
+  g.save();g.strokeStyle=C.red;g.lineWidth=14;g.shadowColor=C.red;g.shadowBlur=60;g.beginPath();g.moveTo(0,y);g.lineTo(W*k,y);g.stroke();g.restore();glow(W*k,y,160,C.red,1);
+  g.save();g.translate(CX,800);const bs=.75+.03*sin(G*5);g.scale(bs,bs);g.fillStyle=rgba(C.violet,.12);g.fill(BRAIN);strokeShape(BRAIN,C.violet,bs);drawBrainSulci(C.violet,.6);g.restore();
+  for(let i=0;i<3;i++){const x=CX+(i-1)*900,yy=1440;const kk=eback(clamp((t-.5-i*.12)/.4));g.save();g.translate(x,yy);g.scale(kk,kk);g.beginPath();g.moveTo(0,-90);g.lineTo(95,75);g.lineTo(-95,75);g.closePath();g.lineWidth=10;g.lineJoin='round';g.strokeStyle=C.amber;g.stroke();T('!',0,15,110,C.amber,{w:800});g.restore()}
+  tag(CX,1260,'THE LINE',C.red,{a:eo((t-.6)/.4),sz:56});
+};
+
+V.decode=(t,p,d,o)=>{const word=o.word||'CHIMERA';const sz=480;font(sz,800,FH);g.letterSpacing='0px';const ws=[...word].map(c=>g.measureText(c).width);const tw=ws.reduce((a,b)=>a+b,0)+(word.length-1)*20;let x=CX-tw/2;const glyphs='ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#%&@';
+  ringHUD(CX,1050,900,C.violet,.2);
+  for(let i=0;i<word.length;i++){const rt=.15+i*.1;const done=t>rt+.35;const ch=done?word[i]:glyphs[(Math.floor(G*24)+i*7)%glyphs.length];const a=t<rt?0:1;
+    T(ch,x+ws[i]/2,1060,sz,done?C.white:C.violet,{w:800,a,glow:done?false:C.violet});if(done&&t<rt+.6)glow(x+ws[i]/2,1060,300,C.violet,(1-(t-rt-.35)/.25));x+=ws[i]+20}
+  T(o.ph||'/kaɪˈmɪərə/',CX,1430,80,C.dim,{f:FM,a:eo((t-1)/.5)});if(o.sub)tag(CX,560,o.sub,C.violet,{a:eo(t/.4)});
+};
+
+V.fusion=(t,p,d,o)=>{const ct=d*.42;const k=clamp(t/ct);
+  if(t<ct){const ex=2350;cell(ex,1100,260,C.amber,G*.2,1,2);glow(ex,1100,520,C.amber,.3);tag(ex,1480,'SPECIES A',C.amber,{});
+    const sx=lerp(300,ex-280,eio(k)),sy=1100+sin(G*6)*30;g.strokeStyle=C.cyan;g.lineWidth=10;g.lineCap='round';g.beginPath();for(let i=0;i<40;i++)g.lineTo(sx-60-i*12,sy+sin(i*.5-G*14)*(8+i*.6));g.stroke();g.fillStyle=C.cyan;g.beginPath();g.ellipse(sx,sy,62,40,0,0,TAU);g.fill();glow(sx,sy,140,C.cyan,.7);tag(sx-200,sy-180,'SPECIES B',C.cyan,{})}
+  else{const u=t-ct;const r=eo(u/.6);glow(2100,1100,900*r,C.white,.5*(1-r));g.save();g.strokeStyle=rgba(C.white,1-r);g.lineWidth=14;g.beginPath();g.arc(2100,1100,100+r*1300,0,TAU);g.stroke();g.restore();
+    cell(lerp(2350,2100,eo(u/.4)),1100,300,mixc(C.amber,C.coral,.4),G*.3,1,1,C.cyan);glow(2100,1100,600,C.amber,.25);tag(2100,1530,'ONE MIXED CELL',C.white,{a:eo((u-.2)/.4)})}
+  TOP(t,'~HYBRID~ = MIXED AT THE ~VERY START~',null,{y:300,sz:120});
+};
+
+V.parents=(t,p,d,o)=>{const cards=[[900,700,'HORSE','♀ MOTHER',C.amber],[2940,700,'DONKEY','♂ FATHER',C.cyan]];
+  cards.forEach((c,i)=>{const k=eo((t-i*.12)/.5);g.save();g.translate((1-k)*(i?600:-600),0);g.globalAlpha*=k;panel(c[0]-420,c[1]-260,840,520,c[4]);T(c[2],c[0],c[1]-60,140,c[4],{w:800});T(c[3],c[0],c[1]+90,56,C.dim,{f:FM,ls:6});g.restore();
+    const u=eio(seg(t,.4,1.2));for(let j=0;j<10;j++){const f=((G*.6+j/10)%1)*u;const pt=bez([c[0],c[1]+260],[c[0],c[1]+500],[CX,1200],[CX,1380],f);dot(pt[0],pt[1],12,c[4],.9);glow(pt[0],pt[1],50,c[4],.5)}});
+  const mk=eback(clamp((t-.9)/.5));g.save();g.translate(CX,1560);g.scale(mk,mk);g.beginPath();g.roundRect(-460,-200,920,400,40);const gr=g.createLinearGradient(-460,0,460,0);gr.addColorStop(0,rgba(C.amber,.3));gr.addColorStop(1,rgba(C.cyan,.3));g.fillStyle=gr;g.fill();g.lineWidth=6;const sg=g.createLinearGradient(-460,0,460,0);sg.addColorStop(0,C.amber);sg.addColorStop(1,C.cyan);g.strokeStyle=sg;g.stroke();T('MULE',0,-30,170,C.white,{w:800});T('HYBRID',0,110,52,C.white,{f:FM,ls:10});g.restore();
+  if(o.title)TOP(t,o.title,null,{y:240,sz:120});
+};
+
+V.everyCell=(t,p,d,o)=>{const cols=10,rows=4,sp=330;for(let r=0;r<rows;r++)for(let c=0;c<cols;c++){const x=CX+(c-(cols-1)/2)*sp,y=820+r*sp*.85;const k=eback(clamp((t-.1-(c+r)*.05)/.4));cell(x,y,120*k,C.amber,G*.3+c+r,1,c+r,C.cyan)}
+  const mx=CX+(2-(cols-1)/2)*sp,my=820+sp*.85;const mk=eo((t-1)/.5);if(mk>0){g.save();g.globalAlpha*=mk;g.beginPath();g.arc(2900,1180,420,0,TAU);g.fillStyle='rgba(4,8,18,.92)';g.fill();g.lineWidth=6;g.strokeStyle=C.white;g.stroke();g.beginPath();g.moveTo(mx+120,my);g.lineTo(2900-420,1180);g.stroke();
+    g.save();g.beginPath();g.arc(2900,1180,410,0,TAU);g.clip();helix(2900,1180,760,150,C.amber,C.cyan,{rot:-.5,lw:16});g.restore();g.restore();tag(2900,1660,'DNA FROM BOTH',C.white,{a:mk})}
+  TOP(t,'EVERY CELL = DNA FROM ~BOTH~',null,{y:300,sz:130});
+};
+
+V.divide=(t,p,d,o)=>{const gens=6;const gf=eio(seg(t,.1,d-.1))*gens;const gen=Math.floor(gf),fr=gf-gen;const n=Math.pow(2,Math.min(gen,gens));const sp=100;
+  const pos=i=>{const a=i*2.39996,r=sq(i+.5)*sp;return[CX+cos(a)*r*1.6,1150+sin(a)*r*.72]};
+  for(let i=0;i<n*2&&i<128;i++){let [x,y]=pos(i);let a=1,rr=58;if(i>=n){if(gen>=gens)break;const par=i-n;const pp=pos(par);const u=eo(fr*1.4);x=lerp(pp[0],x,u);y=lerp(pp[1],y,u);a=u}else if(i>=n/2&&gen>0){}
+    cell(x,y,rr,C.amber,G*.4+i,a,i,C.cyan)}
+  T('×'+Math.min(Math.pow(2,gen+1),64),3450,1700,200,C.amber,{al:'right',f:FM,glow:true});
+  TOP(t,'COPIED ~AGAIN~ AND ~AGAIN~',null,{y:260,sz:130});
+};
+
+V.chimeraCard=(t,p,d,o)=>{for(let y=0;y<H;y+=96)for(let x=0;x<W;x+=96){const c=hash(x*.13+y*.71)<.5?C.violet:C.cyan;const k=eo((t-(x/W)*.5)/.4);g.fillStyle=rgba(c,(.05+.06*sin(G*2+x*.01+y*.013))*k);g.fillRect(x+3,y+3,90,90)}
+  const gl=(G*10|0)%7===0&&t<d-.2;const word=o.word||'CHIMERA';
+  if(gl){g.save();g.globalCompositeOperation='lighter';T(word,CX-18,1000,520,rgba(C.coral,.7),{w:800});T(word,CX+18,1000,520,rgba(C.cyan,.7),{w:800});g.restore()}
+  HL(word,CX,1000,520,t,{w:800,col:C.white});HL(o.sub||'IS ^DIFFERENT^',CX,1420,130,t,{d:.4});
+};
+
+V.myth=(t,p,d,o)=>{const st=o.stage||0;const gold=C.gold;
+  for(const yy of[150,2010]){g.save();g.strokeStyle=rgba(gold,.35);g.lineWidth=6;g.beginPath();for(let x=0;x<W;x+=120){const xo=x-((G*60)%120);g.moveTo(xo,yy+30);g.lineTo(xo,yy-30);g.lineTo(xo+80,yy-30);g.lineTo(xo+80,yy+10);g.lineTo(xo+40,yy+10);g.lineTo(xo+40,yy-10)}g.stroke();g.restore()}
+  const draw=eio(seg(t,0,st?0.3:1.2));const hl=st===1?Math.min(2,Math.floor(seg(t,.2,d)*3)):st===2?2:-1;
+  const part=(id,fn)=>{const on=hl===id;g.save();g.strokeStyle=on?C.amber:rgba(gold,hl<0?.95:.4);g.lineWidth=on?14:9;g.lineCap='round';g.lineJoin='round';if(on){g.shadowColor=C.amber;g.shadowBlur=50}fn();g.restore()};
+  const stars=[];
+  part(1,()=>{g.beginPath();g.ellipse(1900,1150,520*draw,230,0,0,TAU);g.stroke();for(const lx of[1550,1700,2100,2250]){g.beginPath();g.moveTo(lx,1330);g.lineTo(lx+(lx>1900?30:-30),1580*draw+1330*(1-draw));g.stroke();stars.push([lx,1580])}
+    g.beginPath();g.moveTo(1850,940);g.lineTo(1840,780);g.stroke();g.beginPath();g.arc(1840,740,60,0,TAU);g.stroke();g.beginPath();g.moveTo(1810,700);g.quadraticCurveTo(1740,580,1660,640);g.moveTo(1870,700);g.quadraticCurveTo(1950,570,2030,630);g.stroke();stars.push([1840,740],[1660,640],[2030,630])});
+  part(0,()=>{g.beginPath();g.moveTo(2380,1050);g.lineTo(2520,950);g.stroke();g.beginPath();g.arc(2600,900,140,0,TAU);g.stroke();for(let i=0;i<22;i++){const a=i/22*TAU;g.beginPath();g.moveTo(2600+cos(a)*150,900+sin(a)*150);g.lineTo(2600+cos(a)*(150+110*draw),900+sin(a)*(150+110*draw));g.stroke()}g.beginPath();g.arc(2650,880,14,0,TAU);g.stroke();stars.push([2600,900],[2740,900])});
+  part(2,()=>{g.beginPath();for(let i=0;i<=60*draw;i++){const u=i/60;g.lineTo(1385-u*900,1160+sin(u*TAU*1.5+G*2)*110-u*120)}g.stroke();const u=draw;const hx=1385-u*900,hy=1160+sin(u*TAU*1.5+G*2)*110-u*120;g.beginPath();g.moveTo(hx,hy-40);g.lineTo(hx-120,hy);g.lineTo(hx,hy+40);g.closePath();g.stroke();stars.push([hx-60,hy])});
+  for(const s of stars){glow(s[0],s[1],70,gold,.8);dot(s[0],s[1],9,C.white)}
+  const labels=[[2600,560,'LION · HEAD'],[1840,470,'GOAT · BODY'],[700,820,'SNAKE · TAIL']];
+  if(st>0)labels.forEach((l,i)=>{if(i<=hl||st===2&&i===2)tag(l[0],l[1],l[2],i===hl?C.amber:gold,{a:i===hl?1:.5})});
+  if(st===0)TOP(t,'A ~GREEK MYTH~',null,{y:300,sz:150});
+};
+
+V.quiet=(t,p,d,o)=>{const R=rng(8);g.save();g.translate(CX,1150);g.beginPath();for(let i=0;i<=120;i++){const a=i/120*TAU,r=1+.04*sin(a*4+G*.8)+.03*sin(a*7-G*.5);i?g.lineTo(cos(a)*1100*r,sin(a)*480*r):g.moveTo(cos(a)*1100*r,sin(a)*480*r)}g.closePath();g.fillStyle='rgba(255,255,255,.03)';g.fill();g.lineWidth=5;g.strokeStyle=rgba(C.white,.4);g.stroke();g.clip();
+  for(let i=0;i<90;i++){const x=(R()-.5)*2100,y=(R()-.5)*900;const br=.5+.5*sin(G*1.2+i);cell(x,y+sin(G*.6+i)*10,30+br*4,hash(i*3.1)<.5?C.cyan:C.coral,G*.1+i,.55+.3*br,i)}g.restore();
+  TOP(t,'THE BIOLOGY IS ~FAR QUIETER~',null,{y:300,sz:140});
+};
+
+V.twoSets=(t,p,d,o)=>{const pts=mousePts();const s=1.25,mx=2000,my=1220;const u=eio(seg(t,.4,d-.2));const R=rng(5);
+  drawMouse(mx,my,s,{a:u,draw:u});
+  for(let i=0;i<pts.length;i+=2){const q=pts[i];const side=hash(i*.37)<.5;const sx=side?650+(R()-.5)*700:3200+(R()-.5)*700,sy=1100+(R()-.5)*700;const tx=mx+q.x*s,ty=my+q.y*s;const x=lerp(sx,tx,u),y=lerp(sy,ty,u);cell(x,y,26,side?C.cyan:C.coral,G*.3+i,1,i)}
+  tag(650,560,'CELL SET A',C.cyan,{a:1-u});tag(3200,560,'CELL SET B',C.coral,{a:1-u});tag(CX,560,'ONE ANIMAL',C.white,{a:u});
+};
+
+V.neverBlend=(t,p,d,o)=>{const n=7,sp=440;for(let i=0;i<n;i++){const x=CX+(i-3)*sp,y=1060;const k=eback(clamp((t-i*.07)/.4));if(i===3){continue}cell(x,y,160*k,i%2?C.coral:C.cyan,G*.3+i,1,i);T(i%2?'HUMAN':'MOUSE',x,y+250,44,i%2?C.coral:C.cyan,{f:FM,ls:6,a:k})}
+  const dk=eo((t-.5)/.5);const y=lerp(-300,1060,dk);cell(CX,y,170,C.amber,G*.3,1,3,C.cyan);if(t>1.0){cross(CX,y,320,C.red,eo((t-1)/.4))}
+  TOP(t,o.title||'ONE GENOME OR THE OTHER — !NEVER! A BLEND',null,{y:330,sz:120});
+};
+
+V.paint=(t,p,d,o)=>{const bx=CX,by=1250;const k=eio(seg(t,.2,d));
+  for(const[sx,col,dir]of[[1350,C.coral,1],[2490,C.cyan,-1]]){g.save();g.strokeStyle=col;g.lineCap='round';g.lineWidth=60;g.shadowColor=col;g.shadowBlur=40;g.beginPath();g.moveTo(sx,380);g.bezierCurveTo(sx,700,bx-dir*120,760,bx-dir*120+sin(G*8)*10,980);g.stroke();g.restore();
+    g.save();g.translate(sx,330);g.rotate(dir*.5);g.beginPath();g.roundRect(-140,-120,280,200,20);g.fillStyle=rgba(col,.25);g.fill();g.lineWidth=8;g.strokeStyle=col;g.stroke();g.restore()}
+  g.save();g.beginPath();g.moveTo(bx-520,980);g.lineTo(bx+520,980);g.lineTo(bx+420,1620);g.lineTo(bx-420,1620);g.closePath();g.fillStyle='rgba(255,255,255,.04)';g.fill();g.lineWidth=10;g.strokeStyle=rgba(C.white,.8);g.stroke();
+  g.beginPath();g.ellipse(bx,1000,500,90,0,0,TAU);g.save();g.clip();const mixed=mixc(C.coral,C.cyan,.5);g.fillStyle=mixed;g.globalAlpha=.25+.6*k;g.fill();g.globalAlpha=1;
+  for(let i=0;i<14;i++){g.strokeStyle=rgba(i%2?C.coral:C.cyan,.9*(1-k));g.lineWidth=18;g.beginPath();g.ellipse(bx,1000,40+i*34,8+i*6,0,G*2+i,G*2+i+2.4);g.stroke()}g.restore();
+  g.lineWidth=8;g.strokeStyle=rgba(C.white,.8);g.beginPath();g.ellipse(bx,1000,500,90,0,0,TAU);g.stroke();g.beginPath();g.ellipse(bx,880,560,300,0,PI*1.05,PI*1.95);g.stroke();g.restore();
+  glow(bx,1000,600,mixed,.3*k);tag(bx,1760-60,'HYBRID = MIXED PAINT',mixed,{a:eo((t-.4)/.4),sz:52});
+};
+
+let _mt=null;function mosaicTiles(){if(_mt)return _mt;_mt=[];const s=1.55,mx=2050,my=1150,ts=56;for(let y=500;y<1750;y+=ts)for(let x=200;x<3700;x+=ts){const lx=(x+ts/2-mx)/s,ly=(y+ts/2-my)/s;const inn=scratch.isPointInPath(MBODY,lx,ly)||scratch.isPointInStroke&&false;const n=sin(x*.006+1.3)*cos(y*.009)+sin((x+y)*.004)*.8+sin(x*.013-y*.007)*.4;_mt.push({x,y,inn,h:n>0})}return _mt}
+V.mosaic=(t,p,d,o)=>{const ts=56;for(const q of mosaicTiles()){const k=eo((t-.05-((q.x-200)/3500)*.9)/.35);if(k<=0)continue;const c=q.inn?(q.h?C.coral:C.cyan):'#1A2442';const a=q.inn?.85:.35;const sz=(ts-6)*k;g.fillStyle=rgba(c,a);g.fillRect(q.x+ts/2-sz/2,q.y+ts/2-sz/2,sz,sz)}
+  drawMouse(2050,1150,1.55,{a:.5*eo((t-1)/.5),fill:'rgba(0,0,0,0)',col:C.white});
+  tag(CX,400,'CHIMERA = MOSAIC',C.violet,{sz:58,a:eo(t/.4)});
+  if(o.full){tag(700,1820-100,'TILE · MOUSE',C.cyan,{a:eo((t-.6)/.4)});tag(3150,1820-100,'TILE · HUMAN',C.coral,{a:eo((t-.7)/.4)})}
+};
+
+V.notExotic=(t,p,d,o)=>{for(let i=0;i<10;i++){const a=G*.5+i/10*TAU;const x=CX+cos(a)*1500,y=1080+sin(a)*620;cell(x,y,60,i%2?C.coral:C.cyan,a,.7,i)}
+  HL('NOT AS ~EXOTIC~\nAS THEY SOUND',CX,1060,240,t,{w:800});};
+
+const MARROW_V=[[[0,-330],[0,100],[-120,500]],[[0,100],[120,500]],[[0,-330],[-250,-250],[-320,40]],[[0,-330],[250,-250],[320,40]],[[0,-330],[0,-560]]];
+V.marrow=(t,p,d,o)=>{const st=o.stage||0;const hx=st===2?1300:CX,hy=1180,s=1.1;
+  drawHuman(hx,hy,s,{col:C.white,inner:()=>{const R=rng(2);for(let i=0;i<140;i++){const x=(R()-.5)*760,y=-700+R()*1300;dot(x,y,9,C.cyan,.35)}
+    g.strokeStyle=rgba(C.white,.35);g.lineWidth=26;g.lineCap='round';g.beginPath();g.moveTo(0,-440);g.lineTo(0,90);g.moveTo(-60,140);g.lineTo(-170,520);g.moveTo(60,140);g.lineTo(170,520);g.stroke();
+    for(const pl of MARROW_V){g.strokeStyle=rgba(C.red,.5);g.lineWidth=10;g.beginPath();pl.forEach((q,i)=>i?g.lineTo(q[0],q[1]):g.moveTo(q[0],q[1]));g.stroke();for(let j=0;j<6;j++){const q=along(pl,G*.25+j/6);glow(q[0],q[1],40,C.amber,.6);dot(q[0],q[1],13,C.amber)}}
+    for(const by of[300,-100]){glow(st===0?(by>0?-110:0):0,by,120,C.amber,.5+.3*sin(G*4))}}});
+  if(st===0)TOP(t,'BONE MARROW ~TRANSPLANT~',null,{y:250,sz:120});
+  if(st===1){tag(hx-620,800,'BLOOD CELLS',C.amber,{al:'right',a:eo(t/.4)});T("= DONOR'S DNA",hx-620,920,70,C.amber,{al:'right',a:eo((t-.2)/.4)});TOP(t,"A HUMAN ~CHIMERA~",null,{y:250,sz:130})}
+  if(st===2){const k=eo(t/.5);panel(2050,640,1500,380,C.amber,k);T("BLOOD → DONOR'S DNA",2800,830,76,C.amber,{a:k});panel(2050,1100,1500,380,C.cyan,eo((t-.3)/.5));T('REST OF BODY → ITS OWN',2800,1290,76,C.cyan,{a:eo((t-.3)/.5)})}
+};
+
+V.year=(t,p,d,o)=>{const y=o.y||'2007';const sz=720;font(sz,700,FM);const cw=g.measureText('0').width*1.02;const x0=CX-cw*y.length/2+cw/2;
+  for(let i=0;i<14;i++){const yy=300+i*130;const w=(hash(i)*.6+.4)*W;g.fillStyle=rgba(o.col||C.amber,.05);g.fillRect(((G*900*(1+hash(i+3)))%(W+w))-w,yy,w,6)}
+  for(let i=0;i<y.length;i++){const v=+y[i];const r=eo((t-i*.09)/.85);const fv=v+(1-r)*30;const base=Math.floor(fv),fr=fv-base;g.save();g.beginPath();g.rect(x0+i*cw-cw/2,980-sz*.46,cw,sz*.92);g.clip();
+    for(const[dv,off]of[[base,-fr],[base+1,1-fr]]){T(String(((dv%10)+10)%10),x0+i*cw,980+off*sz*1.05,sz,o.col||C.amber,{f:FM,glow:r>=1,gb:70})}g.restore()}
+  tag(CX,1500,o.sub||'',o.col||C.amber,{a:eo((t-.6)/.4),sz:58});
+};
+
+V.embryoMerge=(t,p,d,o)=>{const u=eio(seg(t,.2,d*.75));const R=rng(9);const lx=lerp(1050,CX,u),rx=lerp(2790,CX,u);
+  const mk=(x,col,seed)=>{const R2=rng(seed);for(let i=0;i<12;i++){const a=R2()*TAU,r=R2()*190;cell(x+cos(a)*r*(1-u*.4)+cos(a)*u*120,1100+sin(a)*r,62,col,G*.3+i,1,i)}};
+  g.beginPath();g.arc(lx,1100,300,0,TAU);g.strokeStyle=rgba(C.amber,.5*(1-u));g.lineWidth=6;g.stroke();g.beginPath();g.arc(rx,1100,300,0,TAU);g.strokeStyle=rgba(C.white,.5*(1-u));g.stroke();
+  if(u>.9){g.beginPath();g.arc(CX,1100,330,0,TAU);g.strokeStyle=rgba(C.white,.6);g.stroke()}
+  mk(lx,C.amber,1);mk(rx,'#E8F0FF',2);
+  tag(1050,1550,'GOAT EMBRYO',C.amber,{a:1-u});tag(2790,1550,'SHEEP EMBRYO',C.white,{a:1-u});tag(CX,1550,'ONE EMBRYO · TWO CELL SETS',C.white,{a:seg(u,.8,1)});
+  TOP(t,'GOAT + SHEEP',null,{y:300,sz:150});
+};
+
+let _gp=null;const GEEP=(()=>{const p=new Path2D();p.ellipse(0,0,520,250,0,0,TAU);p.ellipse(560,-230,150,105,-.5,0,TAU);for(const lx of[-330,-170,190,340]){p.roundRect(lx-40,150,80,280,30)}p.roundRect(420,-220,120,160,40);return p})();
+function geepPts(){if(_gp)return _gp;_gp=[];const R=rng(3);for(let y=-360;y<=430;y+=34)for(let x=-560;x<=720;x+=34){const px=x+(R()-.5)*10,py=y+(R()-.5)*10;if(scratch.isPointInPath(GEEP,px,py)){const n=sin(px*.008+1)*cos(py*.011)+sin((px+py)*.005)*.9;_gp.push({x:px,y:py,w:n>0,r:R()})}}return _gp}
+V.geep=(t,p,d,o)=>{const s=1.5,gx=CX-80,gy=1150;const k=eo(t/.6);g.save();g.translate(gx,gy);g.scale(s,s);g.fillStyle='rgba(255,255,255,.03)';g.fill(GEEP);
+  g.save();g.clip(GEEP);for(const q of geepPts()){const a=eo((t-.2-(q.x+560)/1300*.8)/.3);if(a<=0)continue;g.globalAlpha=a;if(q.w){g.strokeStyle='rgba(240,244,255,.85)';g.lineWidth=5;g.beginPath();g.arc(q.x,q.y,11+q.r*4,G+q.r*6,G+q.r*6+4.5);g.stroke()}else{g.strokeStyle=C.amber;g.lineWidth=6;g.lineCap='round';g.beginPath();g.moveTo(q.x-6,q.y-12);g.lineTo(q.x+8,q.y+14);g.stroke()}}g.restore();g.globalAlpha=1;
+  strokeShape(GEEP,C.white,s,{a:k});g.strokeStyle=C.amber;g.lineWidth=10;g.beginPath();g.moveTo(560,-320);g.quadraticCurveTo(500,-470,380,-450);g.moveTo(600,-320);g.quadraticCurveTo(580,-480,470,-500);g.stroke();dot(620,-250,12,C.white);g.restore();
+  tag(gx-700,560,'WOOL',C.white,{a:eo((t-.5)/.4)});tag(gx+900,600,'GOAT HAIR',C.amber,{a:eo((t-.7)/.4)});
+  TOP(t,'THE ~GEEP~',null,{y:300,sz:180});T('1984',3500,1800-60,90,C.dim,{al:'right',f:FM});
+};
+// ================================================================ VISUALS B — stem cells, why not mice, uses 1-3
+V.mouseCells=(t,p,d,o)=>{ringHUD(1960,1180,800,C.cyan,.2);drawMouse(2060,1220,1.3,{draw:eo(t/.5),inner:()=>{for(const q of mousePts()){const on=q.h<.38;if(on){glow(q.x,q.y,55,C.coral,.35);cell(q.x,q.y,20,C.coral,q.r+G*.4,eo((t-.3-q.h)/.4),q.v)}else dot(q.x,q.y,7,C.cyan,.25)}}});
+  TOP(t,o.title||'A MOUSE THAT ~CARRIES~ *HUMAN CELLS*',null,{y:290,sz:130});};
+
+V.notPartHuman=(t,p,d,o)=>{g.save();g.beginPath();g.rect(0,0,CX,H);g.clip();drawMouse(CX+380,1150,1.25,{col:C.cyan});g.restore();
+  g.save();g.beginPath();g.rect(CX,0,CX,H);g.clip();drawHuman(CX,1180,.95,{col:C.coral});g.restore();
+  g.save();g.strokeStyle=C.white;g.lineWidth=6;g.setLineDash([30,20]);g.beginPath();g.moveTo(CX,450);g.lineTo(CX,1800);g.stroke();g.restore();
+  cross(CX,1120,900,C.red,eo((t-.5)/.5));stamp('NOT A "PARTLY HUMAN" MOUSE',CX,330,110,C.red,t-.9);};
+
+V.zoomCell=(t,p,d,o)=>{const z=Math.pow(eio(seg(t,0,1.1)),2);if(z<.95){const s=lerp(1,26,z);drawMouse(CX-180*s+(0)*1,1080+40*s-40,s,{a:1-z,inner:()=>{for(const q of mousePts())if(q.h<.38)cell(q.x,q.y,20,C.coral,q.r,1,q.v);else dot(q.x,q.y,7,C.cyan,.25)}})}
+  const k=seg(t,.7,1.4);if(k>0){const r=620*eo(k);glow(CX,1100,r*1.8,C.coral,.35);cell(CX,1100,r,C.coral,G*.1,1,2);if(k>.6){g.save();g.beginPath();g.arc(CX-20,1080,r*.36,0,TAU);g.clip();helix(CX-20,1080,r*.9,r*.16,C.coral,C.amber,{rot:-.6,lw:12});g.restore()}
+    stamp('100% HUMAN',CX,330,120,C.coral,t-1.3);tag(CX+760,560,'EACH CELL · HUMAN GENOME',C.coral,{a:eo((t-1.1)/.4)})}};
+
+V.stem=(t,p,d,o)=>{const sx=CX,sy=1130;const R=rng(5);for(let i=0;i<9;i++){const a=i/9*TAU-PI/2+.2;const r=820;const ex=sx+cos(a)*r*1.4,ey=sy+sin(a)*r*.62;const k=eo((t-.2-i*.05)/.4);
+    g.save();g.setLineDash([16,16]);g.lineDashOffset=-G*60;g.strokeStyle=rgba(C.mint,.5*k);g.lineWidth=5;g.beginPath();g.moveTo(sx,sy);g.lineTo(lerp(sx,ex,k),lerp(sy,ey,k));g.stroke();g.restore();
+    g.save();g.globalAlpha*=k;g.setLineDash([10,10]);g.beginPath();g.arc(ex,ey,90,0,TAU);g.strokeStyle=rgba(C.white,.5);g.lineWidth=4;g.stroke();g.setLineDash([]);T('?',ex,ey+5,90,rgba(C.white,.6),{w:700});g.restore()}
+  const pul=1+.05*sin(G*4);glow(sx,sy,600,C.mint,.35);cell(sx,sy,230*pul*eback(clamp(t/.5)),C.mint,G*.3,1,4);
+  TOP(t,o.stage?'NOT YET ~DECIDED~':'~STEM CELLS~',null,{y:260,sz:150});tag(sx,sy+360,'UNDECIDED',C.mint,{a:eo((t-.4)/.4)});};
+
+V.skinCell=(t,p,d,o)=>{const R=rng(7);const lift=eio(seg(t,.5,d));for(let row=0;row<8;row++)for(let c=0;c<16;c++){const x=200+c*240+(row&1?120:0),y=700+row*150;const hl=row===3&&c===7;const yy=y-(hl?lift*260:0);
+    g.save();g.translate(x,yy);g.beginPath();for(let i=0;i<6;i++){const a=i/6*TAU;const rr=(i%3?1:.85)*118;i?g.lineTo(cos(a)*rr,sin(a)*rr*.55):g.moveTo(cos(a)*rr,sin(a)*rr*.55)}g.closePath();g.fillStyle=rgba(C.pink,hl?.35:.1);g.fill();g.lineWidth=hl?8:3;g.strokeStyle=rgba(hl?C.coral:C.pink,hl?1:.45);g.stroke();dot(0,0,18,hl?C.coral:C.pink,hl?1:.5);g.restore();if(hl)glow(x,yy,260,C.coral,.4*lift)}
+  tag(CX+100,500,'AN ORDINARY HUMAN SKIN CELL',C.coral,{a:eo((t-.4)/.4),sz:52});};
+
+V.reprogram=(t,p,d,o)=>{const k=eio(seg(t,.2,d-.1));const cx=CX,cy=1130;ringHUD(cx,cy,620,C.mint,.35);
+  g.save();g.translate(cx,cy);g.strokeStyle=rgba(C.white,.8);g.lineWidth=12;g.lineCap='round';const ang=-G*9;g.beginPath();g.moveTo(0,0);g.lineTo(cos(ang)*420,sin(ang)*420);g.stroke();g.beginPath();g.moveTo(0,0);g.lineTo(cos(ang/12)*300,sin(ang/12)*300);g.stroke();
+  g.lineWidth=14;g.strokeStyle=C.mint;g.beginPath();g.arc(0,0,520,-PI/2,-PI/2-k*TAU*.9,true);g.stroke();g.restore();
+  const col=mixc(C.pink,C.mint,k);g.save();g.translate(cx,cy);g.beginPath();for(let i=0;i<=60;i++){const a=i/60*TAU;const hexr=230/Math.max(Math.abs(cos(a)),Math.abs(sin(a))*1.7)*.75;const r=lerp(hexr,240,k);i?g.lineTo(cos(a)*r,sin(a)*r*lerp(.55,1,k)):g.moveTo(cos(a)*r,sin(a)*r*lerp(.55,1,k))}g.closePath();g.fillStyle=rgba(col,.25);g.fill();g.lineWidth=10;g.strokeStyle=col;g.shadowColor=col;g.shadowBlur=60;g.stroke();g.restore();dot(cx,cy,70,col,.9);glow(cx,cy,500*k,C.mint,.5*k);
+  T('⟲',cx+620,cy-520,180,C.mint,{a:.9});tag(cx,1780-60,k<.95?'REWINDING…':'FLEXIBLE STATE',k<.95?C.pink:C.mint,{sz:52});
+  TOP(t,'~REPROGRAMMED~',null,{y:250,sz:140});};
+
+function nerveIcon(x,y,s,col,a){neuron(x,y,s,col,4,a)}
+V.differentiate=(t,p,d,o)=>{const lit=o.lit||[0,1,2];const sx=900,sy=1150;const outs=[[2700,620,'BLOOD CELLS',C.red],[2700,1150,'LIVER CELLS',C.amber],[2700,1680-40,'NERVE CELLS',C.violet]];
+  glow(sx,sy,500,C.mint,.35);cell(sx,sy,200,C.mint,G*.3,1,4);tag(sx,sy+320,'STEM CELL',C.mint,{});
+  outs.forEach((q,i)=>{const on=lit.includes(i);const k=on?eo((t-(lit.length>2&&i===2?0.2:.1+i*.25))/.5):0;const p0=[sx+200,sy],p3=[q[0]-200,q[1]];const p1=[sx+800,sy],p2=[q[0]-700,q[1]];
+    g.strokeStyle=rgba(on?q[3]:C.white,on?.7:.15);g.lineWidth=on?8:4;g.beginPath();for(let j=0;j<=40*(on?k:1);j++){const pt=bez(p0,p1,p2,p3,j/40);j?g.lineTo(pt[0],pt[1]):g.moveTo(pt[0],pt[1])}g.stroke();
+    if(on&&k>.9)for(let j=0;j<6;j++){const pt=bez(p0,p1,p2,p3,(G*.5+j/6)%1);dot(pt[0],pt[1],12,q[3]);glow(pt[0],pt[1],50,q[3],.6)}
+    const a=on?k:.2;g.save();g.globalAlpha*=a;if(i===0){for(let j=0;j<5;j++)rbc(q[0]+(j-2)*80,q[1]+sin(G*2+j)*20,55,G+j,1)}else if(i===1){for(let j=0;j<7;j++){const an=j/7*TAU;hexPath(q[0]+(j?cos(an)*110:0),q[1]+(j?sin(an)*110:0),62);g.fillStyle=rgba(q[3],.3);g.fill();g.lineWidth=5;g.strokeStyle=q[3];g.stroke()}}else nerveIcon(q[0],q[1],260,q[3],1);g.restore();
+    T(q[2],q[0]+380,q[1],62,on?q[3]:C.dim,{al:'left',w:700,a:on?1:.4})});};
+
+V.machine=(t,p,d,o)=>{const bx=CX,by=1130;g.save();g.beginPath();g.roundRect(bx-380,by-320,760,640,50);g.fillStyle='rgba(61,255,162,.08)';g.fill();g.lineWidth=8;g.strokeStyle=C.mint;g.shadowColor=C.mint;g.shadowBlur=60;g.stroke();g.restore();ringHUD(bx,by,250,C.mint,.6);
+  g.fillStyle=rgba(C.white,.08);g.fillRect(0,by+280,bx-380,30);g.fillRect(bx+380,by+280,W,30);
+  for(let i=0;i<5;i++){const u=((G*.4+i/5)%1);const x=lerp(-100,bx-380,u);g.save();g.translate(x,by+150);g.beginPath();for(let j=0;j<6;j++){const a=j/6*TAU;j?g.lineTo(cos(a)*90,sin(a)*50):g.moveTo(cos(a)*90,sin(a)*50)}g.closePath();g.fillStyle=rgba(C.pink,.3);g.fill();g.lineWidth=5;g.strokeStyle=C.pink;g.stroke();g.restore()}
+  const types=[C.red,C.amber,C.violet,C.coral,C.cyan,C.blue];for(let i=0;i<9;i++){const u=((G*.45+i/9)%1);const x=lerp(bx+380,W+100,u),y=by+150-sin(u*PI)*300*(i%3)/2;const ty=i%types.length;if(ty===0)rbc(x,y,55,G+i,1);else if(ty===2)neuron(x,y,150,C.violet,i,1);else cell(x,y,60,types[ty],G+i,1,i)}
+  T('SKIN CELL IN',bx-1300,560,76,C.pink,{w:700});T('ALMOST ANY CELL OUT',bx+1250,560,76,C.mint,{w:700});};
+
+V.bigQ=(t,p,d,o)=>{if(o.q!==0)T('?',CX+40,1100,2000,rgba(C.amber,.06),{w:700});speedLines(CX,CY,C.white,.25*(1-eo(t/.8)));
+  HL(o.text,CX,1040,o.sz||220,t,{w:800});if(o.sub)tag(CX,560,o.sub,o.pc||C.amber,{a:eo(t/.4),sz:56});};
+
+let _mice=null;const MSMALL=0.12;
+V.miceTaught=(t,p,d,o)=>{const cols=12,rows=5;for(let r=0;r<rows;r++)for(let c=0;c<cols;c++){const i=r*cols+c;const x=CX+(c-(cols-1)/2)*290,y=650+r*230;const on=hash(i*1.3)<eio(seg(t,.1,d-.2))*1.1;
+    drawMouse(x+40,y,MSMALL,{col:on?C.cyan:'#33405F',a:on?1:.6});if(on&&hash(i*.7)<.4){const k=(G*.8+hash(i))%1;glow(x+80,y-60,90*k,C.amber,1-k);T('✦',x+90,y-70,46,C.amber,{a:1-k})}}
+  TOP(t,'MICE HAVE TAUGHT US ~AN ENORMOUS AMOUNT~',null,{y:330,sz:115});};
+
+V.genes=(t,p,d,o)=>{const k=eo(t/.5);g.save();g.globalAlpha*=k;helix(CX,820,3000,120,C.coral,rgba(C.coral,.6),{lw:12,turns:4,sp:1.2});helix(CX,1420,3000,120,C.cyan,rgba(C.cyan,.6),{lw:12,turns:4,sp:1.2});g.restore();
+  T('HUMAN',300,640,60,C.coral,{al:'left',f:FM,ls:8});T('MOUSE',300,1600,60,C.cyan,{al:'left',f:FM,ls:8});
+  for(let i=0;i<30;i++){const x=CX-1450+i*100;const m=hash(i*2.1)<.85;const u=eo((t-.3-i*.025)/.3);if(u<=0)continue;g.strokeStyle=m?rgba(C.mint,.55):rgba(C.red,.8);g.lineWidth=m?5:8;g.setLineDash(m?[]:[14,10]);g.beginPath();g.moveTo(x,960);g.lineTo(x,960+(1280-960)*u);g.stroke();g.setLineDash([])}
+  stamp('MOST GENES SHARED',CX,1120,100,C.mint,t-.9);};
+
+V.phylo=(t,p,d,o)=>{const k=eio(seg(t,0,o.drift?.3:1.4));const sx=600,sy=1120,jx=1400;const ends=[[3200,620,'MOUSE',C.cyan],[3200,1600,'HUMAN',C.coral]];
+  g.strokeStyle=rgba(C.white,.9);g.lineWidth=12;g.lineCap='round';g.beginPath();g.moveTo(sx,sy);g.lineTo(lerp(sx,jx,clamp(k*2)),sy);g.stroke();glow(jx,sy,120,C.amber,clamp(k*2-.8));
+  const dr=o.drift?eio(seg(t,.2,d))*.35:0;
+  ends.forEach((e,i)=>{const u=clamp(k*2-1);g.strokeStyle=e[3];g.lineWidth=12;g.beginPath();for(let j=0;j<=40*u;j++){const pt=bez([jx,sy],[jx+500,sy],[e[0]-900,e[1]+(i?1:-1)*dr*600],[e[0],e[1]+(i?1:-1)*dr*500],j/40);j?g.lineTo(pt[0],pt[1]):g.moveTo(pt[0],pt[1])}g.stroke();
+    if(u>=1){const ey=e[1]+(i?1:-1)*dr*500;if(i===0)drawMouse(e[0]+300,ey,.22,{});else drawHuman(e[0]+250,ey+30,.3,{});T(e[2],e[0]-40,ey-(i?-120:120),60,e[3],{al:'right',f:FM,ls:8})}});
+  tag(jx,sy+180,'COMMON ANCESTOR',C.amber,{a:clamp(k*2-.8)});
+  g.strokeStyle=rgba(C.white,.3);g.lineWidth=4;g.beginPath();g.moveTo(sx,1880-80);g.lineTo(3400,1880-80);g.stroke();T('TENS OF MILLIONS OF YEARS AGO',sx,1880-140,44,C.dim,{al:'left',f:FM,ls:4});T('TODAY',3400,1880-140,44,C.dim,{al:'right',f:FM,ls:4});
+  if(o.drift)TOP(t,'THE DETAILS ~DRIFTED APART~',null,{y:300,sz:130});};
+
+V.pathogen=(t,p,d,o)=>{const kind=o.kind||'hiv';const toHuman=o.target==='human';const col=kind==='typhoid'?C.amber:kind==='hep'?C.amber:C.red;
+  if(toHuman)drawHuman(950,1180,.85,{inner:()=>{for(let i=0;i<20;i++)if(t>1+i*.05){const R=rng(i);glow((R()-.5)*500,(R()-.5)*900,120,C.red,.4+.3*sin(G*6+i))}}});else drawMouse(1100,1220,.85,{});
+  const shield=!toHuman;if(shield){g.save();g.strokeStyle=rgba(C.cyan,.7);g.lineWidth=10;g.shadowColor=C.cyan;g.shadowBlur=40;g.beginPath();g.arc(1100,1200,720,-.7,.7);g.stroke();g.restore()}
+  const R=rng(kind.length*7+(toHuman?3:0));for(let i=0;i<9;i++){const t0=R()*1.2,sp=2400+R()*600;const tt=t-t0;if(tt<0)continue;const y0=700+R()*900;const hitX=shield?1100+cos(.0)*720:1250;let x=3700-tt*sp,y=y0;let a=1;
+    if(x<hitX){const over=(hitX-x)/sp;if(shield){x=hitX+over*sp*.7;y=y0+(y0<1200?-1:1)*over*1800;a=1-over*1.2}else{x=hitX-Math.min(over*sp,250);y=y0;}}
+    if(kind==='typhoid')bacterium(x,y,170,col,G*.5+i,a);else virus(x,y,60,col,G+i,a)}
+  const nm=kind==='hiv'?'HIV':kind==='hep'?'HEPATITIS B & C':'TYPHOID';T(nm,3550,520,kind==='hep'?150:200,col,{al:'right',w:800,glow:true});
+  if(shield)stamp(kind==='hep'?'MOSTLY CAN\'T INFECT MICE':'CAN\'T INFECT MICE',2500,1640,86,C.cyan,t-1.1);else stamp('INFECTS ONLY HUMANS',2500,1640,90,C.red,t-1.0);};
+
+V.splitDiff=(t,p,d,o)=>{const L=[960,C.cyan,'MOUSE'],Rr=[2880,C.coral,'HUMAN'];const kind=o.kind;
+  [L,Rr].forEach((q,i)=>{const k=eo((t-i*.1)/.5);panel(q[0]-820,560,1640,1180,q[1],k);T(q[2],q[0],680,80,q[1],{f:FM,ls:12,a:k});
+    const cx=q[0],cy=1180;if(kind==='immune'){virus(cx,cy,90,C.red,G,k);for(let j=0;j<8;j++){let x,y;if(i===0){const a=G*1.5+j/8*TAU;x=cx+cos(a)*300;y=cy+sin(a)*300}else{const a=j/8*TAU;const r=250+sin(G*5+j)*130;x=cx+cos(a)*r;y=cy+sin(a)*r*.7}cell(x,y,46,q[1],G+j,k,j)}}
+    else{g.save();g.translate(cx,cy-30);g.scale(.55,.55);g.fillStyle=rgba(C.amber,.08);g.fill(LIVER);strokeShape(LIVER,C.amber,.55);g.restore();capsule(cx-500+((G*300)%300),cy-30,110,0,C.amber,C.white,1);
+      for(let j=0;j<(i?4:6);j++){const u=(G*.5+j/(i?4:6))%1;const x=cx+250+u*400,y=cy-30+(j-(i?1.5:2.5))*80;g.fillStyle=q[1];if(i)hexPath(x,y,26);else{g.beginPath();g.arc(x,y,18,0,TAU)}g.fill()}}
+    g.strokeStyle=q[1];g.lineWidth=8;g.beginPath();for(let x=-600;x<=600;x+=10){const y=i?((Math.floor((x+G*300)/120)%2)?-60:60):sin((x+G*300)*.02)*60;g.lineTo(cx+x,1560+y)}g.stroke()});
+  stamp('≠',CX,1150,200,C.white,t-.5,{rot:0});TOP(t,kind==='immune'?'IMMUNE SYSTEMS ~FIGHT~ DIFFERENTLY':'LIVERS ~BREAK DOWN DRUGS~ DIFFERENTLY',null,{y:290,sz:115});};
+
+V.pipeline=(t,p,d,o)=>{const st=o.stage||0;const mx=780,my=1220,hx=3080,hy=1150;drawMouse(mx,my,.75,{});drawHuman(hx,hy,.78,{col:st?C.coral:rgba(C.coral,.5)});
+  g.save();g.setLineDash([20,18]);g.lineDashOffset=-G*80;g.strokeStyle=rgba(C.white,.4);g.lineWidth=6;g.beginPath();g.moveTo(mx+300,my-260);g.quadraticCurveTo(CX,300,hx-280,hy-300);g.stroke();g.restore();
+  const u=st?eio(seg(t,0,.9)):eio(seg(t,0,.7));const q=st?bez([mx+300,my-260],[1500,420],[2400,420],[hx-280,hy-300],u):[lerp(300,mx,u),my-420+sin(u*PI)*-100];capsule(q[0],q[1],170,G*3,C.amber,C.white,1);glow(q[0],q[1],140,C.amber,.6);
+  if(!st){badge(mx,my-560,120,C.mint,'v',eo((t-.8)/.5));stamp('CURED',mx,1660,96,C.mint,t-1.0)}else{badge(mx,my-560,90,C.mint,'v',1);badge(hx,hy-860+40,130,C.red,'x',eo((t-1.0)/.5));stamp('NOTHING · OR HARM',hx-300,1720,86,C.red,t-1.3)}
+  TOP(t,st?'THEN IT REACHES ~PEOPLE~':'A TREATMENT ~CURES A MOUSE~',null,{y:280,sz:120});};
+
+V.trials=(t,p,d,o)=>{const cols=20,rows=5;let alive=0;for(let r=0;r<rows;r++)for(let c=0;c<cols;c++){const i=r*cols+c;const x=CX+(c-(cols-1)/2)*170,y=740+r*190;const fail=hash(i*3.7+1)>.1;const ft=.4+hash(i*1.9)*1.6;const k=fail?eo((t-ft)/.4):0;if(!fail||k<1)alive++;
+    capsule(x,y+k*40,130,-.6,fail?mixc(C.amber,'#3A2030',k):C.mint,fail?mixc(C.white,'#4A3040',k):C.white,1-k*.55);if(fail&&k>0&&k<1)glow(x,y,80,C.red,(1-k))}
+  T(String(alive).padStart(3,'0'),3600,1720-60,150,C.mint,{al:'right',f:FM});T('STILL STANDING',3600,1590-60,40,C.dim,{al:'right',f:FM,ls:6});
+  TOP(t,'MOST DRUGS IN HUMAN TRIALS !FAIL!',null,{y:330,sz:125});};
+
+V.promising=(t,p,d,o)=>{const x0=500,x1=3340,y0=1600,y1=600;g.strokeStyle=rgba(C.white,.3);g.lineWidth=4;g.beginPath();g.moveTo(x0,y1-50);g.lineTo(x0,y0);g.lineTo(x1,y0);g.stroke();
+  [['CELLS',.15],['ANIMALS',.5],['HUMANS',.85]].forEach(q=>T(q[0],lerp(x0,x1,q[1]),y0+70,50,C.dim,{f:FM,ls:6}));
+  const k=eio(seg(t,.1,d-.3));const f=u=>u<.7?y0-(Math.pow(u/.7,1.4))*900:y0-900+Math.pow((u-.7)/.3,.6)*870;
+  g.lineWidth=14;g.lineCap='round';for(let j=1;j<=100*k;j++){const u0=(j-1)/100,u1=j/100;g.strokeStyle=u1>.72?C.red:C.mint;g.beginPath();g.moveTo(lerp(x0,x1,u0),f(u0));g.lineTo(lerp(x0,x1,u1),f(u1));g.stroke()}
+  const uu=k;glow(lerp(x0,x1,uu),f(uu),120,uu>.72?C.red:C.mint,1);
+  if(k>.75)stamp('CRASH',lerp(x0,x1,.85),900,90,C.red,t-(.1+(d-.4)*.78));TOP(t,'LOOKED ~PROMISING~ IN ANIMALS',null,{y:300,sz:125});};
+
+V.hostPart=(t,p,d,o)=>{const s=1.4,mx=2050,my=1220;drawMouse(mx,my,s,{inner:()=>{for(const q of mousePts())dot(q.x,q.y,6,C.cyan,.2)}});
+  const k=eback(clamp((t-.4)/.5));const ox=mx+60*s,oy=my+20*s;g.save();g.translate(ox,oy);g.scale(.28*k,.28*k);g.fillStyle=rgba(C.coral,.45);g.fill(LIVER);strokeShape(LIVER,C.coral,.28);g.restore();glow(ox,oy,320*k,C.coral,.5+.2*sin(G*4));
+  g.strokeStyle=C.white;g.lineWidth=4;g.beginPath();g.moveTo(ox+80,oy-60);g.lineTo(ox+600,oy-700);g.lineTo(ox+900,oy-700);g.stroke();tag(ox+900,oy-700,'THE ONE HUMAN PART',C.coral,{al:'left',a:k});
+  TOP(t,'HOST ~THE HUMAN PART~ THAT MATTERS',null,{y:290,sz:120});};
+
+V.useTitle=(t,p,d,o)=>{const col=o.col||C.coral;const k=eio(seg(t,0,.5));
+  for(let i=0;i<5;i++){const off=(1-k)*(W+1200)-(i*120)*(1-k);g.fillStyle=rgba(col,.05+i*.02);g.beginPath();g.moveTo(-600+i*260+off,0);g.lineTo(200+i*260+off,0);g.lineTo(-400+i*260+off,H);g.lineTo(-1200+i*260+off,H);g.fill()}
+  const ns='0'+o.n;T(ns,1180,1100,1100,col,{w:700,f:FH,stroke:10,a:k});g.save();g.beginPath();g.rect(0,1100+550-1100*eio(seg(t,.2,1.2)),W,H);g.clip();T(ns,1180,1100,1100,rgba(col,.35),{w:700});g.restore();glow(1180,1100,800,col,.2);
+  T('USE',2050,640,60,C.dim,{al:'left',f:FM,ls:16,a:k});HL(o.title,2050,1050,220,t,{al:'left',w:800,d:.15});
+  for(let i=0;i<4;i++){const x=2070+i*90,y=1500;g.beginPath();g.roundRect(x,y-14,70,28,14);g.fillStyle=i<o.n?col:'rgba(255,255,255,.15)';g.fill()}
+  if(o.icon)icon(o.icon,3300,1500,300,col,.9*eo((t-.4)/.4));};
+
+V.blank=(t,p,d,o)=>{const slate=o.mode==='slate';const s=1.35,mx=2050,my=1200;const k=eio(seg(t,.1,d-.2));
+  drawMouse(mx,my,s,{col:slate?C.white:C.cyan,dash:slate,inner:()=>{if(slate){g.strokeStyle=rgba(C.white,.08);g.lineWidth=2;for(let x=-500;x<600;x+=50){g.beginPath();g.moveTo(x,-350);g.lineTo(x,250);g.stroke()}for(let y=-350;y<250;y+=50){g.beginPath();g.moveTo(-500,y);g.lineTo(600,y);g.stroke()}}
+    else for(const q of mousePts()){const a=1-clamp((k-q.h*.85)*5);if(a>0){if(q.h<.5)antibody(q.x,q.y,30,C.cyan,q.r,a*.8);else dot(q.x,q.y,7,C.cyan,a*.6)}}}});
+  if(slate){HL('A ~BLANK SLATE~',CX,330,170,t,{w:800});tag(CX,1840-80,"CAN'T REJECT FOREIGN CELLS",C.white,{a:eo((t-.4)/.4)})}
+  else{TOP(t,'NO IMMUNE SYSTEM ~OF ITS OWN~',null,{y:300,sz:125});}};
+
+V.boneMarrow=(t,p,d,o)=>{const s=2.6,bx=CX,by=1120;g.save();g.translate(bx,by);g.scale(s,s);g.fillStyle='rgba(240,230,210,.08)';g.fill(BONE);g.save();g.clip(BONE);g.fillStyle='rgba(194,24,56,.18)';g.fillRect(-380,-55,760,110);g.restore();strokeShape(BONE,'#F0E6D2',s);g.restore();
+  const R=rng(3);for(let i=0;i<10;i++){const tx=bx+(-320+i*70)*s,ty=by+(R()-.5)*60*s;const u=eio(clamp((t-i*.08)/.9));const x=lerp(-200,tx,u),y=lerp(by-500,ty,u);glow(x,y,90,C.coral,.5);cell(x,y,46,C.coral,G+i,1,i);
+    if(u>=1)for(let j=0;j<3;j++){const f=((G*.5+j/3+i*.13)%1);const ex=x+f*500*(i%2?1:-.3),ey=y+(i%2?-1:1)*f*900;if(j===0)antibody(ex,ey,60,C.coral,G+j,1-f);else dot(ex,ey,18,C.coral,1-f)}}
+  tag(bx,by+520,'BONE MARROW',C.white,{a:eo(t/.4)});TOP(t,'MAKING ~HUMAN IMMUNE CELLS~',null,{y:290,sz:125});};
+
+V.hivMouse=(t,p,d,o)=>{const L=[950,'ORDINARY MOUSE',false],Rr=[2900,'HUMANIZED MOUSE',true];
+  [L,Rr].forEach((q,i)=>{const foc=o.focus?(i===0?1:.35):1;drawMouse(q[0]+150,1220,.8,{a:foc,inner:()=>{for(const m of mousePts()){if(q[2]&&m.h<.4){cell(m.x,m.y,22,C.coral,m.r,1,m.v);if(t>1&&m.h<.15)glow(m.x,m.y,70,C.red,.5+.4*sin(G*6+m.ph))}else dot(m.x,m.y,7,C.cyan,.2)}}});
+    tag(q[0],560,q[1],q[2]?C.coral:C.cyan,{a:foc});const R=rng(i+4);for(let j=0;j<6;j++){const tt=t-R()*.8;if(tt<0)continue;let x=q[0]+lerp(700,0,clamp(tt/.8)),y=900+R()*500;let a=foc;if(!q[2]&&tt>.8){x=q[0]+(tt-.8)*1200;y-=(tt-.8)*600;a*=clamp(1-(tt-.8))}virus(x,y,40,C.red,G+j,a)}
+    if(t>1)badge(q[0]+150,1650,90,q[2]?C.red:C.cyan,q[2]?'v':'x',eo((t-1)/.4)*foc)});
+  TOP(t,o.focus?"AN ORDINARY MOUSE ~CAN'T CATCH IT~":'NOW IT CAN CATCH ~HIV~',null,{y:290,sz:125});};
+
+V.immunotherapy=(t,p,d,o)=>{const st=o.stage||0;const tx=2700,ty=1150;const shrink=st?eio(seg(t,.3,d)):0;const R=rng(6);
+  for(let i=0;i<60;i++){const a=i*2.4,r=sq(i)*48;if(st&&hash(i*1.3)<shrink*.9)continue;cell(tx+cos(a)*r,ty+sin(a)*r*.9,40,C.violet,i+G*.2,.95,i)}
+  glow(tx,ty,520,C.violet,.25);
+  const cx=1300,cy=1150;g.save();g.globalAlpha*=.6;for(let i=0;i<30;i++){const a=G*.6+i/30*TAU,r=200+sin(G*2+i)*60;dot(cx+cos(a)*r,cy+sin(a)*r,12,C.amber)}g.restore();if(!st)tag(cx,cy+420,'DRUG',C.amber,{});
+  for(let i=0;i<10;i++){const ph=(G*.35+i/10)%1;let x,y;if(!st){x=lerp(200,cx,ph);y=cy+sin(i*2)*300}else{const a=i/10*TAU;x=lerp(cx,tx+cos(a)*330,eio(clamp(ph*2)));y=lerp(cy+sin(i*2)*300,ty+sin(a)*300,eio(clamp(ph*2)))}
+    const lit=st||x>cx-200;cell(x,y,50,C.coral,G+i,1,i);if(lit){glow(x,y,110,C.coral,.6);for(let j=0;j<6;j++){const a=j/6*TAU+G;g.strokeStyle=C.coral;g.lineWidth=5;g.beginPath();g.moveTo(x+cos(a)*50,y+sin(a)*50);g.lineTo(x+cos(a)*75,y+sin(a)*75);g.stroke()}}}
+  tag(tx,ty+560,'TUMOR',C.violet,{});TOP(t,st?'TEACH IMMUNE CELLS TO ~ATTACK~':'CANCER ~IMMUNOTHERAPY~',null,{y:290,sz:140});};
+
+V.puzzle=(t,p,d,o)=>{const cols=7,rows=3,sz=300;for(let r=0;r<rows;r++)for(let c=0;c<cols;c++){const i=r*cols+c;const x=CX+(c-(cols-1)/2)*(sz+30),y=820+r*(sz+30);const miss=hash(i*4.1)<.25,weak=!miss&&hash(i*2.3)<.25;const k=eback(clamp((t-i*.03)/.35));
+    g.save();g.translate(x,y);g.scale(k,k);g.beginPath();g.roundRect(-sz/2,-sz/2,sz,sz,30);g.arc(sz/2,0,40,0,TAU);
+    if(miss){g.setLineDash([16,14]);g.strokeStyle=rgba(C.white,.5);g.lineWidth=5;g.stroke()}else{const fl=weak?(.35+.35*(sin(G*13+i)>0)):1;g.fillStyle=rgba(C.coral,.22*fl);g.fill();g.strokeStyle=rgba(C.coral,fl);g.lineWidth=6;g.stroke()}g.restore()}
+  TOP(t,'THE SYSTEM ~ISN\'T COMPLETE~',null,{y:290,sz:130});tag(CX,1810-90,'PARTS MISSING · SOME WORK POORLY',C.amber,{a:eo((t-.6)/.4),sz:50});};
+
+V.gauge=(t,p,d,o)=>{const x0=500,x1=3340,y=1150;const c1=o.col1||C.cyan,c2=o.col2||C.coral;const gr=g.createLinearGradient(x0,0,x1,0);gr.addColorStop(0,c1);gr.addColorStop(1,c2);
+  g.beginPath();g.roundRect(x0,y-30,x1-x0,60,30);g.fillStyle='rgba(255,255,255,.06)';g.fill();g.save();g.beginPath();g.roundRect(x0,y-30,(x1-x0)*eo(t/.6),60,30);g.fillStyle=gr;g.globalAlpha=.85;g.fill();g.restore();
+  for(let i=0;i<=20;i++){const x=lerp(x0,x1,i/20);g.fillStyle=rgba(C.white,i%5?.25:.6);g.fillRect(x-2,y+50,4,i%5?20:40)}
+  if(o.zone!=null){const zx=lerp(x0,x1,o.zone);g.save();g.beginPath();g.rect(zx,y-200,x1-zx,400);g.clip();for(let x=zx-400;x<x1;x+=60){g.fillStyle=rgba(C.red,.18);g.beginPath();g.moveTo(x+((G*60)%60),y-200);g.lineTo(x+30+((G*60)%60),y-200);g.lineTo(x-170+((G*60)%60),y+200);g.lineTo(x-200+((G*60)%60),y+200);g.fill()}g.restore();T('?',lerp(zx,x1,.5),y-330,200,C.red,{glow:true,a:.6+.4*sin(G*4)})}
+  const to=o.to??.5;const nv=lerp(o.from??0,to,eio(seg(t,.3,Math.min(d,2.2))))+(o.wob?sin(G*3)*o.wob:0);const nx=lerp(x0,x1,nv);
+  if(o.fuzzy){const fw=(x1-x0)*o.fuzzy*eo((t-.8)/.6);const fg=g.createLinearGradient(nx-fw,0,nx+fw,0);fg.addColorStop(0,'rgba(255,255,255,0)');fg.addColorStop(.5,'rgba(255,255,255,.25)');fg.addColorStop(1,'rgba(255,255,255,0)');g.fillStyle=fg;g.fillRect(nx-fw,y-120,fw*2,240)}
+  g.save();g.translate(nx,y);g.beginPath();g.moveTo(0,-50);g.lineTo(-44,-130);g.lineTo(44,-130);g.closePath();g.fillStyle=C.white;g.shadowColor=C.white;g.shadowBlur=40;g.fill();g.restore();g.fillStyle=C.white;g.fillRect(nx-4,y-50,8,100);
+  if(o.label)tag(nx,y-230,o.label,C.white,{a:eo((t-.6)/.4),sz:48});
+  T(o.left||'',x0,y+150,56,c1,{al:'left',f:FM,ls:8});T(o.right||'',x1,y+150,56,c2,{al:'right',f:FM,ls:8});
+  if(o.title)TOP(t,o.title,null,{y:330,sz:o.tsz||130});};
+
+V.swallow=(t,p,d,o)=>{const st=[[700,'LAB'],[CX,'HUMANIZED-LIVER MOUSE'],[3140,'FIRST PATIENT']];g.strokeStyle=rgba(C.white,.25);g.lineWidth=8;g.beginPath();g.moveTo(700,1150);g.lineTo(3140,1150);g.stroke();
+  const k=eio(seg(t,.1,d*.6));g.strokeStyle=C.amber;g.beginPath();g.moveTo(700,1150);g.lineTo(lerp(700,CX,k),1150);g.stroke();capsule(lerp(700,CX,k),1150,170,G*2,C.amber,C.white,1);glow(lerp(700,CX,k),1150,150,C.amber,.6);
+  st.forEach((q,i)=>{dot(q[0],1150,30,i===2?'#555D78':C.amber,1);T(q[1],q[0],1290,50,i===2?C.dim:C.white,{f:FM,ls:4})});
+  drawMouse(CX+80,880,.42,{});drawHuman(3140,860,.3,{col:C.dim,dash:true});
+  g.save();g.translate(3140,1020);g.strokeStyle=C.red;g.lineWidth=12;g.beginPath();g.arc(0,-40,40,PI,0);g.stroke();g.beginPath();g.roundRect(-60,-40,120,90,14);g.fillStyle=rgba(C.red,.3);g.fill();g.stroke();g.restore();
+  TOP(t,'BEFORE A SINGLE PATIENT ~SWALLOWS IT~',null,{y:300,sz:120});};
+
+V.surgery=(t,p,d,o)=>{drawHuman(1200,1180,1.0,{col:C.white,inner:()=>{const k=eo((t-.4)/.4);if(t<1.4)for(let i=0;i<12;i++){const a=i*2.4,r=sq(i)*20;cell(60+cos(a)*r,-120+sin(a)*r,20,C.coral,G+i,1,i)}}});
+  const cut=eio(seg(t,.2,.8));g.save();g.setLineDash([24,16]);g.strokeStyle=C.white;g.lineWidth=6;g.beginPath();g.arc(1260,1060,150,PI*1.1,PI*1.1+cut*TAU);g.stroke();g.restore();
+  const u=eio(seg(t,1.2,d-.1));const fx=lerp(1260,2800,u),fy=lerp(1060,1100,u)-sin(u*PI)*500;for(let i=0;i<12;i++){const a=i*2.4,r=sq(i)*22;cell(fx+cos(a)*r,fy+sin(a)*r,24,C.coral,G+i,1,i)}glow(fx,fy,200,C.coral,.5);
+  tag(fx,fy-220,"PATIENT'S TUMOR",C.coral,{a:eo((t-.6)/.4)});T('✂',1500,820,120,C.white,{a:1-cut*.5});
+  TOP(t,'REMOVED DURING ~SURGERY~',null,{y:290,sz:130});};
+
+V.implant=(t,p,d,o)=>{const st=o.stage||0;const s=1.4,mx=2050,my=1250;const grow=st?lerp(.5,1,eio(seg(t,0,d))):eio(seg(t,.9,d))*.5;
+  const bx=-60,by=-235;drawMouse(mx,my,s,{inner:()=>{for(const q of mousePts())dot(q.x,q.y,6,C.cyan,.2)}});
+  const n=Math.floor(6+grow*40);for(let i=0;i<n;i++){const a=i*2.4,r=sq(i)*16;cell(mx+(bx+cos(a)*r*1.4)*s,my+(by-10+sin(a)*r*.7)*s,20*s,C.coral,G*.3+i,1,i)}glow(mx+bx*s,my+by*s,260*(.4+grow),C.coral,.4);
+  if(!st){const u=eio(seg(t,0,.9));const fx=lerp(500,mx+bx*s,u),fy=lerp(500,my+by*s,u);if(u<1)for(let i=0;i<8;i++){const a=i*2.4,r=sq(i)*22;cell(fx+cos(a)*r,fy+sin(a)*r,22,C.coral,G+i,1,i)}}
+  tag(mx+bx*s,my+by*s-300,st?'STILL A HUMAN TUMOR':'UNDER THE SKIN',C.coral,{a:eo((t-.4)/.4)});
+  TOP(t,st?'IT KEEPS ~GROWING~':'A ~TUMOR AVATAR~',null,{y:280,sz:130});};
+
+V.drugTest=(t,p,d,o)=>{const sh=[.95,.45,.85,.15],nm=['DRUG A','DRUG B','DRUG C','DRUG D'];for(let i=0;i<4;i++){const x=CX+(i-1.5)*860,y=1000;const k=eo((t-i*.1)/.4);const f=lerp(1,sh[i],eio(seg(t,.5,d-.2)));
+    panel(x-390,560,780,1150,i===3&&t>d-.9?C.mint:C.white,k*(.9));drawMouse(x+40,y,.42,{a:k});const n=Math.floor(4+f*22);for(let j=0;j<n;j++){const a=j*2.4,r=sq(j)*9;cell(x+15+cos(a)*r*1.3,y-100+sin(a)*r*.7,11,C.coral,j,k,j)}
+    g.fillStyle='rgba(255,255,255,.1)';g.fillRect(x-300,1400,600,40);g.fillStyle=i===3?C.mint:C.coral;g.fillRect(x-300,1400,600*f,40);T(nm[i],x,660,56,C.white,{f:FM,ls:6,a:k});T('TUMOR SIZE',x,1490,34,C.dim,{f:FM,ls:4,a:k})}
+  badge(CX+1.5*860,640+120,70,C.mint,'v',eo((t-(d-.8))/.4));TOP(t,'WHICH DRUG ~SHRINKS~ IT?',null,{y:300,sz:130});};
+
+V.pdx=(t,p,d,o)=>{const L=[['P','PATIENT',C.coral],['D','DERIVED',C.amber],['X','XENOGRAFT',C.violet]];L.forEach((q,i)=>{const x=CX+(i-1)*1050;const k=eback(clamp((t-i*.15)/.45));g.save();g.translate(x,1000);g.scale(k,k);T(q[0],0,0,560,q[2],{w:800,glow:true});g.restore();T(q[1],x,1420,96,C.white,{w:700,a:eo((t-.5-i*.15)/.4),ls:6})});
+  tag(CX,480,'PDX MODELS',C.coral,{a:eo(t/.4),sz:56});};
+
+V.complexity=(t,p,d,o)=>{const side=o.side||0;const R=rng(2);const fa=side===0?1:.35,fb=side===1?1:.35;
+  g.save();g.globalAlpha*=fa;const cx=1050,cy=1150;for(let i=0;i<6;i++){g.strokeStyle=rgba(C.red,.6);g.lineWidth=10;g.beginPath();g.moveTo(cx+(R()-.5)*900,cy-450);g.bezierCurveTo(cx+(R()-.5)*600,cy-100,cx+(R()-.5)*600,cy+100,cx+(R()-.5)*900,cy+450);g.stroke()}
+  for(let i=0;i<70;i++){const a=i*2.4,r=sq(i)*52;const ty=i%4;cell(cx+cos(a)*r,cy+sin(a)*r*.85,[38,30,26,44][ty],[C.coral,C.violet,C.amber,C.coral][ty],G*.3+i,1,i)}g.restore();
+  g.save();g.globalAlpha*=fb;const dx=2850,dy=1250;g.beginPath();g.ellipse(dx,dy,720,260,0,0,TAU);g.fillStyle='rgba(255,255,255,.04)';g.fill();g.lineWidth=8;g.strokeStyle=rgba(C.white,.7);g.stroke();g.beginPath();g.ellipse(dx,dy-50,720,260,0,PI,TAU);g.stroke();
+  for(let i=-6;i<=6;i++)for(let j=-2;j<=2;j++){const x=dx+i*95+(j&1?47:0),y=dy+j*70;if(((x-dx)/700)**2+((y-dy)/240)**2<1){g.beginPath();g.ellipse(x,y,38,20,0,0,TAU);g.fillStyle=rgba(C.coral,.3);g.fill();g.strokeStyle=rgba(C.coral,.7);g.lineWidth=3;g.stroke()}}g.restore();
+  T('IN A MOUSE',1050,560,70,C.coral,{w:700,a:fa});T('REAL-WORLD COMPLEXITY',1050,1760-60,52,C.white,{f:FM,a:fa});T('IN A DISH',2850,560,70,C.white,{w:700,a:fb});T('COMPLEXITY LOST',2850,1760-60,52,C.red,{f:FM,a:fb});
+  if(side===1)cross(2850,1000,300,C.red,eo((t-.5)/.4));g.fillStyle=rgba(C.white,.2);g.fillRect(CX-2,520,4,1200);};
+// ================================================================ VISUALS C — organ growing, pigs, ethics, recap
+V.bcTitle=(t,p,d,o)=>{embryo(CX,1080,720,C.mint,{n:34,rot:G*.05});HL('~BLASTOCYST~\nCOMPLEMENTATION',CX,1000,230,t,{w:800});
+  tag(CX-700,1500,'EARLY EMBRYO',C.amber,{a:eo((t-.5)/.4)});tag(CX+700,1500,'FILL THE GAP',C.mint,{a:eo((t-.7)/.4)});};
+
+const ICM=[[-.42,-.32],[-.25,-.48],[-.5,-.1],[-.3,-.2],[-.1,-.42],[-.15,-.25]];
+V.blastocyst=(t,p,d,o)=>{const mode=o.mode||'slot';const bx=CX-200,by=1150,r=600;
+  embryo(bx,by,r,C.cyan,{n:32,icm:ICM.map(q=>[q[0],q[1],C.cyan])});
+  const fill=mode==='fill'?eio(seg(t,.2,d-.3)):0;const px=bx+120,py=by+200,ps=.75;
+  g.save();g.translate(px,py);g.scale(ps,ps);if(fill>0){g.save();g.clip(PANC);g.fillStyle=rgba(C.coral,.45);g.fillRect(-400,140-fill*300,800,300);g.restore()}strokeShape(PANC,mode==='slot'?C.amber:C.coral,ps,{dash:fill<1});g.restore();
+  if(mode==='slot'){glow(px,py,400,C.amber,.25+.1*sin(G*4));tag(px,py+230,'EMPTY SLOT',C.amber,{a:eo((t-.4)/.4)});tag(2950,620,'PANCREAS GENES',C.red,{a:eo(t/.4)});cross(3480,620,80,C.red,eo((t-.4)/.4));TOP(t,'A GENE-EDITED ~EARLY EMBRYO~',null,{y:280,sz:120,x:CX})}
+  if(mode==='inject'||mode==='fill'){const push=mode==='inject'?eio(seg(t,.3,d)):1;syringe(bx+r+150,by-300,1.3,-.5,push,C.coral);
+    const N=14;for(let i=0;i<N;i++){const born=i/N;if(push<born)continue;const age=mode==='fill'?1:clamp((push-born)*3);const R=rng(i+40);
+      const sx=bx+r+150,sy=by-300;const tx=px+(R()-.5)*420*ps,ty=py+(R()-.5)*120*ps;const mx=bx+(R()-.5)*300,my=by-(R())*200;
+      const q=mode==='fill'?[lerp(mx,tx,eio(clamp(fill*1.4-R()*.4))),lerp(my,ty,eio(clamp(fill*1.4-R()*.4)))]:[lerp(sx,mx,age),lerp(sy,my,age)];cell(q[0],q[1],32,C.coral,G+i,1,i)}
+    tag(2950,520,'STEM CELLS · OTHER SPECIES',C.coral,{a:eo(t/.4)});if(mode==='fill')stamp('SLOT FILLED',bx+1300,1500,90,C.mint,t-(d-1))}};
+
+V.ratMouse=(t,p,d,o)=>{pin(560,700,120,C.red,eo(t/.6));T('JAPAN',720,610,110,C.white,{al:'left',w:800,a:eo((t-.2)/.4)});T('RESEARCH TEAM',720,720,44,C.dim,{al:'left',f:FM,ls:6,a:eo((t-.3)/.4)});
+  g.save();g.translate(2350,1250);g.scale(1.25,1);drawMouse(0,0,1.0,{col:C.amber,draw:eo(t/.7)});g.restore();drawMouse(760,1420,.5,{col:C.cyan,draw:eo(t/.6)});
+  tag(2350,1660,'RAT',C.amber,{});tag(760,1640,'MOUSE',C.cyan,{});
+  for(let i=0;i<8;i++){const u=(G*.5+i/8)%1;const q=bez([900,1280],[1200,700],[1800,700],[2200,1150],u);cell(q[0],q[1],22,C.cyan,G+i,1,i)}};
+
+V.ratPancreas=(t,p,d,o)=>{g.save();g.translate(CX+150,1200);g.scale(1.3,1.1);drawMouse(0,0,1.15,{col:C.amber,inner:()=>{for(const q of mousePts())dot(q.x,q.y,6,C.amber,.18)}});g.restore();
+  const k=eback(clamp((t-.3)/.5));const px=CX+150+40,py=1260;g.save();g.translate(px,py);g.scale(.85*k,.85*k);g.fillStyle=rgba(C.cyan,.35);g.fill(PANC);strokeShape(PANC,C.cyan,.85);g.restore();glow(px,py,500*k,C.cyan,.35);
+  tag(px,py+260,'MOUSE PANCREAS',C.cyan,{a:k});TOP(t,'A ~MOUSE PANCREAS~ INSIDE A ~RAT~',null,{y:290,sz:125});};
+
+V.islets=(t,p,d,o)=>{g.save();g.translate(700,1100);g.scale(.55,.55);g.fillStyle=rgba(C.cyan,.3);g.fill(PANC);strokeShape(PANC,C.cyan,.55);g.restore();tag(700,1350,'FROM THE RAT',C.amber,{});
+  drawMouse(3000,1150,.75,{col:C.cyan,inner:()=>{if(t>1.2)for(const q of mousePts())if(q.h<.2)glow(q.x,q.y,60,C.mint,.5)}});tag(3000,1600,'DIABETIC MOUSE',C.cyan,{});
+  for(let i=0;i<7;i++){const u=eio(clamp((t-i*.1)/1.4));const q=bez([800,1050],[1400,500],[2300,500],[2950,1100],u);const R=rng(i);for(let j=0;j<7;j++){const a=j/7*TAU;dot(q[0]+cos(a)*26,q[1]+sin(a)*26,11,C.mint)}glow(q[0],q[1],80,C.mint,.6)}
+  for(let i=0;i<12;i++){const a=G+i;const x=3000+cos(a*1.3)*500,y=1150+sin(a)*300;g.fillStyle=rgba(C.mint,.6);hexPath(x,y,14);g.fill()}
+  TOP(t,'~INSULIN-MAKING~ CELLS',null,{y:290,sz:140});};
+
+V.glucose=(t,p,d,o)=>{const x0=500,x1=3340,y0=1600,y1=600;const band=[1300,1450];g.fillStyle=rgba(C.mint,.1);g.fillRect(x0,band[0],x1-x0,band[1]-band[0]);T('NORMAL RANGE',x1-20,band[0]+40,40,C.mint,{al:'right',f:FM,ls:4});
+  g.strokeStyle=rgba(C.white,.3);g.lineWidth=4;g.beginPath();g.moveTo(x0,y1);g.lineTo(x0,y0);g.lineTo(x1,y0);g.stroke();for(let m=0;m<=14;m+=2){const x=lerp(x0,x1,m/14);T(String(m),x,y0+60,44,C.dim,{f:FM})}T('MONTHS',CX,y0+140,44,C.dim,{f:FM,ls:8});T('BLOOD SUGAR',x0,y1-60,44,C.dim,{al:'left',f:FM,ls:6});
+  const k=eio(seg(t,.1,d-.4));const fy=u=>{const m=u*14;if(m<1)return 800+sin(m*40)*80;if(m<1.6)return lerp(800,1380,(m-1)/.6);return 1380+sin(m*9)*25};
+  g.lineWidth=12;g.lineJoin='round';for(let j=1;j<=200*k;j++){const u0=(j-1)/200,u1=j/200;g.strokeStyle=u1*14<1.3?C.red:C.mint;g.beginPath();g.moveTo(lerp(x0,x1,u0),fy(u0));g.lineTo(lerp(x0,x1,u1),fy(u1));g.stroke()}glow(lerp(x0,x1,k),fy(k),100,k*14<1.3?C.red:C.mint,1);
+  const tx=lerp(x0,x1,1/14);g.save();g.setLineDash([12,10]);g.strokeStyle=C.amber;g.lineWidth=4;g.beginPath();g.moveTo(tx,y1);g.lineTo(tx,y0);g.stroke();g.restore();T('TRANSPLANT',tx+20,y1+30,40,C.amber,{al:'left',f:FM});
+  if(k>.9){const bx0=lerp(x0,x1,1.6/14),bx1=lerp(x0,x1,13.6/14);g.strokeStyle=C.white;g.lineWidth=6;g.beginPath();g.moveTo(bx0,1180);g.lineTo(bx0,1150);g.lineTo(bx1,1150);g.lineTo(bx1,1180);g.stroke();stamp('MORE THAN A YEAR',CX+200,1040,80,C.mint,t-(d-.4-.1))}
+  TOP(t,'BLOOD SUGAR ~UNDER CONTROL~',null,{y:300,sz:130});};
+
+V.nowHumans=(t,p,d,o)=>{for(let i=0;i<4;i++){const r=((G*.6+i/4)%1);g.strokeStyle=rgba(C.coral,(1-r)*.6);g.lineWidth=8;g.beginPath();g.arc(CX,1080,200+r*1500,0,TAU);g.stroke()}
+  drawHuman(CX,1180,.55,{col:C.coral,a:.35});HL('NOW TRY IT\nWITH *HUMANS*',CX,1040,260,t,{w:800});};
+
+V.pigEmbryo=(t,p,d,o)=>{drawPig(CX+100,1180,1.9,{a:.18});const bx=CX,by=1120;embryo(bx,by,520,C.amber,{n:30,icm:ICM.map(q=>[q[0],q[1],C.amber])});
+  const push=eio(seg(t,.3,d-.2));syringe(bx+620,by-260,1.2,-.5,push,C.coral);for(let i=0;i<8;i++){if(push<i/8)continue;const R=rng(i+3);const age=clamp((push-i/8)*3);cell(lerp(bx+600,bx-250+(R()-.5)*200,age),lerp(by-260,by-200+(R()-.5)*200,age),24,C.coral,G+i,1,i)}
+  tag(bx,by+700-40,'HUMAN STEM CELLS → PIG EMBRYOS',C.coral,{a:eo((t-.3)/.4),sz:50});};
+
+V.pigSize=(t,p,d,o)=>{drawPig(900,1150,1.15,{inner:()=>{g.save();g.translate(80,40);g.scale(.32,.32);g.fillStyle=rgba(C.amber,.6);g.fill(KIDNEY);g.restore()}});drawHuman(2900,1180,.85,{inner:()=>{g.save();g.translate(80,-60);g.scale(.42,.42);g.fillStyle=rgba(C.coral,.6);g.fill(KIDNEY);g.restore()}});
+  const k=eo((t-.6)/.5);g.save();g.translate(CX,1150);g.globalAlpha*=k;g.scale(.7,.7);g.fillStyle=rgba(C.amber,.25);g.fill(KIDNEY);strokeShape(KIDNEY,C.amber,.7);g.translate(40,0);strokeShape(KIDNEY,C.coral,.7,{dash:true});g.restore();T('≈',CX,700,200,C.white,{a:k,w:700});
+  TOP(t,'ORGANS ~CLOSE TO OUR SIZE~',null,{y:290,sz:130});};
+
+let _field=null;function needleField(){if(_field)return _field;const c=document.createElement('canvas');c.width=W;c.height=H;const x=c.getContext('2d');for(let gy=0;gy<H;gy+=10)for(let gx=0;gx<W;gx+=10){const h=hash(gx*.131+gy*7.17);x.fillStyle=`rgba(45,226,230,${.35+h*.5})`;x.fillRect(gx+h*5,gy+hash(gx+gy*3.3)*5,4,4)}return _field=c}
+V.needle=(t,p,d,o)=>{const tx=2462,ty=1272;const D=d;const z=Math.exp(lerp(0,Math.log(46),eio(seg(t,.4,D-.8))));
+  if(z<4){g.save();g.translate(tx,ty);g.scale(z,z);g.translate(-tx,-ty);g.globalAlpha=clamp((4-z)/1.5);g.drawImage(needleField(),0,0);g.restore()}
+  if(z>2.5){g.save();g.globalAlpha=clamp((z-2.5)/1.5);const vw=W/z,vh=H/z;const gx0=Math.floor((tx-vw*.5)/10)*10-10,gy0=Math.floor((ty-vh*.5)/10)*10-10;for(let gy=gy0;gy<ty+vh*.5+10;gy+=10)for(let gx=gx0;gx<tx+vw*.5+10;gx+=10){const h=hash(gx*.131+gy*7.17);const x=gx+h*5,y=gy+hash(gx+gy*3.3)*5;const sx=CX+(x-tx)*z,sy=CY+(y-ty)*z;if(z>12)cell(sx,sy,1.6*z,C.cyan,h*6,.5+h*.4,(h*6)|0);else{g.fillStyle=`rgba(45,226,230,${.25+h*.4})`;g.fillRect(sx,sy,3*z*.6,3*z*.6)}}g.restore()}
+  const sx=z<4?tx+( 0):CX,sy=z<4?ty:CY;const hx=lerp(tx,CX,clamp((z-1)/3)),hy=lerp(ty,CY,clamp((z-1)/3));const hr=Math.max(5,1.6*z);if(z>12)cell(hx,hy,hr,C.coral,G,1,2);else dot(hx,hy,Math.max(7,hr),C.coral);glow(hx,hy,Math.max(90,hr*4),C.coral,.9);
+  const rk=(G*1.3)%1;g.strokeStyle=rgba(C.coral,1-rk);g.lineWidth=6;g.beginPath();g.arc(hx,hy,Math.max(40,hr*1.4)+rk*200,0,TAU);g.stroke();
+  g.fillStyle='rgba(3,6,14,.75)';g.beginPath();g.roundRect(CX-900,170,1800,300,40);g.fill();T('1 IN 100,000',CX,320,190,C.white,{w:800,f:FH});
+  if(t>D-1.1)tag(hx+Math.max(80,hr*1.6)+40,hy-Math.max(80,hr*1.6),'HUMAN',C.coral,{al:'left',a:eo((t-(D-1.1))/.4),sz:56});};
+
+V.stopped=(t,p,d,o)=>{const xs=[600,1300,2000,2700,3300];const lb=['DAY 0','WEEK 1','WEEK 2','WEEK 3','WEEK 4'];const k=eio(seg(t,.1,d*.6));g.strokeStyle=rgba(C.white,.25);g.lineWidth=8;g.beginPath();g.moveTo(600,1350);g.lineTo(3300,1350);g.stroke();g.strokeStyle=C.amber;g.beginPath();g.moveTo(600,1350);g.lineTo(lerp(600,3300,k),1350);g.stroke();
+  xs.forEach((x,i)=>{const on=k>=i/4-.01;embryo(x,1000,80+i*30,on?C.amber:'#3A4560',{n:14+i*3});if(on)for(let j=0;j<i;j++)dot(x+(j-1)*20,1000-20,9,C.coral);T(lb[i],x,1440,46,on?C.white:C.dim,{f:FM})});
+  if(t>d*.6){const sk=eback(clamp((t-d*.6)/.4));g.save();g.translate(3300,1000);g.scale(sk,sk);g.beginPath();for(let i=0;i<8;i++){const a=i/8*TAU+PI/8;g.lineTo(cos(a)*230,sin(a)*230)}g.closePath();g.fillStyle=rgba(C.red,.85);g.fill();g.lineWidth=10;g.strokeStyle=C.white;g.stroke();T('STOP',0,8,110,C.white,{w:800});g.restore()}
+  TOP(t,'STOPPED AFTER ~A FEW WEEKS~',null,{y:300,sz:130});};
+
+V.compete=(t,p,d,o)=>{const k=eio(seg(t,.1,d));const R=rng(9);const n=Math.floor(60+k*120);for(let i=0;i<n;i++){const a=i*2.4,r=sq(i)*58;cell(CX+cos(a)*r*1.5,1180+sin(a)*r*.6,34,C.amber,G*.3+i,eo((t-i*.004)/.3),i)}
+  for(let i=0;i<6;i++){const a=i*1.3+G*.2,r=300+i*80;const sr=34*(1-k*.7);const x=CX+cos(a)*r*1.5,y=1180+sin(a)*r*.6;cell(x,y,sr,C.coral,G+i,1-k*.5,i);glow(x,y,90,C.coral,.4*(1-k))}
+  T('PIG',1150,520,70,C.amber,{f:FM,ls:8});T('HUMAN',2690,520,70,C.coral,{f:FM,ls:8});const gw=lerp(300,1100,k);g.strokeStyle=C.white;g.lineWidth=6;g.beginPath();g.moveTo(CX-gw/2,520);g.lineTo(CX+gw/2,520);g.moveTo(CX-gw/2,490);g.lineTo(CX-gw/2,550);g.moveTo(CX+gw/2,490);g.lineTo(CX+gw/2,550);g.stroke();T('SPECIES GAP',CX,440,40,C.dim,{f:FM,ls:6});
+  TOP(t,'DISTANT RELATIVES ~STRUGGLE TO COMPETE~',null,{y:240,sz:110});};
+
+V.noKidney=(t,p,d,o)=>{const st=o.stage||0;g.save();g.translate(CX-400,1150);g.scale(1.25,1.25);strokeShape(KIDNEY,C.coral,1.25,{dash:true});g.restore();cross(CX-400,1150,560,C.red,st?1:eo((t-.5)/.5));
+  tag(CX+700,900,'NO HUMAN KIDNEY GROWN',C.red,{al:'left',a:st?1:eo((t-.8)/.4),sz:56});if(st)tag(CX+700,1150,'NO EMBRYO BORN',C.red,{al:'left',a:eo((t-.3)/.4),sz:56});
+  TOP(t,st?'NONE WERE ~EVER BORN~':'NO PIG HAS GROWN A *HUMAN* ORGAN',null,{y:300,sz:120});};
+
+V.uneasy=(t,p,d,o)=>{const k=eio(seg(t,0,.5));for(let i=-4;i<30;i++){const x=i*180+((G*240)%360);g.fillStyle=rgba(i%2?C.red:C.amber,.10*k);g.beginPath();g.moveTo(x,0);g.lineTo(x+90,0);g.lineTo(x-600,H);g.lineTo(x-690,H);g.fill()}
+  glow(CX,CY,1400,C.red,.12+.06*sin(G*5));HL('THE PART THAT MAKES\nPEOPLE !UNEASY!',CX,1050,230,t,{w:800});};
+
+V.twoPlaces=(t,p,d,o)=>{[[1150,'01','GERMLINE','germ',C.amber],[2690,'02','BRAIN','brain',C.violet]].forEach((q,i)=>{const k=eback(clamp((t-.2-i*.25)/.5));g.save();g.translate(q[0],1150);g.scale(k,k);g.beginPath();g.arc(0,0,420,0,TAU);g.fillStyle=rgba(q[4],.08);g.fill();g.lineWidth=8;g.strokeStyle=q[4];g.stroke();ringHUD(0,0,470,q[4],.5);icon(q[3],0,-40,380,q[4]);g.restore();
+    T(q[1],q[0],620,60,q[4],{f:FM,ls:10,a:k});T(q[2],q[0],1700-60,90,C.white,{w:800,a:k})});TOP(t,'TWO PLACES ~ABOVE ALL~',null,{y:290,sz:130});};
+
+V.germline=(t,p,d,o)=>{const st=o.stage||0;const ex=2350,ey=1130;glow(ex,ey,700,C.amber,.3);cell(ex,ey,320,C.amber,G*.1,1,2);g.save();g.setLineDash([30,24]);g.lineDashOffset=G*60;g.strokeStyle=rgba(C.red,.7);g.lineWidth=10;g.beginPath();g.arc(ex,ey,470,0,TAU);g.stroke();g.restore();
+  for(let i=0;i<9;i++){const R=rng(i+1);const ph=(G*.25+R())%1;const sx=lerp(300,ex-480,ph),sy=lerp(400+R()*1400,ey+(R()-.5)*300,ph);const ang=Math.atan2(ey-sy,ex-sx);g.save();g.translate(sx,sy);g.rotate(ang);g.strokeStyle=C.cyan;g.lineWidth=6;g.lineCap='round';g.beginPath();for(let j=0;j<30;j++)g.lineTo(-30-j*9,sin(j*.5-G*14)*(4+j*.5));g.stroke();g.fillStyle=C.cyan;g.beginPath();g.ellipse(0,0,34,22,0,0,TAU);g.fill();g.restore()}
+  if(st===0){TOP(t,'1 · THE ~GERMLINE~',null,{y:290,sz:140});tag(ex,ey+600-40,'EGGS & SPERM',C.amber,{a:eo((t-.3)/.4)})}
+  if(st===1){TOP(t,'HUMAN ~REPRODUCTIVE CELLS~ IN AN ANIMAL?',null,{y:290,sz:110});stamp('RED FLAG',ex,ey+580,90,C.red,t-.5)}
+  if(st===2){TOP(t,'NOBODY WANTS TO ~RUSH~ THIS',null,{y:290,sz:130});T('⏸',ex,ey,260,C.white,{a:eo((t-.3)/.4)})}};
+
+const NET=(()=>{const R=rng(42);const n=[];for(let i=0;i<46;i++){const a=R()*TAU,r=sq(R());n.push([cos(a)*r*520,sin(a)*r*360])}const e=[];for(let i=0;i<n.length;i++)for(let j=i+1;j<n.length;j++){const dd=Math.hypot(n[i][0]-n[j][0],n[i][1]-n[j][1]);if(dd<190)e.push([i,j])}return{n,e}})();
+function brainNet(x,y,s,col,o={}){g.save();g.translate(x,y);g.scale(s,s);g.fillStyle=rgba(col,.06);g.fill(BRAIN);g.save();g.clip(BRAIN);drawBrainSulci(col,.18);
+  for(const[i,j]of NET.e){const a=NET.n[i],b=NET.n[j];g.strokeStyle=rgba(col,.22);g.lineWidth=3/s;g.beginPath();g.moveTo(a[0],a[1]);g.lineTo(b[0],b[1]);g.stroke()}
+  const sp=o.speed||1;NET.e.forEach(([i,j],k)=>{if(k%3)return;const f=((G*.6*sp+hash(k))%1);const a=NET.n[i],b=NET.n[j];const px=lerp(a[0],b[0],f),py=lerp(a[1],b[1],f);glow(px,py,30/s*1.5,o.pc||C.white,.8);});
+  NET.n.forEach((q,i)=>{dot(q[0],q[1],9,col,.9)});if(o.inner)o.inner();g.restore();strokeShape(BRAIN,col,s);g.restore()}
+V.brainZone=(t,p,d,o)=>{const st=o.stage||0;brainNet(CX,1150,1.45,C.violet,{});glow(CX,1150,900,C.violet,.15+.05*sin(G*3));
+  if(st===0)TOP(t,'2 · THE ~BRAIN~',null,{y:290,sz:150});else TOP(t,'WHERE ~EXPERIENCE~ COMES FROM',null,{y:290,sz:130});};
+
+V.twoExp=(t,p,d,o)=>{[[1050,'EXPERIMENT 01','ROCHESTER','HUMAN GLIA → MICE',C.coral],[2790,'EXPERIMENT 02','STANFORD','HUMAN ORGANOIDS → RATS',C.violet]].forEach((q,i)=>{const k=eo((t-.1-i*.18)/.5);g.save();g.translate(0,(1-k)*400);g.globalAlpha*=k;panel(q[0]-760,620,1520,1000,q[4]);T(q[1],q[0]-680,720,48,q[4],{al:'left',f:FM,ls:8});T(q[2],q[0]-680,920,150,C.white,{al:'left',w:800});T(q[3],q[0]-680,1110,56,C.dim,{al:'left',f:FM});
+    if(i===0)astro(q[0]+400,1380,170,q[4],3,1);else{for(let j=0;j<3;j++)cell(q[0]+250+j*170,1400,70,q[4],G+j,1,j)}g.restore()});TOP(t,'TWO ~REAL~ EXPERIMENTS',null,{y:290,sz:130});};
+
+V.place=(t,p,d,o)=>{g.strokeStyle=rgba(C.cyan,.08);g.lineWidth=2;for(let x=0;x<W;x+=160){g.beginPath();g.moveTo(x+((G*20)%160),0);g.lineTo(x+((G*20)%160),H);g.stroke()}for(let y=0;y<H;y+=160){g.beginPath();g.moveTo(0,y);g.lineTo(W,y);g.stroke()}
+  pin(900,1250,200,o.col||C.coral,eo(t/.6));ringHUD(900,1250,300,o.col||C.coral,.4);HL(o.name,1350,1000,200,t,{al:'left',w:800,d:.15});T(o.coord||'',1360,1330,52,C.dim,{al:'left',f:FM,ls:4,a:eo((t-.4)/.4)});tag(1350,1520,o.sub||'',o.col||C.coral,{al:'left',a:eo((t-.6)/.4),sz:50});};
+
+V.glia=(t,p,d,o)=>{const mode=o.mode||'intro';
+  if(mode==='compare'){[[1050,'MOUSE GLIA',C.cyan,150,6],[2790,'HUMAN GLIA',C.coral,420,12]].forEach((q,i)=>{const k=eback(clamp((t-.2-i*.3)/.5));astro(q[0],1150,q[3]*k,q[2],7+i,1,q[4]);T(q[1],q[0],1700-40,70,q[2],{f:FM,ls:8,a:k})});
+    TOP(t,'HUMAN GLIA: ~LARGER~ & ~MORE COMPLEX~',null,{y:290,sz:120});return}
+  const spread=mode==='spread'?eio(seg(t,.1,d)):mode==='speed'?1:.35;const sp=mode==='speed'?lerp(1,4.5,eio(seg(t,.2,d))):1;
+  brainNet(CX,1150,1.55,C.cyan,{speed:sp,pc:mode==='speed'?C.amber:C.white,inner:()=>{const R=rng(5);for(let i=0;i<22;i++){const x=(R()-.5)*1000,y=(R()-.5)*700;if((x+520)/1040<spread||mode==='intro')astro(x,y,60,C.coral,i,.95,7)}}});
+  if(mode==='intro'){TOP(t,'~GLIA~: THE SUPPORT CELLS',null,{y:290,sz:130})}
+  if(mode==='help'){TOP(t,'THEY HELP ~NEURONS~ COMMUNICATE',null,{y:290,sz:120})}
+  if(mode==='spread')TOP(t,'HUMAN GLIA ~SPREAD~',null,{y:290,sz:140});
+  if(mode==='speed'){TOP(t,'SIGNALS TRAVEL ~FASTER~',null,{y:290,sz:140});const v=sp/4.5;g.save();g.translate(3350,1600);g.lineWidth=20;g.strokeStyle='rgba(255,255,255,.12)';g.beginPath();g.arc(0,0,180,PI,TAU);g.stroke();g.strokeStyle=C.amber;g.beginPath();g.arc(0,0,180,PI,PI+PI*v);g.stroke();g.rotate(PI+PI*v);g.fillStyle=C.white;g.fillRect(0,-5,170,10);g.restore()}};
+
+V.scores=(t,p,d,o)=>{const groups=['LEARNING','MEMORY'];const base=880,y0=1560;groups.forEach((gname,gi)=>{const gx=1250+gi*1350;[[C.cyan,.5,'ORDINARY'],[C.coral,.78,'+ HUMAN GLIA']].forEach((b,bi)=>{const h=600*b[1]*eio(seg(t,.2+bi*.2+gi*.1,1.2+bi*.2));const x=gx+(bi-.5)*340-120;g.fillStyle=rgba(b[0],.85);g.beginPath();g.roundRect(x,y0-h,240,h,[20,20,0,0]);g.fill();glow(x+120,y0-h,140,b[0],.5);T(b[2],x+120,y0+60,36,b[0],{f:FM})});T(gname,gx-120,y0+150,64,C.white,{w:700})});
+  g.fillStyle=rgba(C.white,.3);g.fillRect(800,y0,2400,4);TOP(t,'BETTER ON ~SOME~ TESTS',null,{y:300,sz:140});};
+
+V.stillMice=(t,p,d,o)=>{drawMouse(1550,1250,1.05,{inner:()=>{g.save();g.translate(300,-120);g.scale(.22,.22);g.fillStyle=rgba(C.coral,.4);g.fill(BRAIN);g.restore()}});glow(1550+300*1.05,1250-120*1.05,180,C.coral,.5);
+  HL('STILL ~MICE~',2850,850,220,t,{w:800});const k=eo((t-.6)/.4);g.save();g.globalAlpha*=k;T('THINKING LIKE HUMANS',2850,1180,64,C.dim,{f:FM});g.strokeStyle=C.red;g.lineWidth=10;g.beginPath();g.moveTo(2850-560,1180);g.lineTo(2850-560+1120*eo((t-.8)/.4),1180);g.stroke();g.restore();
+  tag(2850,1400,'↑ A FEW BETTER TEST SCORES',C.mint,{a:eo((t-1.2)/.4),sz:50});};
+
+V.brainPerf=(t,p,d,o)=>{brainNet(1350,1150,1.15,C.cyan,{inner:()=>{const R=rng(2);for(let i=0;i<14;i++)astro((R()-.5)*1000,(R()-.5)*600,50,C.coral,i,.9,7)}});
+  const x0=2300,x1=3550,y0=1500;g.strokeStyle=rgba(C.white,.3);g.lineWidth=4;g.beginPath();g.moveTo(x0,700);g.lineTo(x0,y0);g.lineTo(x1,y0);g.stroke();const k=eio(seg(t,.2,d-.3));g.strokeStyle=C.coral;g.lineWidth=10;g.beginPath();for(let j=0;j<=60*k;j++){const u=j/60;g.lineTo(lerp(x0,x1,u),y0-100-u*600+sin(u*20)*30)}g.stroke();
+  T('PERFORMANCE',x0,650,40,C.dim,{al:'left',f:FM,ls:6});TOP(t,'HUMAN CELLS CHANGED ~HOW IT PERFORMED~',null,{y:290,sz:115});};
+
+V.organoid=(t,p,d,o)=>{const mode=o.mode||'grow';const k=mode==='grow'?eio(seg(t,.1,d)):1;const cs=[[1250,1150],[CX,1100],[2590,1180]];
+  cs.forEach((c,ci)=>{const R=rng(ci+3);const r=lerp(80,330,k);glow(c[0],c[1],r*2,C.coral,.3);for(let ring=4;ring>=0;ring--){const rr=r*(.3+ring*.17);g.strokeStyle=rgba(ring%2?C.coral:C.violet,.6);g.lineWidth=8;g.beginPath();for(let i=0;i<=80;i++){const a=i/80*TAU;const w=1+.08*sin(a*(7+ring)+G+ci);i?g.lineTo(c[0]+cos(a)*rr*w,c[1]+sin(a)*rr*w):g.moveTo(c[0]+cos(a)*rr*w,c[1]+sin(a)*rr*w)}g.closePath();g.stroke()}
+    for(let i=0;i<14;i++){const a=R()*TAU,dd=lerp(600,r*.8,k)*R();cell(c[0]+cos(a)*dd,c[1]+sin(a)*dd,22,C.coral,G+i,1,i)}});
+  if(mode==='grow')TOP(t,'TINY CLUMPS OF ~HUMAN BRAIN TISSUE~',null,{y:290,sz:120});else{HL('~ORGANOIDS~',CX,330,240,t,{w:800})}
+  tag(CX,mode==='grow'?560:1640,'GROWN FROM STEM CELLS',C.mint,{a:eo((t-.3)/.4)});};
+
+V.ratBrain=(t,p,d,o)=>{const mode=o.mode||'implant';const bx=CX,by=1150;const hem=[[-270,0],[270,0]];
+  hem.forEach(q=>{g.save();g.translate(bx+q[0],by+q[1]);g.beginPath();g.ellipse(0,0,250,420,0,0,TAU);g.fillStyle=rgba(C.cyan,.06);g.fill();g.lineWidth=8;g.strokeStyle=C.cyan;g.stroke();g.restore()});
+  g.strokeStyle=rgba(C.cyan,.4);g.lineWidth=3;const R=rng(4);for(let i=0;i<40;i++){const hx=R()<.5?-270:270;const a=R()*TAU,r=R()*.85;dot(bx+hx+cos(a)*230*r,by+sin(a)*400*r,8,C.cyan,.6)}
+  let sz=mode==='implant'?eio(seg(t,.3,d))*.6:mode==='bigger'?lerp(.5,1.1,eio(seg(t,.2,d))):1;const ix=bx+270,iy=by-80;
+  g.save();g.beginPath();g.ellipse(bx+270,by,248,418,0,0,TAU);g.clip();if(mode==='third'){const fk=eio(seg(t,.2,d-.3));g.beginPath();g.moveTo(bx+270,by);g.ellipse(bx+270,by,250,420,0,-PI/2,-PI/2+TAU/3*fk);g.closePath();g.fillStyle=rgba(C.coral,.45);g.fill()}
+  else{for(let i=0;i<Math.floor(10+sz*50);i++){const a=i*2.4,r=sq(i)*22*Math.max(.4,sz);cell(ix+cos(a)*r,iy+sin(a)*r*1.3,20,C.coral,G+i,1,i)}glow(ix,iy,300*sz,C.coral,.4)}g.restore();
+  if(mode==='connect'||mode==='third'){for(let i=0;i<12;i++){const R2=rng(i+9);const ex=bx-270+(R2()-.5)*400,ey=by+(R2()-.5)*700;g.strokeStyle=rgba(C.coral,.5);g.lineWidth=4;g.beginPath();g.moveTo(ix,iy);g.quadraticCurveTo(bx,by-200,ex,ey);g.stroke();const f=(G*.8+i/12)%1;const q=[lerp(lerp(ix,bx,f),lerp(bx,ex,f),f),lerp(lerp(iy,by-200,f),lerp(by-200,ey,f),f)];glow(q[0],q[1],40,C.white,.9)}}
+  if(mode==='implant'){TOP(t,'INTO THE BRAINS OF ~NEWBORN RATS~',null,{y:290,sz:120});tag(bx+800,by-300,'HUMAN ORGANOID',C.coral,{al:'left',a:eo((t-.4)/.4)})}
+  if(mode==='connect')TOP(t,'WIRED INTO THE ~RAT\'S OWN CIRCUITS~',null,{y:290,sz:115});
+  if(mode==='third'){TOP(t,'ABOUT ~A THIRD~ OF ONE SIDE',null,{y:290,sz:130});T('≈ 1/3',bx+800,by,200,C.coral,{al:'left',w:800,glow:true,a:eo((t-.6)/.4)})}
+  if(mode==='bigger'){TOP(t,'WHAT IF THE TISSUE GETS ~BIGGER~?',null,{y:290,sz:120})}
+  T('TOP VIEW · RAT BRAIN',bx,by+560,44,C.dim,{f:FM,ls:6});};
+
+V.opto=(t,p,d,o)=>{const st=o.stage||0;if(!st){const bx=CX,by=1250;g.save();const gr=g.createLinearGradient(bx,200,bx,by);gr.addColorStop(0,rgba(C.blue,.0));gr.addColorStop(1,rgba(C.blue,.45));g.fillStyle=gr;g.beginPath();g.moveTo(bx-40,200);g.lineTo(bx+40,200);g.lineTo(bx+420,by);g.lineTo(bx-420,by);g.closePath();g.globalAlpha=eo((t-.3)/.3);g.fill();g.restore();
+    for(let i=0;i<9;i++){const R=rng(i);const x=bx+(R()-.5)*900,y=by+(R()-.5)*300;const fire=t>.6&&sin(G*14+i*2)>.3;neuron(x,y,180,fire?C.white:C.coral,i,1);if(fire)glow(x,y,200,C.blue,.8)}
+    TOP(t,'SWITCHED ON ~WITH LIGHT~',null,{y:290,sz:140});tag(bx+700,520,'LIGHT',C.blue,{al:'left',a:eo(t/.4)})}
+  else{const path=[[600,1600],[600,800],[1400,800],[1400,1400],[2200,1400],[2200,700],[3100,700],[3100,1300]];g.strokeStyle=rgba(C.white,.12);g.lineWidth=200;g.lineJoin='round';g.lineCap='round';g.beginPath();path.forEach((q,i)=>i?g.lineTo(q[0],q[1]):g.moveTo(q[0],q[1]));g.stroke();
+    g.strokeStyle=rgba(C.amber,.8);g.lineWidth=10;g.setLineDash([24,18]);polyPart(path,eio(seg(t,.1,d-.3)));g.setLineDash([]);const q=along(path,eio(seg(t,.1,d-.3))*.9999);dot(q[0],q[1],38,C.amber);glow(q[0],q[1],120,C.amber,.8);
+    const rp=[3100,1300];glow(rp[0],rp[1],260,C.mint,.6+.3*sin(G*5));T('★',rp[0],rp[1],160,C.mint,{glow:true});tag(rp[0],rp[1]+220,'REWARD',C.mint,{});TOP(t,'THE RATS WENT LOOKING FOR A ~REWARD~',null,{y:290,sz:115})}};
+
+V.stillRat=(t,p,d,o)=>{const st=o.stage||0;const s=st?1.9:1.35;brainNet(CX+(st?-200:0),1180,s,C.cyan,{inner:()=>{g.save();g.beginPath();g.ellipse(250,-60,200,150,.3,0,TAU);g.fillStyle=rgba(C.coral,.45);g.fill();g.lineWidth=6;g.strokeStyle=C.coral;g.stroke();g.restore()}});
+  if(!st)TOP(t,"STILL A ~RAT'S BRAIN~",null,{y:290,sz:150});else{tag(2900,700,'HUMAN TISSUE',C.coral,{a:eo(t/.4),sz:56});tag(2900,860,'DOING A JOB INSIDE',C.white,{a:eo((t-.3)/.4),sz:50})}};
+
+V.debate=(t,p,d,o)=>{const items=[[700,750,'?'],[1500,1450,'!'],[2400,700,'?'],[3200,1350,'⚖'],[1200,1100,'…'],[2800,1050,'?'],[1950,1550,'!']];items.forEach((q,i)=>{const k=eback(clamp((t-i*.12)/.35));g.save();g.translate(q[0],q[1]+sin(G*1.5+i)*14);g.scale(k,k);g.beginPath();g.roundRect(-200,-130,400,260,60);g.moveTo(-40,130);g.lineTo(-90,210);g.lineTo(20,130);g.fillStyle=rgba(i%2?C.violet:C.white,.1);g.fill();g.lineWidth=6;g.strokeStyle=i%2?C.violet:C.white;g.stroke();T(q[2],0,10,140,i%2?C.violet:C.white,{w:700});g.restore()});
+  TOP(t,'SERIOUS ~ETHICAL DISCUSSION~',null,{y:270,sz:130});tag(CX,1830-80,'INCLUDING FROM THE RESEARCHERS THEMSELVES',C.violet,{a:eo((t-.8)/.4),sz:44});};
+
+V.noTest=(t,p,d,o)=>{const st=o.stage||0;brainNet(1350,1150,1.15,C.violet,{});const sx=1350+sin(G*2)*560;g.fillStyle=rgba(C.white,.8);g.fillRect(sx-3,650,6,1000);glow(sx,1150,250,C.violet,.5);
+  panel(2350,700,1200,900,C.violet,eo(t/.4));T('EXPERIENCE TEST',2950,820,52,C.dim,{f:FM,ls:6});T('RESULT',2450,1000,48,C.dim,{al:'left',f:FM});const glyph='?#%&?▒?';T(t<1.2?glyph[(G*12|0)%glyph.length].repeat(3):'???',2950,1180,200,C.violet,{f:FM,glow:true});
+  if(st||t>d-1.5)stamp('NO TEST EXISTS',2950,1450,80,C.red,st?t-.2:t-(d-1.5));TOP(t,'WHAT DOES IT ~EXPERIENCE~?',null,{y:290,sz:125});};
+
+V.hostScale=(t,p,d,o)=>{const nodes=['MOUSE','RAT','PIG','MONKEY','HUMAN'];const hl=o.hl??0;const x0=520,x1=3320,y=1250;g.strokeStyle=rgba(C.white,.25);g.lineWidth=8;g.beginPath();g.moveTo(x0,y);g.lineTo(x1,y);g.stroke();
+  const mk=lerp(Math.max(0,hl-1),hl,eio(seg(t,.2,1)));const mx=lerp(x0,x1,mk/4);g.strokeStyle=C.violet;g.beginPath();g.moveTo(x0,y);g.lineTo(mx,y);g.stroke();
+  nodes.forEach((n,i)=>{const x=lerp(x0,x1,i/4);const on=i<=hl;const isH=i===4;const col=isH?C.coral:on?C.violet:C.dim;dot(x,y,i===hl?46:30,col);if(i===hl)glow(x,y,200,C.violet,.8);
+    if(i===0||i===1)drawMouse(x+(i?30:20),y-260,i?.24:.17,{col});else if(i===2)drawPig(x+20,y-250,.27,{col});else if(i===4)drawHuman(x,y-300,.26,{col});else{g.save();g.translate(x,y-280);g.strokeStyle=col;g.lineWidth=8;g.beginPath();g.arc(0,0,80,0,TAU);g.stroke();g.beginPath();g.arc(-95,-10,30,0,TAU);g.arc(95,-10,30,0,TAU);g.stroke();g.beginPath();g.ellipse(0,25,45,32,0,0,TAU);g.stroke();g.restore()}
+    T(n,x,y+120,50,col,{f:FM,ls:6})});
+  glow(mx,y,140,C.violet,.9);tag(CX,1600,'CLOSER TO US →',C.violet,{a:eo((t-.3)/.4),sz:52});TOP(t,hl>=3?'LIKE A ~MONKEY~':'AS THE HOST GETS ~CLOSER TO US~',null,{y:290,sz:130});};
+
+V.rules=(t,p,d,o)=>{for(let i=0;i<4;i++){const k=eo((t-i*.12)/.5);g.save();g.translate(CX+(i-1.5)*120*k,1150);g.rotate((i-1.5)*.1*k);g.globalAlpha*=k;panel(-420,-520,840,1040,C.amber);for(let j=0;j<6;j++){g.fillStyle=rgba(C.white,.18);g.fillRect(-330,-360+j*120,560-(j%3)*100,22);if(i===3&&j<3)check(-370,-350+j*120,60,C.mint,eo((t-.8-j*.2)/.3))}g.restore()}
+  HL('RULES ARE ~FORMING~',CX,330,170,t,{w:800});};
+
+V.nih=(t,p,d,o)=>{const k=eback(clamp(t/.5));g.save();g.translate(1250,1150);g.scale(k,k);g.beginPath();g.arc(0,0,420,0,TAU);g.fillStyle=rgba(C.amber,.1);g.fill();g.lineWidth=10;g.strokeStyle=C.amber;g.stroke();g.fillStyle=C.amber;g.beginPath();g.roundRect(-150,-210,100,420,20);g.roundRect(50,-210,100,420,20);g.fill();g.restore();ringHUD(1250,1150,470,C.amber,.4);
+  HL('FUNDING\n~PAUSED~',2550,950,200,t,{w:800,d:.2});T('HUMAN STEM CELLS → EARLY ANIMAL EMBRYOS',2550,1400,46,C.dim,{f:FM,a:eo((t-.6)/.4)});
+  for(let i=0;i<6;i++){const R=rng(i);const f=((G*.3+R())%1);T('$',2000+R()*1300,1650+f*300,90,C.amber,{a:(1-f)*.4,w:700})}tag(1250,540,'U.S. NIH · 2015',C.amber,{sz:52,a:eo(t/.4)});};
+
+V.guidelines=(t,p,d,o)=>{const rows=[['SPECIAL REVIEW','HUMAN CELLS IN ANIMAL BRAINS',C.violet,'!'],['SPECIAL REVIEW','HUMAN CELLS IN EARLY EMBRYOS',C.amber,'!'],['BARRED','BREEDING ANIMALS THAT MIGHT CARRY HUMAN EGGS OR SPERM',C.red,'x']];const from=o.from||0,to=o.to||3;
+  panel(380,560,3080,1180,C.white,eo(t/.4));T('INTERNATIONAL STEM CELL GUIDELINES',520,660,48,C.dim,{al:'left',f:FM,ls:6});
+  rows.forEach((r,i)=>{if(i>=to)return;const k=i<from?1:eo((t-.2-(i-from)*.35)/.5);const y=860+i*300;g.save();g.globalAlpha*=k*(i<from?.55:1);g.translate((1-k)*-200,0);
+    g.beginPath();g.arc(620,y,90,0,TAU);g.fillStyle=rgba(r[2],.18);g.fill();g.lineWidth=7;g.strokeStyle=r[2];g.stroke();if(r[3]==='x')cross(620,y,110,r[2],1);else T('!',620,y+6,120,r[2],{w:800});
+    T(r[0],780,y-50,56,r[2],{al:'left',f:FM,ls:8});T(r[1],780,y+45,i===2?76:100,C.white,{al:'left',w:700});g.restore()});};
+
+V.welfare=(t,p,d,o)=>{const st=o.stage||0;drawMouse(1250,1150,.9,{inner:()=>{glow(200,40,140,C.coral,.6+.3*Math.max(0,sin(G*7)))}});
+  g.save();g.strokeStyle=C.coral;g.lineWidth=10;g.lineJoin='round';g.shadowColor=C.coral;g.shadowBlur=30;g.beginPath();const off=(G*700)%800;for(let x=2150;x<=3600;x+=10){const u=((x-off)%800+800)%800/800;let y=st?1400:1150;if(u>.4&&u<.45)y-=(u-.4)/.05*300;else if(u>=.45&&u<.5)y-=300-(u-.45)/.05*480;else if(u>=.5&&u<.54)y+=180-(u-.5)/.04*180;x>2150?g.lineTo(x,y):g.moveTo(x,y)}g.stroke();g.restore();
+  if(!st){TOP(t,'THE ~WELFARE~ OF THE ANIMALS',null,{y:290,sz:130})}else{HL('THEY CAN\n*FEEL PAIN*',2870,700,170,t,{w:800});}};
+
+V.balance=(t,p,d,o)=>{const tilt=sin(G*1.2)*.06+.12*eio(seg(t,.3,d));const px=CX,py=850;g.save();g.translate(px,py);g.fillStyle=C.white;g.beginPath();g.moveTo(0,-20);g.lineTo(-80,900);g.lineTo(80,900);g.closePath();g.globalAlpha=.25;g.fill();g.globalAlpha=1;
+  g.rotate(tilt);g.strokeStyle=C.white;g.lineWidth=14;g.beginPath();g.moveTo(-1100,0);g.lineTo(1100,0);g.stroke();dot(0,0,30,C.white);g.restore();
+  [[-1,'ANIMAL WELFARE',C.coral],[1,'MEDICAL BENEFIT',C.mint]].forEach(q=>{const ex=px+q[0]*1100*cos(tilt),ey=py+q[0]*1100*sin(tilt);g.strokeStyle=rgba(C.white,.6);g.lineWidth=4;g.beginPath();g.moveTo(ex,ey);g.lineTo(ex-250,ey+400);g.moveTo(ex,ey);g.lineTo(ex+250,ey+400);g.stroke();g.beginPath();g.ellipse(ex,ey+410,300,60,0,0,PI);g.fillStyle=rgba(q[2],.3);g.fill();g.strokeStyle=q[2];g.lineWidth=8;g.stroke();T(q[1],ex,ey+560,58,q[2],{f:FM,ls:4})});
+  TOP(t,'THE CASE RESTS ON THE ~BENEFIT~',null,{y:270,sz:120});};
+
+V.factCheck=(t,p,d,o)=>{const k=eo(t/.5);g.fillStyle=rgba(C.mint,.07);g.fillRect(0,0,CX*k,H);g.fillStyle=rgba(C.red,.07);g.fillRect(W-CX*k,0,CX,H);badge(960,950,200,C.mint,'v',eo((t-.2)/.5));badge(2880,950,200,C.red,'x',eo((t-.4)/.5));
+  T('HAS HAPPENED',960,1350,120,C.mint,{w:800,a:k});T("HASN'T",2880,1350,120,C.red,{w:800,a:k});g.fillStyle=rgba(C.white,.25);g.fillRect(CX-2,500,4,1100);tag(CX,330,'FACT CHECK',C.white,{sz:60,a:k});};
+
+const YES=['Mice with partial human immune systems','Mice whose livers are mostly human cells','Tumors from real patients growing inside animals','A rat brain with a patch of human tissue','Pig & monkey embryos holding a few human cells'];
+const NO=["A mouse that's partly human",'An animal that thinks like us','A human organ grown in a pig → transplanted','A creature half one species, half another'];
+V.list=(t,p,d,o)=>{const yes=o.kind==='yes';const items=yes?YES:NO;const col=yes?C.mint:C.red;const from=o.from||0,to=o.to||items.length;
+  T(yes?'WHAT HAS HAPPENED':"WHAT HASN'T",380,300,120,col,{al:'left',w:800});g.fillStyle=col;g.fillRect(380,390,300,10);
+  items.forEach((s,i)=>{if(i>=to)return;const y=560+i*235;const k=i<from?1:eo((t-.1-(i-from)*.4)/.5);const cur=i>=from;g.save();g.globalAlpha*=k*(cur?1:.5);g.translate((1-k)*-300,0);
+    g.beginPath();g.roundRect(380,y-95,3080,190,30);g.fillStyle=cur?rgba(col,.1):'rgba(255,255,255,.03)';g.fill();if(cur){g.lineWidth=4;g.strokeStyle=rgba(col,.6);g.stroke()}
+    g.restore();badge(500,y,62,col,yes?'v':'x',k);g.save();g.globalAlpha*=k*(cur?1:.5);T(s,620,y+4,yes?92:98,C.white,{al:'left',w:700});if(yes&&i===4)T('FOR DAYS OR WEEKS',3400,y+4,40,C.dim,{al:'right',f:FM});g.restore()});
+  if(!yes&&to>=4&&from===3)stamp('SCIENCE FICTION',2700,300,80,C.violet,t-(d-1.2));};
+
+V.sciFi=(t,p,d,o)=>{const R=rng(3);for(let i=0;i<200;i++){const x=R()*W,y=R()*H;dot(x,y,1+R()*3,C.white,.3+.3*sin(G*3+i))}g.save();g.globalCompositeOperation='lighter';const j=(G*12|0)%5===0?24:6;T('SCIENCE',CX-j,880,380,rgba(C.cyan,.7),{w:800});T('SCIENCE',CX+j,880,380,rgba(C.coral,.7),{w:800});T('FICTION',CX+j,1280,380,rgba(C.cyan,.7),{w:800});T('FICTION',CX-j,1280,380,rgba(C.coral,.7),{w:800});g.restore();
+  for(let y=600;y<1500;y+=12){g.fillStyle='rgba(3,6,14,.25)';g.fillRect(0,y,W,5)}tag(CX,400,'STILL',C.violet,{a:eo(t/.4),sz:56});};
+
+V.cantCatch=(t,p,d,o)=>{const st=o.stage||0;const mx=CX+100,my=1200;drawMouse(mx,my,1.15,{inner:()=>{for(const q of mousePts()){if(st&&q.h<.4){cell(q.x,q.y,20,C.coral,q.r+G*.3,eo((t-.2-q.h)/.4),q.v)}else dot(q.x,q.y,6,C.cyan,.22)}}});
+  if(!st){g.save();g.strokeStyle=rgba(C.cyan,.6);g.lineWidth=10;g.beginPath();g.ellipse(mx-80,my-40,900,480,0,0,TAU);g.stroke();g.restore();for(let i=0;i<8;i++){const R=rng(i);const a=R()*TAU;const f=((G*.5+R())%1);const r=lerp(1400,900,Math.min(1,f*2))+Math.max(0,f*2-1)*800;const x=mx-80+cos(a)*r,y=my-40+sin(a)*r*.55;if(i%2)virus(x,y,46,C.red,G+i,1-Math.max(0,f*2-1));else capsule(x,y,120,G+i,C.amber,C.white,1-Math.max(0,f*2-1))}
+    TOP(t,"A MOUSE ALONE CAN'T ~CATCH OUR DISEASES~",null,{y:290,sz:115})}
+  else{stamp('CHIMERA',mx+900,620,120,C.violet,t-.6);TOP(t,'ADD THE ~HUMAN PART~',null,{y:290,sz:140})}};
+
+V.window=(t,p,d,o)=>{const st=o.stage||0;drawMouse(CX+100,1200,1.25,{a:.6});const lx=CX+150,ly=1150,lr=520*eback(clamp(t/.6));g.save();g.beginPath();g.arc(lx,ly,lr,0,TAU);g.fillStyle='rgba(3,6,14,.92)';g.fill();g.clip();
+  const R=rng(5);for(let i=0;i<26;i++){const x=lx+(R()-.5)*900+sin(G+i)*30,y=ly+(R()-.5)*900+cos(G*.8+i)*30;cell(x,y,46,C.coral,G*.5+i,1,i)}for(let i=0;i<5;i++){const f=(G*.3+i/5)%1;virus(lx-500+f*1000,ly+(i-2)*160,26,C.red,G+i,.9)}capsule(lx+sin(G)*200,ly+cos(G)*200,120,G,C.amber,C.white,1);g.restore();
+  g.lineWidth=16;g.strokeStyle=C.white;g.shadowColor=C.white;g.shadowBlur=40;g.beginPath();g.arc(lx,ly,lr,0,TAU);g.stroke();g.shadowBlur=0;g.lineCap='round';g.lineWidth=60;g.beginPath();g.moveTo(lx+lr*.72,ly+lr*.72);g.lineTo(lx+lr*1.3,ly+lr*1.3);g.stroke();
+  if(!st)TOP(t,'A ~LIVING BODY~ FOR HUMAN BIOLOGY',null,{y:290,sz:125});else{TOP(t,'WATCHED IN ACTION',null,{y:290,sz:140});tag(lx-1200,ly+400,'BEFORE ANY PATIENT',C.mint,{a:eo((t-.4)/.4),sz:56})}};
+
+V.recap=(t,p,d,o)=>{const n=o.n||0;const cards=[['01','A MOSAIC,','NOT A BLEND',C.violet],['02','MEDICAL TOOLS,','NOT NEW CREATURES',C.mint],['03','THE HARD QUESTIONS','BEGIN AT THE BRAIN',C.coral]];
+  HL('~3~ THINGS TO REMEMBER',CX,290,140,n===0?t:9,{w:800});
+  cards.forEach((c,i)=>{const vis=n===0?eo((t-.3-i*.12)/.5):1;const hl=n===i+1;const x=CX+(i-1)*1180,y=1130;const sc=hl?1.06:1;g.save();g.translate(x,y);g.scale(sc,sc);g.globalAlpha*=vis*(n===0||hl?1:.4);panel(-540,-470,1080,940,hl?c[3]:rgba(C.white,.5),1,40);if(hl)glow(0,0,700,c[3],.2);
+    T(c[0],-460,-360,90,c[3],{al:'left',f:FM});if(i===0){for(let j=0;j<16;j++){const cx=-180+(j%4)*120,cy=-220+Math.floor(j/4)*90;g.fillStyle=hash(j*3.3)<.5?C.cyan:C.coral;g.fillRect(cx,cy,100,72)}}else if(i===1){g.save();g.translate(0,-80);g.beginPath();g.roundRect(-55,-170,110,340,20);g.roundRect(-170,-55,340,110,20);g.fillStyle=rgba(c[3],.25);g.fill();g.lineWidth=8;g.strokeStyle=c[3];g.stroke();g.restore()}else icon('brain',0,-80,520,c[3]);
+    T(c[1],0,250,74,C.white,{w:800});T(c[2],0,345,62,c[3],{w:700});g.restore()});};
+
+V.subscribe=(t,p,d,o)=>{for(let y=0;y<H;y+=120)for(let x=0;x<W;x+=120){const c=hash(x*.13+y*.71)<.5?C.coral:C.cyan;g.fillStyle=rgba(c,.05+.04*sin(G*2+x*.01+y*.013));g.fillRect(x+4,y+4,112,112)}
+  HL('MORE SCIENCE THAT LOOKS\n~PAST THE HEADLINE~',CX,560,170,t,{w:800});
+  const ck=t>2.4;const bk=eback(clamp((t-.6)/.5));const press=t>2.2&&t<2.5?.92:1;g.save();g.translate(CX,1150);g.scale(bk*press,bk*press);g.beginPath();g.roundRect(-560,-130,1120,260,130);g.fillStyle=ck?'#2A3350':C.red;g.shadowColor=ck?'transparent':C.red;g.shadowBlur=80;g.fill();g.shadowBlur=0;
+  T(ck?'SUBSCRIBED  ✓':'SUBSCRIBE',0,8,110,C.white,{w:800,ls:4});g.restore();if(ck){const r=eo((t-2.4)/.6);g.strokeStyle=rgba(C.white,1-r);g.lineWidth=8;g.beginPath();g.roundRect(CX-560-r*200,1150-130-r*200,1120+r*400,260+r*400,130+r*200);g.stroke();for(let i=0;i<24;i++){const a=i/24*TAU;dot(CX+cos(a)*(600+r*700),1150+sin(a)*(200+r*500),12,i%2?C.coral:C.cyan,1-r)}}
+  const cx=lerp(2900,CX+300,eio(seg(t,1.2,2.1))),cy=lerp(1700,1190,eio(seg(t,1.2,2.1)));if(t>1.1&&t<3.5){g.save();g.translate(cx,cy);g.fillStyle=C.white;g.strokeStyle=C.bg;g.lineWidth=6;g.beginPath();g.moveTo(0,0);g.lineTo(0,120);g.lineTo(32,90);g.lineTo(55,140);g.lineTo(75,130);g.lineTo(52,82);g.lineTo(95,80);g.closePath();g.fill();g.stroke();g.restore()}
+  if(t>3.2)HL('THANKS FOR ~WATCHING~',CX,1600,130,t-3.2,{w:700});};
+// ================================================================ TIMELINE (synced to the voice-over)
+// [start, end, caption, shots]  — each scene's duration is split between its shots; 'cont' extends the previous shot
+const SC=[
+[0,2.84,"This mouse has human cells inside",[['hookScan']]],
+[2.84,5.52,"it. Put there on purpose, by scientists.",[['inject',{stamp:'ON PURPOSE',label:'HUMAN CELLS'}]]],
+[5.52,8.62,"What if a mouse could carry human cells inside its",[['mouseQ']]],
+[8.62,11.62,"body? It already can. The reason has almost",[['already']]],
+[11.62,14.72,"nothing to do with building a hybrid, and everything to do",[['strike',{word:'HYBRID',sub:'NOT THE GOAL',subc:C.red}]]],
+[14.72,17.82,"with medicine. Look inside. Human immune",[['medicine'],['lookInside']]],
+[17.82,20.48,"cells in its blood, human liver cells in its liver,",[['blood'],['liver',{mode:'fill',f0:.15,f1:.8,title:'IN ITS ~LIVER~'}]]],
+[20.48,23.4,"a human tumor growing under its skin.",[['tumorSkin']]],
+[23.4,26.5,"Ahead: 4 surprising things",[['fourCards',{reveal:0}]]],
+[26.5,29.38,"researchers do with mice like this, the one",[['fourCards',{reveal:1}]]],
+[29.38,31.92,"word that separates a chimera from a hybrid,",[['versus']]],
+[31.92,37.88,"and the line where the experiments start to make scientists uneasy. Let's start with that word.",[['theLine'],['decode',{word:'CHIMERA',sub:'THE WORD'}]]],
+[37.88,43.98,"A hybrid is what you get when two species combine at the very beginning. A mule is a hybrid.",[['fusion'],['parents',{title:'A MULE IS A ~HYBRID~'}]]],
+[43.98,50.02,"Its mother was a horse, its father was a donkey, and every cell in its body carries DNA from both.",[['parents',{title:'HORSE ♀ × DONKEY ♂'}],['everyCell']]],
+[50.02,56.0,"The mixing is built into the first cell, and then it's copied again and again. A chimera is different.",[['divide',{w:1.3}],['chimeraCard']]],
+[56.0,62.18,"The name comes from a Greek myth: a monster with a lion's head, a goat's body, and a snake",[['myth',{stage:0}],['myth',{stage:1}]]],
+[62.18,68.32,"for a tail. The biology is far quieter. A chimera is one animal made of",[['myth',{stage:2,w:.7}],['quiet']]],
+[68.32,74.4,"two sets of cells that began separate. Each cell has one genome or the other, never a blend.",[['twoSets'],['neverBlend']]],
+[74.4,80.54,"Picture the difference. A hybrid is a bucket of mixed paint. A chimera is a",[['bigQ',{text:'PICTURE THE\n~DIFFERENCE~',q:0}],['paint',{w:1.4}],['mosaic']]],
+[80.54,86.56,"mosaic, with tiles of two colors in a single picture. Chimeras aren't as exotic",[['mosaic',{full:1}],['notExotic']]],
+[86.56,92.62,"as they sound. Someone who has had a bone marrow transplant now makes blood cells with their donor's DNA,",[['marrow',{stage:0}],['marrow',{stage:1}]]],
+[92.62,98.76,"while the rest of their body keeps its own. In 1984, researchers merged a goat embryo",[['marrow',{stage:2}],['year',{y:'1984',sub:'GOAT EMBRYO + SHEEP EMBRYO'}]]],
+[98.76,104.88,"with a sheep embryo. The animal, nicknamed the geep, grew patches of wool next to patches of goat",[['embryoMerge'],['geep']]],
+[104.88,105.34,"hair.",[['cont']]],
+[105.34,111.38,"So when we say a mouse carries human cells, we don't mean a mouse that's partly human.",[['mouseCells'],['notPartHuman']]],
+[111.38,116.92,"We mean a mouse with human cells living inside it, each one still completely human.",[['mouseCells',{title:'HUMAN CELLS ~LIVING INSIDE~'}],['zoomCell']]],
+[116.92,122.98,"Where do those cells come from? Often from stem cells. These are cells that haven't yet decided",[['bigQ',{text:'WHERE DO THOSE\nCELLS ~COME FROM~?'}],['stem']]],
+[122.98,128.78,"what to become. In 2007, scientists showed they could take an ordinary human skin cell and",[['stem',{stage:1}],['year',{y:'2007',sub:'CELL REPROGRAMMING',col:C.mint}],['skinCell']]],
+[128.78,134.82,"reprogram it back into that flexible state. From there, it can be nudged into blood cells, liver cells",[['reprogram'],['differentiate',{lit:[0,1]}]]],
+[134.82,140.84,"or nerve cells. A skin cell goes in, almost any cell can come out. Now",[['differentiate',{lit:[0,1,2]}],['machine']]],
+[140.84,146.66,"the real question: why not just use ordinary mice? Mice have taught us an enormous amount,",[['bigQ',{text:'WHY NOT JUST USE\n~ORDINARY MICE~?',sub:'THE REAL QUESTION'}],['miceTaught']]],
+[146.66,152.74,"and we share most of our genes with them, but our family lines split tens of millions of years ago,",[['genes'],['phylo']]],
+[152.74,158.94,"and the details drifted apart. HIV doesn't infect mice. Hepatitis B and C mostly",[['phylo',{drift:1}],['pathogen',{kind:'hiv'}],['pathogen',{kind:'hep'}]]],
+[158.94,164.92,"don't either. The bacterium that causes typhoid infects only humans. Mouse immune",[['pathogen',{kind:'typhoid'}],['pathogen',{kind:'typhoid',target:'human'}]]],
+[164.92,170.7,"systems fight threats differently from ours, and mouse livers break down drugs differently from ours.",[['splitDiff',{kind:'immune'}],['splitDiff',{kind:'liver'}]]],
+[170.7,176.42,"The result is a painful pattern: a treatment cures a mouse, then it reaches",[['bigQ',{text:'A ~PAINFUL~\nPATTERN',q:0}],['pipeline',{stage:0}]]],
+[176.42,182.12,"people, and does nothing, or does harm. Most drugs that enter human trials fail,",[['pipeline',{stage:1}],['trials']]],
+[182.12,187.84,"and many of them looked promising in animals first. So researchers asked a different question:",[['promising',{w:1.3}],['bigQ',{text:'A ~DIFFERENT~\nQUESTION'}]]],
+[187.84,193.68,"instead of building a better mouse, what if the mouse could host the one human part that matters?",[['strike',{word:'A BETTER MOUSE',sz:330,top:'INSTEAD OF BUILDING...'}],['hostPart']]],
+[193.68,199.76,"That question leads to four uses, and the fourth is the boldest. The first is",[['fourCards',{reveal:1,hl:3,w:1.5}],['fourCards',{reveal:1,hl:0,title:'USE ~01~'}]]],
+[199.76,205.56,"an immune system. Start with a mouse bred to have none of its own, so it can't reject foreign cells.",[['useTitle',{n:1,title:'IMMUNE\nSYSTEM',col:C.coral,icon:'immune'}],['blank',{mode:'fade'}]]],
+[205.56,211.64,"A blank slate. Inject human blood stem cells, and over the following weeks they settle",[['blank',{mode:'slate'}],['inject',{label:'HUMAN BLOOD STEM CELLS',weeks:1,mouse:1}]]],
+[211.64,217.3,"in the bone marrow and start producing human immune cells. These mice can be infected with HIV,",[['boneMarrow'],['hivMouse']]],
+[217.3,223.42,"which an ordinary mouse can't catch. They're also used to test cancer immunotherapies: drugs that",[['hivMouse',{focus:1}],['immunotherapy',{stage:0}]]],
+[223.42,229.2,"teach immune cells to attack tumors. The system isn't complete. Parts are missing or work poorly,",[['immunotherapy',{stage:1}],['puzzle']]],
+[229.2,235.36,"but it's human enough to answer questions an ordinary mouse can't. The second is",[['gauge',{title:"~HUMAN ENOUGH~",left:'MOUSE',right:'HUMAN',to:.7,label:'HUMAN ENOUGH',w:1.6}],['fourCards',{reveal:1,hl:1,title:'USE ~02~'}]]],
+[235.36,241.3,"a liver. In certain mice, the animal's own liver cells are made to die off. Human liver cells are",[['useTitle',{n:2,title:'LIVER',col:C.amber,icon:'liver'}],['liver',{mode:'die'}]]],
+[241.3,247.18,"transplanted in, and they take over. In the best cases, most of the liver ends up human. Hepatitis",[['liver',{mode:'fill',f0:0,f1:.55,title:'HUMAN CELLS ~TAKE OVER~'}],['liver',{mode:'fill',f0:.55,f1:.92,title:'MOSTLY *HUMAN*'}]]],
+[247.18,252.76,"B and C can now be studied in the living animal, and so can the liver stage of the malaria parasite.",[['liver',{mode:'virus',title:'HEPATITIS ~B & C~'}],['liver',{mode:'malaria',title:'^MALARIA^'}]]],
+[252.76,258.82,"And because the liver is the body's chemical processing plant, researchers can watch how a human liver handles",[['liver',{mode:'plant'}],['liver',{mode:'plant',stage:1}]]],
+[258.82,264.96,"a new drug, before a single patient swallows it. The third is an avatar.",[['swallow'],['useTitle',{n:3,title:'AVATAR',col:C.violet,icon:'tumor'}]]],
+[264.96,270.98,"A patient's cancer is removed during surgery. The fragment goes under the skin of a mouse, where it keeps growing as a",[['surgery'],['implant',{stage:0}]]],
+[270.98,276.72,"human tumor. Now researchers can try several drugs on that tumor and watch which ones shrink it.",[['implant',{stage:1,w:.8}],['drugTest']]],
+[276.72,282.72,"These are called patient-derived xenografts. How well they predict a patient's own response",[['pdx'],['gauge',{title:'HOW WELL DO THEY ~PREDICT~?',left:'POORLY',right:'PERFECTLY',to:.6,fuzzy:.22,wob:.04,label:'STILL BEING STUDIED',col1:C.coral,col2:C.violet}]]],
+[282.72,288.64,"is still being studied, but they keep a tumor's real-world complexity, which a dish of cells loses.",[['complexity',{side:0}],['complexity',{side:1}]]],
+[288.64,294.7,"The fourth is growing an organ. The idea is called blastocyst complementation. Take",[['useTitle',{n:4,title:'GROW AN\nORGAN',col:C.mint,icon:'embryo'}],['bcTitle']]],
+[294.7,300.84,"an early embryo that lacks the genes to build, say, a pancreas. That leaves an empty slot. Inject stem",[['blastocyst',{mode:'slot',w:1.4}],['blastocyst',{mode:'inject'}]]],
+[300.84,306.74,"cells from another species, and they can fill it. Researchers in Japan did exactly this with rats and mice.",[['blastocyst',{mode:'fill'}],['ratMouse']]],
+[306.74,312.78,"They grew a mouse pancreas inside a rat. When its insulin-making cells were transplanted into",[['ratPancreas'],['islets']]],
+[312.78,318.9,"diabetic mice, those mice kept their blood sugar under control for more than a year. Now try it with",[['glucose',{w:2}],['nowHumans']]],
+[318.9,324.86,"humans. In 2017, a team at the Salk Institute injected human stem cells into pig",[['year',{y:'2017',sub:'SALK INSTITUTE',col:C.coral}],['pigEmbryo']]],
+[324.86,330.96,"embryos. Pigs have organs close to our size. The human cells survived, but only about one",[['pigSize'],['needle']]],
+[330.96,337.08,"in 100,000 cells was human, and the embryos were stopped after a few weeks. The gap between species",[['cont'],['stopped']]],
+[337.08,343.12,"is wide, and cells from distant relatives struggle to compete. So no pig has grown a",[['compete'],['noKidney',{stage:0}]]],
+[343.12,349.12,"human kidney, and none of those embryos was ever allowed to be born. Now for the part that makes people",[['noKidney',{stage:1}],['uneasy']]],
+[349.12,355.1,"uneasy. Every one of these experiments raises the same question: how much human",[['cont'],['gauge',{title:'HOW MUCH *HUMAN*...',left:'MOUSE',right:'HUMAN',to:.5,zone:.66,label:'?'}]]],
+[355.1,361.1,"is too much? Ethics panels tend to worry about two places above all. The first is",[['gauge',{title:'...IS !TOO MUCH!?',left:'MOUSE',right:'HUMAN',from:.5,to:.84,zone:.66,label:'TOO MUCH?',w:.9}],['twoPlaces']]],
+[361.1,366.88,"the germline, meaning eggs and sperm, because an animal making human reproductive cells would raise",[['germline',{stage:0}],['germline',{stage:1}]]],
+[366.88,372.78,"questions nobody wants to rush into. The second is the brain, because the brain is where an",[['germline',{stage:2}],['brainZone',{stage:0}]]],
+[372.78,378.54,"animal's experience comes from. Look at two real experiments. A team at the University",[['brainZone',{stage:1}],['twoExp']]],
+[378.54,384.68,"of Rochester transplanted human glial cells into newborn mice. Glia are the support cells of the brain,",[['place',{name:'UNIVERSITY OF\n~ROCHESTER~',coord:'43.13°N · 77.63°W',sub:'HUMAN GLIA → NEWBORN MICE'}],['glia',{mode:'intro'}]]],
+[384.68,390.06,"the ones that help neurons communicate. The human versions are larger and more complex than the mouse ones.",[['glia',{mode:'help'}],['glia',{mode:'compare'}]]],
+[390.06,396.24,"As the mice grew, human glia spread through their brains, signals travelled faster, and the mice",[['glia',{mode:'spread'}],['glia',{mode:'speed'}]]],
+[396.24,402.4,"did better on some learning and memory tests. They weren't thinking like humans. They were still mice with a",[['scores'],['stillMice']]],
+[402.4,403.36,"few better test scores.",[['cont']]],
+[403.36,409.38,"But human cells had changed how a mouse brain performed. Then a team at",[['brainPerf'],['place',{name:'~STANFORD~',coord:'37.43°N · 122.17°W',sub:'HUMAN ORGANOIDS → NEWBORN RATS',col:C.violet}]]],
+[409.38,414.64,"Stanford grew tiny clumps of human brain tissue from stem cells. These are called",[['organoid',{mode:'grow'}]]],
+[414.64,420.46,"organoids. They transplanted them into the brains of newborn rats. The human tissue",[['organoid',{mode:'title'}],['ratBrain',{mode:'implant'}]]],
+[420.46,426.54,"connected with the rat's own circuits and eventually took up about a third of one side of the brain.",[['ratBrain',{mode:'connect'}],['ratBrain',{mode:'third'}]]],
+[426.54,432.68,"When researchers switched on those human neurons with light, the rats changed their behavior and went looking for a reward.",[['opto',{stage:0}],['opto',{stage:1}]]],
+[432.68,438.82,"It was still a rat's brain, with human tissue doing a job inside it. Both",[['stillRat',{stage:0}],['stillRat',{stage:1}]]],
+[438.82,444.44,"studies drew serious ethical discussion, including from the researchers themselves. Here's the difficulty:",[['debate',{w:2.4}],['bigQ',{text:"HERE'S THE\n~DIFFICULTY~",q:0}]]],
+[444.44,450.28,"nobody has a test for what an animal like that experiences. Most researchers think",[['noTest',{stage:0}],['noTest',{stage:1}]]],
+[450.28,456.28,"current experiments are nowhere near the point where this matters, but they also admit that 'nowhere near'",[['gauge',{title:'~NOWHERE NEAR~ THE POINT',left:'TODAY',right:'IT MATTERS',to:.18,label:'CURRENT EXPERIMENTS',col1:C.mint,col2:C.violet}],['gauge',{title:'"NOWHERE NEAR" IS ~HARD TO MEASURE~',tsz:110,left:'TODAY',right:'IT MATTERS',from:.18,to:.3,fuzzy:.35,wob:.06,label:'?',col1:C.mint,col2:C.violet}]]],
+[456.28,462.3,"is hard to measure, and that the answer could change as the tissue gets bigger, or as the host animal",[['ratBrain',{mode:'bigger'}],['hostScale',{hl:1}]]],
+[462.3,468.2,"gets closer to us, like a monkey. So rules are forming. In 2015, the",[['hostScale',{hl:3}],['rules']]],
+[468.2,474.3,"U.S. National Institutes of Health paused funding for experiments that put human stem cells into early animal",[['year',{y:'2015',sub:'U.S. NATIONAL INSTITUTES OF HEALTH'}],['nih']]],
+[474.3,480.3,"embryos. International stem cell guidelines call for special review of human cells in animal brains and early",[['guidelines',{from:0,to:1}],['guidelines',{from:1,to:2}]]],
+[480.3,486.04,"embryos, and bar breeding animals that might carry human eggs or sperm. And there's one more question,",[['guidelines',{from:2,to:3,w:1.4}],['bigQ',{text:'ONE MORE\n~QUESTION~'}]]],
+[486.04,492.2,"which is the welfare of the animals themselves. They can feel pain, and the case for using them rests",[['welfare',{stage:0}],['welfare',{stage:1}]]],
+[492.2,498.14,"on the medical benefit. So what has actually happened? And what hasn't? Here's what",[['balance'],['factCheck']]],
+[498.14,503.96,"has: mice with partial human immune systems, mice whose livers are mostly human cells,",[['list',{kind:'yes',from:0,to:1}],['list',{kind:'yes',from:1,to:2}]]],
+[503.96,510.1,"tumors from real patients growing inside animals, a rat brain with a patch of human",[['list',{kind:'yes',from:2,to:3}],['list',{kind:'yes',from:3,to:4}]]],
+[510.1,515.78,"tissue, and pig and monkey embryos holding a few human cells for days or weeks.",[['list',{kind:'yes',from:4,to:5}]]],
+[515.78,521.8,"Here's what hasn't: a mouse that's partly human. Every cell in these animals is fully",[['list',{kind:'no',from:0,to:1}],['neverBlend',{title:'EVERY CELL: FULLY _MOUSE_ OR FULLY *HUMAN*'}]]],
+[521.8,527.92,"mouse or fully human. An animal that thinks like us. A human organ grown in a pig",[['cont',{w:.6}],['list',{kind:'no',from:1,to:3}]]],
+[527.92,533.3,"and transplanted into a patient. A creature that's half one species and half another.",[['list',{kind:'no',from:3,to:4}]]],
+[533.3,539.24,"Those still belong to science fiction. So why put human cells inside a mouse?",[['sciFi'],['bigQ',{text:'SO WHY PUT HUMAN CELLS\n~INSIDE A MOUSE~?',sz:180}]]],
+[539.24,545.04,"Because a mouse alone can't catch our diseases or react to our drugs the way we do. A chimera gives",[['cantCatch',{stage:0,w:1.5}],['cantCatch',{stage:1}]]],
+[545.04,550.74,"researchers a living body where human biology can be watched in action, before it's tested on patients.",[['window',{stage:0}],['window',{stage:1}]]],
+[550.74,556.74,"3 things to remember: a chimera is a mosaic, not a blend. Human cells in animals",[['recap',{n:0}],['recap',{n:1}]]],
+[556.74,562.72,"are medical tools, not an attempt to make a new creature. And the hardest questions begin where the brain begins.",[['recap',{n:2}],['recap',{n:3}]]],
+[562.72,568.02,"If you want more science that looks past the headline, subscribe. Thanks for watching.",[['subscribe']]],
+[568.02,568.34,"",[['cont']]],
+];
+const END=568.34;
+const CH=[
+ {s:0,n:'THE HOOK',a:C.cyan,b:C.coral},
+ {s:37.88,n:'HYBRID VS CHIMERA',a:C.violet,b:C.amber},
+ {s:105.34,n:'WHERE THE CELLS COME FROM',a:C.mint,b:C.coral},
+ {s:140.84,n:'WHY NOT ORDINARY MICE?',a:C.red,b:C.cyan},
+ {s:199.76,n:'USE 01 · IMMUNE SYSTEM',a:C.coral,b:C.cyan,u:1},
+ {s:235.36,n:'USE 02 · LIVER',a:C.amber,b:C.coral,u:2},
+ {s:261.9,n:'USE 03 · AVATAR',a:C.violet,b:C.coral,u:3},
+ {s:288.64,n:'USE 04 · GROW AN ORGAN',a:C.mint,b:C.amber,u:4},
+ {s:346.1,n:'WHERE IT GETS UNEASY',a:C.violet,b:C.red},
+ {s:375.7,n:'TWO REAL EXPERIMENTS',a:C.violet,b:C.coral},
+ {s:438.82,n:'THE HARD QUESTION',a:C.violet,b:C.blue},
+ {s:462.3,n:'THE RULES',a:C.amber,b:C.violet},
+ {s:495.2,n:'FACT CHECK',a:C.mint,b:C.red},
+ {s:550.74,n:'REMEMBER',a:C.cyan,b:C.coral},
+];
+
+// ---------- build shots
+const SHOTS=[];
+SC.forEach((sc,si)=>{const[s,e,,vis]=sc;const ws=vis.map(v=>(v[1]&&v[1].w)||1);const tot=ws.reduce((a,b)=>a+b,0);let cur=s;
+  vis.forEach((v,i)=>{const d=(e-s)*ws[i]/tot;const st=cur,en=cur+d;cur=en;if(v[0]==='cont'&&SHOTS.length){SHOTS[SHOTS.length-1].e=en}else SHOTS.push({s:st,e:en,fn:v[0],o:v[1]||{},si})})});
+SHOTS.forEach((sh,i)=>{sh.i=i;sh.fx=[0,1,2,3,1,0,3,2][i%8]});
+
+// ---------- captions (word timing estimated from each scene's span)
+const WORDS=[];SC.forEach(sc=>{const ws=sc[2].split(/\s+/).filter(Boolean);if(!ws.length)return;const tot=ws.reduce((a,w)=>a+w.length+3,0);let t=sc[0];const d=sc[1]-sc[0];ws.forEach(w=>{const dd=d*(w.length+3)/tot;WORDS.push({w,s:t,e:t+dd});t+=dd})});
+const CHUNKS=[];{let cur=[];WORDS.forEach((wd,i)=>{cur.push(wd);const end=/[.,?!:;]$/.test(wd.w);if(end||cur.length>=5){CHUNKS.push(cur);cur=[]}});if(cur.length)CHUNKS.push(cur)}
+CHUNKS.forEach((c,i)=>{c.s=c[0].s;c.e=(CHUNKS[i+1]?CHUNKS[i+1][0].s:c[c.length-1].e+.6)});
+const KW=[[/^(human|humans|human's|humanized|people|patient|patient's|patients)$/,C.coral],[/^(mouse|mice|mouse's|rat|rats|rat's|pig|pigs)$/,C.cyan],[/^(chimera|chimeras|brain|brains|glia|glial|organoids)$/,C.violet],[/^(hybrid|mule|geep)$/,C.amber],[/^(stem|medicine|insulin)$/,C.mint],[/^(hiv|hepatitis|typhoid|malaria|cancer|tumor|tumors|fail|harm|uneasy|pain)$/,C.red],[/^\d[\d,]*$/,C.amber]];
+function kwCol(w){const k=w.toLowerCase().replace(/[^a-z0-9',]/g,'').replace(/,$/,'');for(const[re,c]of KW)if(re.test(k))return c;return null}
+let CAPS=true;
+function captions(T){if(!CAPS)return;let ch=null;for(let i=CHUNKS.length-1;i>=0;i--){if(CHUNKS[i].s<=T){ch=CHUNKS[i];break}}if(!ch||T>ch.e+.05)return;
+  const sz=104;font(sz,900,FB);g.letterSpacing='-1px';const words=ch.map(w=>({...w,d:w.w.replace(/[.,;:]+$/,'').toUpperCase()}));const sp=sz*.3;const widths=words.map(w=>g.measureText(w.d).width);
+  const tw=widths.reduce((a,b)=>a+b,0)+sp*(words.length-1);let x=CX-tw/2;const y=1925;
+  const bk=eo((T-ch.s)/.25);g.save();g.globalAlpha=.55*bk;const gr=g.createLinearGradient(0,y-200,0,H);gr.addColorStop(0,'rgba(3,6,14,0)');gr.addColorStop(1,'rgba(3,6,14,.9)');g.fillStyle=gr;g.fillRect(0,y-200,W,H-y+200);g.restore();
+  words.forEach((w,i)=>{const ww=widths[i];const k=(T-w.s);if(k<-.02){x+=ww+sp;return}const pk=eback(clamp(k/.16));const active=T>=w.s&&T<w.e+.05;const kc=kwCol(w.w);
+    g.save();g.translate(x+ww/2,y);g.scale(lerp(.6,1,pk)*(active?1.06:1),lerp(.6,1,pk)*(active?1.06:1));g.globalAlpha=clamp(k/.08);
+    if(active){g.beginPath();g.roundRect(-ww/2-22,-sz*.62,ww+44,sz*1.2,22);g.fillStyle=kc||C.amber;g.shadowColor=kc||C.amber;g.shadowBlur=40;g.fill();g.shadowBlur=0}
+    g.textAlign='center';g.textBaseline='middle';g.lineJoin='round';if(!active){g.lineWidth=16;g.strokeStyle='rgba(3,6,14,.85)';g.strokeText(w.d,0,4)}g.fillStyle=active?'#05070F':(kc||C.white);g.fillText(w.d,0,4);g.restore();x+=ww+sp});
+  g.letterSpacing='0px'}
+
+// ---------- background / post
+const BOKEH=(()=>{const R=rng(99);const a=[];for(let i=0;i<46;i++)a.push({x:R()*W,y:R()*H,r:40+R()*220,vx:(R()-.5)*30,vy:-8-R()*24,a:.04+R()*.1,k:R()<.5?0:1,ph:R()*TAU});return a})();
+const GRAIN=(()=>{const c=document.createElement('canvas');c.width=c.height=512;const x=c.getContext('2d');const id=x.createImageData(512,512);const R=rng(5);for(let i=0;i<id.data.length;i+=4){const v=R()*255|0;id.data[i]=id.data[i+1]=id.data[i+2]=v;id.data[i+3]=255}x.putImageData(id,0,0);return c})();
+let GRAINP=null;
+const VIG=(()=>{const c=document.createElement('canvas');c.width=W/4;c.height=H/4;const x=c.getContext('2d');const gr=x.createRadialGradient(W/8,H/8,H/12,W/8,H/8,W/6.2);gr.addColorStop(0,'rgba(0,0,0,0)');gr.addColorStop(1,'rgba(0,0,0,.72)');x.fillStyle=gr;x.fillRect(0,0,W/4,H/4);return c})();
+function chapterIdx(T){let i=0;for(let j=0;j<CH.length;j++)if(CH[j].s<=T)i=j;return i}
+function drawBG(T){g.fillStyle=C.bg;g.fillRect(0,0,W,H);const ci=chapterIdx(T),ch=CH[ci],pv=CH[Math.max(0,ci-1)];const k=ci?clamp((T-ch.s)/1.5):1;
+  const big=(x,y,r,c,a)=>{const pa=g.globalAlpha;g.globalCompositeOperation='lighter';g.globalAlpha=a;g.drawImage(glowSprite(c),x-r,y-r,2*r,2*r);g.globalAlpha=pa;g.globalCompositeOperation='source-over'};
+  const x1=W*(.74+.06*sin(T*.11)),y1=H*(.22+.05*cos(T*.13)),x2=W*(.16+.05*cos(T*.09)),y2=H*(.86+.04*sin(T*.12));
+  if(k<1){big(x1,y1,2300,pv.a,.16*(1-k));big(x2,y2,2000,pv.b,.13*(1-k))}big(x1,y1,2300,ch.a,.16*k);big(x2,y2,2000,ch.b,.13*k);
+  g.fillStyle='rgba(150,175,255,.06)';const off=(T*14)%120;for(let y=-120;y<H+120;y+=120)for(let x=0;x<W;x+=120)g.fillRect(x+2,y+off,4,4);
+  for(const b of BOKEH){const x=((b.x+T*b.vx)%W+W)%W,y=((b.y+T*b.vy)%H+H)%H;const c=b.k?ch.a:ch.b;const pa=g.globalAlpha;g.globalCompositeOperation='lighter';g.globalAlpha=b.a*(.6+.4*sin(T*.7+b.ph));g.drawImage(glowSprite(c),x-b.r,y-b.r,b.r*2,b.r*2);g.globalAlpha=pa;g.globalCompositeOperation='source-over'}}
+function post(T){g.drawImage(VIG,0,0,W,H);if(!GRAINP)GRAINP=g.createPattern(GRAIN,'repeat');g.save();g.globalAlpha=.045;g.globalCompositeOperation='overlay';g.translate((hash(Math.floor(T*24))*512)|0,(hash(Math.floor(T*24)+7)*512)|0);g.fillStyle=GRAINP;g.fillRect(-512,-512,W+512,H+512);g.restore()}
+function hud(T,sh){const ci=chapterIdx(T),ch=CH[ci];
+  g.fillStyle='rgba(255,255,255,.08)';g.fillRect(0,0,W,10);const gr=g.createLinearGradient(0,0,W,0);gr.addColorStop(0,C.cyan);gr.addColorStop(.5,C.violet);gr.addColorStop(1,C.coral);g.fillStyle=gr;g.fillRect(0,0,W*clamp(T/END),10);
+  for(const c of CH){g.fillStyle=C.bg;g.fillRect(W*c.s/END-3,0,6,10)}
+  const k=eo((T-ch.s)/.6);g.save();g.globalAlpha=.9;g.fillStyle=ch.a;g.fillRect(120,96,14,52*k);T_(String(ci+1).padStart(2,'0'),160,124,40,ch.a);T_(ch.n,250,124,40,C.white,k);g.restore();
+  if(ch.u){for(let i=0;i<4;i++){const x=W-140-(3-i)*86;g.beginPath();g.roundRect(x-64,108,64,30,15);g.fillStyle=i<ch.u?ch.a:'rgba(255,255,255,.14)';g.fill()}}
+  else{const s=Math.floor(T);T_(`${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`,W-120,124,40,C.dim,1,'right')}}
+function T_(s,x,y,sz,col,a=1,al='left'){font(sz,700,FM);g.letterSpacing='5px';g.textAlign=al;g.textBaseline='middle';const pa=g.globalAlpha;g.globalAlpha=pa*a;g.fillStyle=col;g.fillText(s,x,y);g.globalAlpha=pa;g.letterSpacing='0px'}
+function transition(sh,t,T){if(t>.6||sh.i===0&&t>.6)return;const col=CH[chapterIdx(T)].a;
+  if(t<.12){g.save();g.globalCompositeOperation='lighter';g.globalAlpha=.32*(1-t/.12);g.drawImage(cv,16,0);g.globalAlpha=.22*(1-t/.12);g.drawImage(cv,-16,0);g.restore()}
+  switch(sh.fx){
+    case 0:if(t<.22){g.fillStyle=`rgba(255,255,255,${.5*(1-t/.22)})`;g.fillRect(0,0,W,H)}break;
+    case 1:if(t<.26){const R=rng(sh.i*13+Math.floor(t*30));for(let i=0;i<11;i++){const y=R()*H,h=20+R()*160,dx=(R()-.5)*260*(1-t/.26);g.drawImage(cv,0,y,W,h,dx,y,W,h)}g.fillStyle=rgba(col,.18*(1-t/.26));g.fillRect(0,R()*H,W,40)}break;
+    case 2:if(t<.45){const u=eio(t/.45);const x=lerp(-1400,W+600,u);g.save();g.fillStyle=col;g.globalAlpha=.9;g.beginPath();g.moveTo(x,0);g.lineTo(x+700,0);g.lineTo(x+200,H);g.lineTo(x-500,H);g.fill();g.globalAlpha=.4;g.beginPath();g.moveTo(x-260,0);g.lineTo(x-120,0);g.lineTo(x-620,H);g.lineTo(x-760,H);g.fill();g.restore()}break;
+    case 3:if(t<.4)speedLines(CX,CY,C.white,.6*(1-t/.4),140);break}}
+
+// ---------- main loop
+let FORCE=null;const qs=new URLSearchParams(location.search);const START=parseFloat(qs.get('t')||'0')||0;if(qs.get('captions')==='0')CAPS=false;
+let shotIdx=0;function findShot(T){if(T<SHOTS[shotIdx].s)shotIdx=0;while(shotIdx<SHOTS.length-1&&T>=SHOTS[shotIdx].e)shotIdx++;return SHOTS[shotIdx]}
+function render(T){T=clamp(T,0,END-.001);G=T;const sh=findShot(T);const t=T-sh.s,d=sh.e-sh.s,p=clamp(t/d);
+  g.setTransform(1,0,0,1,0,0);g.globalAlpha=1;g.globalCompositeOperation='source-over';drawBG(T);
+  const punch=1+.14*(1-eo(t/.55)),drift=1+.05*p,z=punch*drift,rot=(sh.i%2?1:-1)*.014*(1-eo(t/.6));
+  g.save();g.translate(CX+sin(T*.37)*14,CY+cos(T*.29)*10);g.rotate(rot);g.scale(z,z);g.translate(-CX,-CY);
+  try{V[sh.fn](t,p,d,sh.o)}catch(e){render._e=render._e||{};if(!render._e[sh.fn]){console.error("VISERR",sh.fn,e.message,e.stack.split("\n")[1]);render._e[sh.fn]=1}}
+  g.restore();g.setTransform(1,0,0,1,0,0);g.globalAlpha=1;g.globalCompositeOperation='source-over';g.shadowBlur=0;g.setLineDash([]);g.letterSpacing='0px';
+  transition(sh,t,T);captions(T);hud(T,sh);post(T);
+  if(T<.25){g.fillStyle=`rgba(0,0,0,${1-T/.25})`;g.fillRect(0,0,W,H)}}
+let T0=null;function loop(now){if(T0===null)T0=now;render(FORCE!=null?FORCE:START+(now-T0)/1000);requestAnimationFrame(loop)}
+window.__seek=t=>{FORCE=t;render(t)};window.__play=()=>{FORCE=null;T0=null};window.__duration=END;
+function fit(){const s=Math.min(innerWidth/W,innerHeight/H);const st=document.getElementById('stage');st.style.transform=`translate(${(innerWidth-W*s)/2}px,${(innerHeight-H*s)/2}px) scale(${s})`}
+addEventListener('resize',fit);fit();requestAnimationFrame(loop);
+</script>
+</body>
+</html>
