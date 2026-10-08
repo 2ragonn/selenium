@@ -33,6 +33,11 @@
     All set on a deep blue-black (#03060E) so the bioluminescent hues glow.
 */
 'use strict';
+
+// ===== SETTINGS =====
+// ALTYAZI / CAPTIONS: false = off (gizli), true = on (görünür)
+const SHOW_CAPTIONS = false;
+
 // ================================================================ CORE
 const cv=document.getElementById('c'),g=cv.getContext('2d',{alpha:false});
 const W=3840,H=2160,CX=1920,CY=1080,TAU=Math.PI*2,PI=Math.PI;
@@ -1023,7 +1028,7 @@ const CHUNKS=[];{let cur=[];WORDS.forEach((wd,i)=>{cur.push(wd);const end=/[.,?!
 CHUNKS.forEach((c,i)=>{c.s=c[0].s;c.e=(CHUNKS[i+1]?CHUNKS[i+1][0].s:c[c.length-1].e+.6)});
 const KW=[[/^(human|humans|human's|humanized|people|patient|patient's|patients)$/,C.coral],[/^(mouse|mice|mouse's|rat|rats|rat's|pig|pigs)$/,C.cyan],[/^(chimera|chimeras|brain|brains|glia|glial|organoids)$/,C.violet],[/^(hybrid|mule|geep)$/,C.amber],[/^(stem|medicine|insulin)$/,C.mint],[/^(hiv|hepatitis|typhoid|malaria|cancer|tumor|tumors|fail|harm|uneasy|pain)$/,C.red],[/^\d[\d,]*$/,C.amber]];
 function kwCol(w){const k=w.toLowerCase().replace(/[^a-z0-9',]/g,'').replace(/,$/,'');for(const[re,c]of KW)if(re.test(k))return c;return null}
-let CAPS=true;
+let CAPS=SHOW_CAPTIONS;
 function captions(T){if(!CAPS)return;let ch=null;for(let i=CHUNKS.length-1;i>=0;i--){if(CHUNKS[i].s<=T){ch=CHUNKS[i];break}}if(!ch||T>ch.e+.05)return;
   const sz=104;font(sz,900,FB);g.letterSpacing='-1px';const words=ch.map(w=>({...w,d:w.w.replace(/[.,;:]+$/,'').toUpperCase()}));const sp=sz*.3;const widths=words.map(w=>g.measureText(w.d).width);
   const tw=widths.reduce((a,b)=>a+b,0)+sp*(words.length-1);let x=CX-tw/2;const y=1925;
@@ -1063,7 +1068,7 @@ function transition(sh,t,T){if(t>.6||sh.i===0&&t>.6)return;const col=CH[chapterI
     case 3:if(t<.4)speedLines(CX,CY,C.white,.6*(1-t/.4),140);break}}
 
 // ---------- main loop
-let FORCE=null;const qs=new URLSearchParams(location.search);const START=parseFloat(qs.get('t')||'0')||0;if(qs.get('captions')==='0')CAPS=false;
+let FORCE=null;const qs=new URLSearchParams(location.search);const START=parseFloat(qs.get('t')||'0')||0;if(qs.get('captions')==='0')CAPS=false;if(qs.get('captions')==='1')CAPS=true;
 let shotIdx=0;function findShot(T){if(T<SHOTS[shotIdx].s)shotIdx=0;while(shotIdx<SHOTS.length-1&&T>=SHOTS[shotIdx].e)shotIdx++;return SHOTS[shotIdx]}
 function render(T){T=clamp(T,0,END-.001);G=T;const sh=findShot(T);const t=T-sh.s,d=sh.e-sh.s,p=clamp(t/d);
   g.setTransform(1,0,0,1,0,0);g.globalAlpha=1;g.globalCompositeOperation='source-over';drawBG(T);
