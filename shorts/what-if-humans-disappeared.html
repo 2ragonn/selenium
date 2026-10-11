@@ -465,10 +465,10 @@ function s9(c,lt,d,p,t){
   c.restore();
   const k=inv(1.25,1.45,lt);c.fillStyle=`rgba(0,0,0,${k*.6})`;c.fillRect(-W,-H,3*W,3*H);
   c.restore();
-  const lines=['> unattended_mode .... TRUE','> heartbeat ......... LOST','> safe_shutdown ...... RUNNING','> SYSTEM OFFLINE'];
+  const lines=['> heartbeat ... LOST','> unattended ... TRUE','> shutdown ... RUNNING','> SYSTEM OFFLINE'];
   c.save();c.fillStyle='rgba(2,4,12,.82)';rrect(c,170,600,W-340,560,30);c.fill();c.strokeStyle=rgba(lt>1.2?C.red:C.cyan,.8);c.lineWidth=5;c.stroke();
   T(c,'● ● ●',260,660,{f:F.m,size:36,al:'left',c:'rgba(255,255,255,.35)'});
-  let y=760;const shown=lt*42;let used=0;
+  let y=760;const shown=lt*70;let used=0;
   lines.forEach((s,i)=>{const n=clamp(Math.floor(shown-used),0,s.length);used+=s.length+4;if(n<=0)return;const last=i===3;
     T(c,s.slice(0,n),240,y,{f:F.m,w:800,size:last?78:54,al:'left',c:last?C.red:'#bfefff'});y+=last?0:105});
   if(Math.floor(lt*4)%2)c.fillStyle=C.cyan,c.fillRect(240+tw(c,'> SYSTEM OFFLINE',78,F.m,800)+10,1060,40,70);
