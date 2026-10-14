@@ -311,43 +311,47 @@ function applyCamC(c, cam, pf = 1) { applyCam(c, cam, pf); c.translate(CX, CY); 
 
 /* =====================================================================
    ÇÖP ADAM SİSTEMİ — iskelet, pozlar, yüz ifadeleri, aksesuarlar
+   Biçim: yuvarlak hatlı kalın uzuvlar, kıyafetli kapsül gövde, saç,
+   el/ayakkabı, koyu kontur, hacim gölgesi ve yer gölgesi.
+   Hareket (o.t verilince otomatik): nefes, ağırlık salınımı, baş hareketi,
+   göz kırpma, konuşurken baş sallama ve el jestleri.
    ===================================================================== */
-const SK = { R: .108, gap: .022, torso: .30, sdrop: .03, ua: .16, fa: .15, th: .22, sh: .22, sw: .04, hw: .03 };
+const SK = { R: .118, gap: .012, torso: .29, sdrop: .045, ua: .152, fa: .142, th: .21, sh: .215, sw: .064, hw: .038, tw: .07, tb: .056 };
 const POSE = {
-  stand: { lean: 0, hd: 0, a1: -.1, e1: .12, a2: .1, e2: .12, l1: -.09, k1: 0, l2: .09, k2: 0 },
-  relax: { lean: .02, hd: .05, a1: -.06, e1: .2, a2: .06, e2: .2, l1: -.07, k1: .02, l2: .07, k2: .02 },
-  lookup: { lean: -.14, hd: -.9, a1: -.12, e1: .1, a2: .06, e2: .12, l1: -.08, k1: 0, l2: .08, k2: 0 },
-  lookupF: { lean: 0, hd: -.5, a1: .16, e1: .05, a2: .16, e2: .05, l1: .1, k1: 0, l2: .1, k2: 0 }, // önden
-  frontStand: { lean: 0, hd: 0, a1: .14, e1: .06, a2: .14, e2: .06, l1: .09, k1: 0, l2: .09, k2: 0 },
-  point: { lean: -.05, hd: -.35, a1: -.1, e1: .1, a2: 2.25, e2: .05, l1: -.08, k1: 0, l2: .08, k2: 0 },
-  pointF: { lean: 0, hd: 0, a1: -.1, e1: .1, a2: 1.5, e2: 0, l1: -.08, k1: 0, l2: .1, k2: 0 },
-  shock: { lean: -.05, hd: -.15, a1: 2.75, e1: 2.3, a2: 2.75, e2: 2.3, l1: -.14, k1: .05, l2: .14, k2: .05 },
-  shockF: { lean: 0, hd: 0, a1: 2.5, e1: 2.1, a2: 2.5, e2: 2.1, l1: .12, k1: 0, l2: .12, k2: 0 },
-  cheer: { lean: -.05, hd: -.2, a1: 2.85, e1: .15, a2: 3.0, e2: .1, l1: -.12, k1: 0, l2: .12, k2: 0 },
-  cheerF: { lean: 0, hd: -.15, a1: 2.6, e1: .2, a2: 2.6, e2: .2, l1: .14, k1: 0, l2: .14, k2: 0 },
+  stand: { lean: 0, hd: 0, a1: -.12, e1: .18, a2: .1, e2: .2, l1: -.08, k1: .02, l2: .08, k2: .02 },
+  relax: { lean: .02, hd: .05, a1: -.06, e1: .25, a2: .06, e2: .25, l1: -.07, k1: .04, l2: .07, k2: .04 },
+  lookup: { lean: -.14, hd: -.9, a1: -.12, e1: .15, a2: .06, e2: .18, l1: -.08, k1: .02, l2: .08, k2: .02 },
+  lookupF: { lean: 0, hd: -.5, a1: .16, e1: .08, a2: .16, e2: .08, l1: .1, k1: 0, l2: .1, k2: 0 }, // önden
+  frontStand: { lean: 0, hd: 0, a1: .14, e1: .08, a2: .14, e2: .08, l1: .09, k1: 0, l2: .09, k2: 0 },
+  point: { lean: -.05, hd: -.35, a1: -.1, e1: .15, a2: 2.25, e2: .05, l1: -.1, k1: .02, l2: .1, k2: .04 },
+  pointF: { lean: 0, hd: 0, a1: -.1, e1: .15, a2: 1.5, e2: 0, l1: -.08, k1: 0, l2: .1, k2: 0 },
+  shock: { lean: -.08, hd: -.15, a1: 2.75, e1: 2.3, a2: 2.75, e2: 2.3, l1: -.16, k1: .1, l2: .16, k2: .1 },
+  shockF: { lean: 0, hd: 0, a1: 2.5, e1: 2.1, a2: 2.5, e2: 2.1, l1: .13, k1: 0, l2: .13, k2: 0 },
+  cheer: { lean: -.06, hd: -.2, a1: 2.85, e1: .2, a2: 3.0, e2: .15, l1: -.12, k1: .02, l2: .12, k2: .02 },
+  cheerF: { lean: 0, hd: -.15, a1: 2.6, e1: .25, a2: 2.6, e2: .25, l1: .14, k1: 0, l2: .14, k2: 0 },
   shrugF: { lean: 0, hd: 0, a1: 1.2, e1: -1.4, a2: 1.2, e2: -1.4, l1: .09, k1: 0, l2: .09, k2: 0 },
-  hold: { lean: 0, hd: .15, a1: .7, e1: .9, a2: .8, e2: .8, l1: -.08, k1: 0, l2: .08, k2: 0 },
-  holdUp: { lean: -.05, hd: -.3, a1: 1.6, e1: .5, a2: 1.7, e2: .4, l1: -.08, k1: 0, l2: .08, k2: 0 },
-  phoneUp: { lean: -.05, hd: -.3, a1: -.1, e1: .1, a2: 1.9, e2: .1, l1: -.08, k1: 0, l2: .08, k2: 0 },
-  talk: { lean: .02, hd: 0, a1: -.08, e1: .3, a2: .9, e2: 1.1, l1: -.08, k1: 0, l2: .08, k2: 0 },
-  talk2: { lean: .03, hd: -.05, a1: .5, e1: 1.2, a2: 1.4, e2: .6, l1: -.08, k1: 0, l2: .08, k2: 0 },
+  hold: { lean: 0, hd: .15, a1: .7, e1: .9, a2: .8, e2: .8, l1: -.08, k1: .02, l2: .08, k2: .02 },
+  holdUp: { lean: -.05, hd: -.3, a1: 1.6, e1: .5, a2: 1.7, e2: .4, l1: -.08, k1: .02, l2: .08, k2: .02 },
+  phoneUp: { lean: -.05, hd: -.3, a1: -.1, e1: .15, a2: 1.9, e2: .1, l1: -.08, k1: .02, l2: .08, k2: .02 },
+  talk: { lean: .02, hd: 0, a1: -.08, e1: .3, a2: .9, e2: 1.1, l1: -.08, k1: .02, l2: .08, k2: .03 },
+  talk2: { lean: .03, hd: -.05, a1: .5, e1: 1.2, a2: 1.4, e2: .6, l1: -.08, k1: .02, l2: .08, k2: .03 },
   sit: { lean: .02, hd: .05, a1: .5, e1: .8, a2: .6, e2: .7, l1: 1.5, k1: 1.5, l2: 1.45, k2: 1.45 },
   sitDesk: { lean: .25, hd: .25, a1: 1.0, e1: .6, a2: 1.2, e2: .5, l1: 1.5, k1: 1.5, l2: 1.45, k2: 1.45 },
   crouch: { lean: .45, hd: .1, a1: .5, e1: .8, a2: .7, e2: .8, l1: 1.2, k1: 2.0, l2: .9, k2: 1.8 },
   kneel: { lean: .05, hd: .1, a1: .3, e1: .6, a2: .4, e2: .6, l1: 1.4, k1: 1.4, l2: -.1, k2: 1.5 },
-  coverMouth: { lean: -.04, hd: -.05, a1: -.1, e1: .2, a2: 1.1, e2: 2.35, l1: -.08, k1: 0, l2: .08, k2: 0 },
-  coverF: { lean: 0, hd: 0, a1: .15, e1: .1, a2: .55, e2: 2.6, l1: .1, k1: 0, l2: .1, k2: 0 },
-  hug: { lean: .12, hd: .1, a1: 1.35, e1: .9, a2: 1.45, e2: .8, l1: -.05, k1: 0, l2: .1, k2: 0 },
-  wave: { lean: 0, hd: 0, a1: -.1, e1: .1, a2: 2.6, e2: .5, l1: -.08, k1: 0, l2: .08, k2: 0 },
-  slump: { lean: .25, hd: .5, a1: .05, e1: .1, a2: .1, e2: .1, l1: -.06, k1: .05, l2: .06, k2: .05 },
-  armsCross: { lean: -.02, hd: -.05, a1: .9, e1: 1.6, a2: 1.0, e2: 1.5, l1: -.08, k1: 0, l2: .08, k2: 0 },
-  handsHips: { lean: 0, hd: 0, a1: -.7, e1: 1.6, a2: .7, e2: -1.6, l1: -.1, k1: 0, l2: .1, k2: 0 },
-  shout: { lean: -.12, hd: -.25, a1: -.2, e1: .3, a2: 1.0, e2: 1.9, l1: -.12, k1: 0, l2: .12, k2: 0 },
-  salute: { lean: -.02, hd: -.1, a1: -.05, e1: .05, a2: 1.6, e2: 2.1, l1: -.05, k1: 0, l2: .05, k2: 0 },
-  binoc: { lean: -.08, hd: -.35, a1: 1.7, e1: 1.6, a2: 1.8, e2: 1.5, l1: -.08, k1: 0, l2: .08, k2: 0 },
-  flashUp: { lean: -.1, hd: -.45, a1: -.1, e1: .2, a2: 2.5, e2: .05, l1: -.12, k1: 0, l2: .12, k2: 0 },
+  coverMouth: { lean: -.04, hd: -.05, a1: -.1, e1: .2, a2: 1.1, e2: 2.35, l1: -.08, k1: .02, l2: .08, k2: .02, tk2: 1, tx2: .5, ty2: .48 },
+  coverF: { lean: 0, hd: 0, a1: .15, e1: .1, a2: .55, e2: 2.6, l1: .1, k1: 0, l2: .1, k2: 0, tk2: 1, tx2: .04, ty2: .5 },
+  hug: { lean: .12, hd: .1, a1: 1.35, e1: .9, a2: 1.45, e2: .8, l1: -.05, k1: .02, l2: .1, k2: .04 },
+  wave: { lean: 0, hd: 0, a1: -.1, e1: .15, a2: 2.6, e2: .5, l1: -.08, k1: .02, l2: .08, k2: .02 },
+  slump: { lean: .25, hd: .5, a1: .05, e1: .15, a2: .1, e2: .15, l1: -.06, k1: .08, l2: .06, k2: .08 },
+  armsCross: { lean: -.02, hd: -.05, a1: .9, e1: 1.6, a2: 1.0, e2: 1.5, l1: -.08, k1: .02, l2: .08, k2: .02 },
+  handsHips: { lean: 0, hd: 0, a1: -.7, e1: 1.6, a2: .7, e2: -1.6, l1: -.1, k1: .02, l2: .1, k2: .02 },
+  shout: { lean: -.12, hd: -.25, a1: -.2, e1: .3, a2: 1.0, e2: 1.9, l1: -.12, k1: .02, l2: .12, k2: .04 },
+  salute: { lean: -.02, hd: -.1, a1: -.05, e1: .1, a2: 1.6, e2: 2.1, l1: -.05, k1: 0, l2: .05, k2: 0, tk2: 1, tx2: .62, ty2: -.4 },
+  binoc: { lean: -.08, hd: -.35, a1: 1.7, e1: 1.6, a2: 1.8, e2: 1.5, l1: -.08, k1: .02, l2: .08, k2: .02, tk1: 1, tx1: .78, ty1: .02, tk2: 1, tx2: .92, ty2: .1 },
+  flashUp: { lean: -.1, hd: -.45, a1: -.1, e1: .2, a2: 2.5, e2: .05, l1: -.12, k1: .02, l2: .12, k2: .04 },
 };
-function mixPose(a, b, t) { const o = {}; for (const k in a) o[k] = lerp(a[k], b[k] != null ? b[k] : a[k], t); for (const k in b) if (o[k] == null) o[k] = lerp(0, b[k], t); return o; }
+function mixPose(a, b, t) { const o = {}; for (const k in a) o[k] = lerp(a[k], b[k] != null ? b[k] : (k === 'tk1' || k === 'tk2' ? 0 : a[k]), t); for (const k in b) if (o[k] == null) o[k] = lerp(0, b[k], t); return o; }
 function poseSeq(keys, t, ease = E.ioC) { // keys: [[zaman, poz], ...]
   if (t <= keys[0][0]) return keys[0][1];
   for (let i = 0; i < keys.length - 1; i++) {
@@ -357,57 +361,115 @@ function poseSeq(keys, t, ease = E.ioC) { // keys: [[zaman, poz], ...]
   return keys[keys.length - 1][1];
 }
 function addP(p, d) { const o = Object.assign({}, p); for (const k in d) o[k] = (o[k] || 0) + d[k]; return o; }
+/* Yürüyüş: diz, bacağın öne savrulduğu fazda bükülür; kollar karşı fazda, dirsek öne giderken bükülür */
 function walkP(ph, amp = 1, base = POSE.stand) {
   const s = Math.sin(ph), cc = Math.cos(ph);
-  return Object.assign({}, base, { lean: .06 * amp + (base.lean || 0) * .3, l1: s * .42 * amp, k1: Math.max(0, -cc) * .75 * amp + .05, l2: -s * .42 * amp, k2: Math.max(0, cc) * .75 * amp + .05,
-    a1: -s * .38 * amp, e1: .35, a2: s * .38 * amp, e2: .35, by: -Math.abs(cc) * .012 * amp });
+  return Object.assign({}, base, { lean: .07 * amp + (base.lean || 0) * .3, hd: (base.hd || 0) * .5 - .04 + Math.abs(s) * .05 * amp,
+    l1: s * .4 * amp, k1: Math.pow(Math.max(0, cc), 1.4) * .85 * amp + .04, l2: -s * .4 * amp, k2: Math.pow(Math.max(0, -cc), 1.4) * .85 * amp + .04,
+    a1: -s * .42 * amp, e1: .22 + Math.max(0, -s) * .55 * amp, a2: s * .42 * amp, e2: .22 + Math.max(0, s) * .55 * amp, by: -Math.abs(cc) * .006 * amp });
 }
 function runP(ph, amp = 1) {
   const s = Math.sin(ph), cc = Math.cos(ph);
-  return { lean: .32 * amp, hd: -.1, l1: s * .75 * amp + .15, k1: Math.max(0, -cc) * 1.5 * amp + .2, l2: -s * .75 * amp + .15, k2: Math.max(0, cc) * 1.5 * amp + .2,
-    a1: -s * .9 * amp + .3, e1: 1.5, a2: s * .9 * amp + .3, e2: 1.5, by: -Math.abs(cc) * .03 * amp };
+  return { lean: .3 * amp, hd: -.12 + Math.abs(cc) * .06, l1: s * .78 * amp + .18, k1: Math.max(0, cc) * 1.55 * amp + .22, l2: -s * .78 * amp + .18, k2: Math.max(0, -cc) * 1.55 * amp + .22,
+    a1: -s * .95 * amp + .35, e1: 1.45 + s * .25, a2: s * .95 * amp + .35, e2: 1.45 - s * .25, by: -Math.abs(cc) * .035 * amp };
 }
 function breathe(p, t, k = 1, seed = 0) {
   const b = Math.sin(t * 2.1 + seed) * .02 * k;
   return addP(p, { lean: b * .5, a1: b, a2: -b, hd: Math.sin(t * 1.3 + seed * 2) * .03 * k });
 }
 
-/* Karakter ön ayarları */
+/* Karakter ön ayarları — gövde renkleri: "sıcak insani" analog tonlar (soğuk uzaylı ışığına karşı) */
 const CHAR = {
-  sen: { col: '#F4F0E8', acc: ['nscarf'], scol: C.orange },
-  dede: { col: '#EDE6DA', acc: ['cap', 'glasses', 'mus'], capCol: '#6A5440', mcol: '#FFFFFF', gcol: C.gold, hs: .95 },
-  dedeNoGl: { col: '#EDE6DA', acc: ['cap', 'mus'], capCol: '#6A5440', mcol: '#FFFFFF', hs: .95 },
-  gencRiza: { col: '#EDE6DA', acc: ['milcap'], capCol: '#3E5A3A' },
-  huseyin: { col: '#F2EEE6', acc: ['apron', 'mus'], apronCol: '#2E8A57', mcol: '#26221F' },
-  imam: { col: '#F2EEE6', acc: ['takke', 'beard'], beardCol: '#CBCBCB' },
-  nermin: { col: '#F2EEE6', acc: ['robe', 'curlers'], robeCol: '#E46BA4' },
-  simitci: { col: '#F2EEE6', acc: ['mus', 'flatcap'], mcol: '#26221F', capCol: '#B33A2E' },
-  coban: { col: '#F2EEE6', acc: ['flatcap', 'mus'], capCol: '#5C4A33', mcol: '#3A2E22' },
-  teyze: { col: '#F2EEE6', acc: ['hscarf'], scarfCol: '#9C3D6A' },
-  teyze2: { col: '#F2EEE6', acc: ['hscarf'], scarfCol: '#2F6FA8' },
-  maden: { col: '#F2EEE6', acc: ['hardhat'], hatCol: '#FFC21A' },
-  pilot: { col: '#F2EEE6', acc: ['helmet'], hatCol: '#5E6B4E' },
-  asker: { col: '#F2EEE6', acc: ['helmet'], hatCol: '#4E5B3F' },
-  uzman: { col: '#F2EEE6', acc: ['tie'], tieCol: C.red },
-  telsizci: { col: '#F2EEE6', acc: ['beanie', 'glasses'], capCol: '#3A6A8C', gcol: '#C9C9C9' },
-  cayci: { col: '#F2EEE6', acc: ['mus', 'flatcap'], mcol: '#26221F', capCol: '#2F2F2F' },
-  cocuk: { col: '#F4F0E8', acc: [], hs: .62 },
-  kuyumcu: { col: '#F2EEE6', acc: ['tie'], tieCol: C.gold },
+  sen: { col: '#F4F0E8', acc: ['nscarf'], scol: C.orange, shirt: '#3E66B8', hair: 'messy', hairCol: '#2B2320', shoeCol: '#E8E2D6', sole: '#B33A2E', pants: '#7E8496' },
+  dede: { col: '#EDE6DA', acc: ['cap', 'glasses', 'mus'], capCol: '#6A5440', mcol: '#FFFFFF', gcol: C.gold, hs: .95, shirt: '#9A6E46', hair: 'sides', hairCol: '#E2DED6', shoeCol: '#3A2A20', pants: '#6E675A' },
+  dedeNoGl: { col: '#EDE6DA', acc: ['cap', 'mus'], capCol: '#6A5440', mcol: '#FFFFFF', hs: .95, shirt: '#9A6E46', hair: 'sides', hairCol: '#E2DED6', shoeCol: '#3A2A20', pants: '#6E675A' },
+  gencRiza: { col: '#EDE6DA', acc: ['milcap'], capCol: '#3E5A3A', shirt: '#5E7448', hair: 'sides', hairCol: '#2B2320', shoeCol: '#2A2420', pants: '#4E5E40' },
+  huseyin: { col: '#F2EEE6', acc: ['apron', 'mus'], apronCol: '#2E8A57', mcol: '#26221F', shirt: '#C46A3E', hair: 'short', hairCol: '#2A221C', pants: '#5A5E6A' },
+  imam: { col: '#F2EEE6', acc: ['takke', 'beard', 'dress'], beardCol: '#CBCBCB', shirt: '#56627E', dressLen: .85, hair: 'sides', hairCol: '#CFCFCF' },
+  nermin: { col: '#F2EEE6', acc: ['robe', 'curlers'], robeCol: '#E46BA4', shirt: '#E46BA4', hair: 'short', hairCol: '#7A3B26', shoeCol: '#FF9BC8' },
+  simitci: { col: '#F2EEE6', acc: ['mus', 'flatcap'], mcol: '#26221F', capCol: '#B33A2E', shirt: '#6F8BA8', hair: 'sides', hairCol: '#2A221C', pants: '#6A6458' },
+  coban: { col: '#F2EEE6', acc: ['flatcap', 'mus'], capCol: '#5C4A33', mcol: '#3A2E22', shirt: '#9A7A48', hair: 'sides', hairCol: '#3A2E22', shoeCol: '#3A2E22', pants: '#6E5E44' },
+  teyze: { col: '#F2EEE6', acc: ['hscarf', 'dress'], scarfCol: '#9C3D6A', shirt: '#4F6FA0' },
+  teyze2: { col: '#F2EEE6', acc: ['hscarf', 'dress'], scarfCol: '#2F6FA8', shirt: '#A2543F' },
+  maden: { col: '#F2EEE6', acc: ['hardhat', 'hivis'], hatCol: '#FFC21A', shirt: '#EE7428', hair: 'sides', hairCol: '#2A221C', shoeCol: '#4A3A2A', pants: '#4A5A7A' },
+  pilot: { col: '#F2EEE6', acc: ['helmet'], hatCol: '#5E6B4E', shirt: '#6E7B5A', shoeCol: '#24221E', pants: '#5E6A4C' },
+  asker: { col: '#F2EEE6', acc: ['helmet'], hatCol: '#4E5B3F', shirt: '#66734F', shoeCol: '#24221E', pants: '#56634A' },
+  uzman: { col: '#F2EEE6', acc: ['tie'], tieCol: C.red, shirt: '#56688F', hair: 'side', hairCol: '#4A4440', shoeCol: '#1E1C1C', pants: '#3E4E78' },
+  telsizci: { col: '#F2EEE6', acc: ['beanie', 'glasses'], capCol: '#3A6A8C', gcol: '#C9C9C9', shirt: '#A06A44', hair: 'sides', hairCol: '#5A4A3A', pants: '#55657E' },
+  cayci: { col: '#F2EEE6', acc: ['mus', 'flatcap', 'vest'], mcol: '#26221F', capCol: '#2F2F2F', shirt: '#EDE7DA', vestCol: '#2B2B30', hair: 'sides', hairCol: '#2A221C', shoeCol: '#1E1C1C', pants: '#2E2E34' },
+  cocuk: { col: '#F4F0E8', acc: [], hs: .62, headK: 1.16, shirt: '#E25A5A', hair: 'kid', hairCol: '#3A2A1E', shoeCol: '#3E66B8', pants: '#4A6AA0' },
+  kuyumcu: { col: '#F2EEE6', acc: ['tie'], tieCol: C.gold, shirt: '#4A3A30', hair: 'slick', hairCol: '#1E1A18', shoeCol: '#1E1C1C', pants: '#4A3A30' },
   plain: { col: '#F2EEE6', acc: [] },
 };
+const PLAIN_SHIRT = ['#5A7AA6', '#A0607A', '#5E9A72', '#B07A48', '#7A7EA6', '#B85A4E', '#4E8E9A', '#8E8448'];
+const PLAIN_PANTS = ['#55607A', '#6A6458', '#4A5A7A', '#7A6E5A', '#5A5E66', '#3E4A66', '#6A5A6E'];
+const PLAIN_HAIR = [['short', '#2B2320'], ['long', '#4A2E1E'], ['short', '#5A4636'], ['bald', null], ['messy', '#1E1A18'], ['long', '#2B2320'], ['side', '#6A5A4A']];
+const _OUT = 'rgba(5,8,15,.6)';
 
 function _seg(c, a, b, d) { c.beginPath(); c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]); if (d) c.lineTo(d[0], d[1]); c.stroke(); }
+/* eklemden geçen yumuşak kavisli uzuv */
+function _limb(c, a, b, d, k) { const mx = (a[0] + d[0]) / 2, my = (a[1] + d[1]) / 2; c.beginPath(); c.moveTo(a[0], a[1]); c.quadraticCurveTo(b[0] + (b[0] - mx) * k, b[1] + (b[1] - my) * k, d[0], d[1]); c.stroke(); }
+/* incelen kapsül: a ucu ra, b ucu rb yarıçaplı */
+function _caps(c, a, b, ra, rb) { const g = Math.atan2(b[1] - a[1], b[0] - a[0]); c.beginPath(); c.arc(a[0], a[1], ra, g + PI / 2, g + PI * 1.5); c.arc(b[0], b[1], rb, g - PI / 2, g + PI / 2); c.closePath(); }
+function _lum(col) { const v = hx(col); return (v[0] * .3 + v[1] * .59 + v[2] * .11) / 255; }
+function _sat(col) { const v = hx(col), mx = Math.max(v[0], v[1], v[2]), mn = Math.min(v[0], v[1], v[2]); return mx ? (mx - mn) / mx : 0; }
+function _seedOf(o) { if (o.seed != null) return o.seed; const s = o.ch || 'x'; let v = 0; for (let i = 0; i < s.length; i++) v += s.charCodeAt(i) * (i + 1); return v * .137; }
+/* Canlılık katmanı: pozu bozmadan nefes, salınım, mikro kol hareketi ve konuşma jestleri ekler */
+function _life(p, o, sd, front) {
+  const t = o.t, mv = p.by != null, k = (typeof o.life === 'number' ? o.life : 1) * (mv ? .3 : 1);
+  const br = Math.sin(t * 2.3 + sd * 1.7);
+  const sw = noise(t * .42 + sd * 3.3), sw2 = noise(t * .31 + sd * 5.1 + 7);
+  p.lean += (br * .008 + sw * .03) * k;
+  p.hd += (sw2 * .1 + Math.sin(t * 1.05 + sd) * .035) * k;
+  p.a1 += (noise(t * .8 + sd * 2.1) * .06 + br * .025 * (front ? 1 : -1)) * k;
+  p.a2 += (noise(t * .7 + sd * 1.3 + 2) * .06 + br * .025) * k;
+  p.e1 += noise(t * .9 + sd * 2.7 + 4) * .1 * k; p.e2 += noise(t * .8 + sd * 1.9 + 3) * .1 * k;
+  if (front) p.bx = (p.bx || 0) + sw * .008 * k;
+  const F = o.face || {};
+  if (!mv && o.gest !== false && (o.talk || F.mouth === 'talk')) {
+    const tt = t + sd * 3, g = noise(tt * 1.7), g2 = noise(tt * 2.3 + 11), g3 = noise(tt * 1.1 + 23);
+    p.hd += Math.sin(tt * 6.3) * .045 + g2 * .06;
+    p.lean += g3 * .025;
+    const busy2 = o.hold && o.hold.hand !== 1, busy1 = o.hold1 || (o.hold && o.hold.hand === 1);
+    if (!busy2) { p.a2 += g * .3 + .08; p.e2 += g2 * .4 + .12; }
+    if (!busy1) { p.a1 += g3 * .14; p.e1 += g * .2 + .06; }
+  }
+  return br * k;
+}
+
 /* Ana çizim fonksiyonu
-   o: { f:1|-1, view:'side'|'front', col, bg, lw, acc:[...], face:{...}, hold:{type,..}, ch:'dede'...} */
+   o: { f:1|-1, view:'side'|'front', col, bg, lw, acc:[...], face:{...}, hold:{type,..}, ch:'dede', t, seed, life, shadow } */
 function stick(c, x, y, h, P, o = {}) {
+  const userCol = o.col;
   if (o.ch && CHAR[o.ch]) o = Object.assign({}, CHAR[o.ch], o);
   h *= (o.hs || 1);
   const f = o.f || 1, front = o.view === 'front';
   const col = o.col || '#F2EEE6';
-  const far = o.col2 || (front ? col : mixh(col, o.bg || '#05070D', .32));
-  const lw = (o.lw || .05) * h;
+  const rgbaCol = col[0] !== '#';
+  const sd = _seedOf(o);
+  // renk modu: full (kıyafetli) / tint (ışık tonuna karışmış) / mono (siluet, ikon)
+  let mode = 'full';
+  if (rgbaCol) mode = 'mono';
+  else if (userCol && userCol !== (CHAR[o.ch] || {}).col) mode = (_lum(col) < .45 || _sat(col) > .28) ? 'mono' : 'tint';
+  let shirt = o.shirt, hair = o.hair, hairCol = o.hairCol, shoe = o.shoeCol || '#2E313A';
+  if (!shirt || o.ch === 'plain') {
+    shirt = o.shirt || PLAIN_SHIRT[Math.floor(hash(sd * 1.31 + .5) * PLAIN_SHIRT.length)];
+    if (!o.pants && !(o.acc || []).some(a => a === 'dress' || a === 'robe')) o = Object.assign({}, o, { pants: PLAIN_PANTS[Math.floor(hash(sd * 3.07 + 2.3) * PLAIN_PANTS.length)] });
+    if (hair == null) { const hh = PLAIN_HAIR[Math.floor(hash(sd * 2.17 + 1.7) * PLAIN_HAIR.length)]; hair = hh[0]; hairCol = hh[1]; }
+  }
+  if (mode === 'tint') { shirt = mixh(shirt, col, .38); if (hairCol) hairCol = mixh(hairCol, col, .2); shoe = mixh(shoe, col, .25); }
+  else if (mode === 'mono') { const base = rgbaCol ? col : mixh(col, '#000000', .16); shirt = base; if (hairCol) hairCol = base; shoe = base; }
+  let pants = o.pants || null;
+  if (pants && mode === 'tint') pants = mixh(pants, col, .3); else if (pants && mode === 'mono') pants = null;
+  const far = o.col2 || (front || rgbaCol ? col : mixh(col, o.bg || '#05070D', .24));
+  const legC = pants || col, farLeg = pants ? mixh(pants, '#05070D', .28) : far;
+  const farShoe = rgbaCol ? shoe : mixh(shoe, '#05070D', .3);
+  const lw = (o.lw || .044) * h;
   const p = Object.assign({}, POSE.stand, P);
-  const R = SK.R * h;
+  const hd0 = p.hd || 0;
+  const live = o.t != null && o.life !== false;
+  const br = live ? _life(p, o, sd, front) : 0;
+  const R = SK.R * h * (o.headK || 1);
   // bacaklar (kalça orijin)
   const legs = [];
   for (let i = 0; i < 2; i++) {
@@ -417,101 +479,279 @@ function stick(c, x, y, h, P, o = {}) {
     const kn = [hipx + Math.sin(th) * sx * SK.th * h, Math.cos(th) * SK.th * h];
     const sa = th - kk * (front ? .3 : 1);
     const ft = [kn[0] + Math.sin(sa) * sx * SK.sh * h, kn[1] + Math.cos(sa) * SK.sh * h];
-    legs.push({ hip: [hipx, 0], kn, ft });
+    legs.push({ hip: [hipx, 0], kn, ft, sa, sx });
   }
   const gnd = Math.max(legs[0].ft[1], legs[1].ft[1]);
   const ox = x + (p.bx || 0) * h, oy = y - gnd + (p.by || 0) * h;
   const T = (pt) => [ox + pt[0], oy + pt[1]];
   const sxT = front ? 1 : f;
   const hip = [ox, oy];
-  const neck = [ox + Math.sin(p.lean) * sxT * SK.torso * h, oy - Math.cos(p.lean) * SK.torso * h];
-  const sh0 = [ox + Math.sin(p.lean) * sxT * (SK.torso - SK.sdrop) * h, oy - Math.cos(p.lean) * (SK.torso - SK.sdrop) * h];
-  const ha = p.lean + p.hd * .55;
+  const tl = SK.torso * h * (1 + br * .012);
+  const neck = [ox + Math.sin(p.lean) * sxT * tl, oy - Math.cos(p.lean) * tl];
+  const sdr = tl - SK.sdrop * h;
+  const sh0 = [ox + Math.sin(p.lean) * sxT * sdr, oy - Math.cos(p.lean) * sdr];
+  const ha = front ? p.lean + (p.hd - hd0) * .55 : p.lean + p.hd * .55;
   const head = [neck[0] + Math.sin(ha) * sxT * (SK.gap * h + R), neck[1] - Math.cos(ha) * (SK.gap * h + R)];
   const arms = [];
   for (let i = 0; i < 2; i++) {
     const sx = front ? (i === 0 ? -1 : 1) : f;
     const a = i === 0 ? p.a1 : p.a2, e = i === 0 ? p.e1 : p.e2;
-    const s = front ? [sh0[0] + sx * SK.sw * h, sh0[1]] : sh0;
-    const el = [s[0] + Math.sin(a) * sx * SK.ua * h, s[1] + Math.cos(a) * SK.ua * h];
-    const hd = [el[0] + Math.sin(a + e) * sx * SK.fa * h, el[1] + Math.cos(a + e) * SK.fa * h];
+    const s = front ? [sh0[0] + sx * SK.sw * h, sh0[1] + h * .008] : sh0;
+    let el = [s[0] + Math.sin(a) * sx * SK.ua * h, s[1] + Math.cos(a) * SK.ua * h];
+    let hd = [el[0] + Math.sin(a + e) * sx * SK.fa * h, el[1] + Math.cos(a + e) * SK.fa * h];
+    const tk = clamp((i === 0 ? p.tk1 : p.tk2) || 0);
+    if (tk > 0) { // el hedefi (baş merkezine göre, R biriminde): ağız, gözlük, kaş…
+      const tg = [head[0] + ((i === 0 ? p.tx1 : p.tx2) || 0) * R * sxT, head[1] + ((i === 0 ? p.ty1 : p.ty2) || 0) * R];
+      const dx = tg[0] - s[0], dy = tg[1] - s[1], d = Math.hypot(dx, dy) || 1;
+      let eI, hI = tg;
+      if (front) eI = [s[0] + dx * .3 + sx * h * .035, s[1] + dy * .3 + h * .075]; // kameraya doğru kısalmış kol
+      else {
+        const L1 = SK.ua * h, L2 = SK.fa * h, dd = Math.min(d, (L1 + L2) * .995);
+        const a1 = (L1 * L1 + dd * dd - L2 * L2) / (2 * dd), hg = Math.sqrt(Math.max(0, L1 * L1 - a1 * a1));
+        let nx = -dy / d, ny = dx / d; if (ny + nx * f * .3 < 0) { nx = -nx; ny = -ny; }
+        eI = [s[0] + dx / d * a1 + nx * hg, s[1] + dy / d * a1 + ny * hg]; hI = [s[0] + dx / d * dd, s[1] + dy / d * dd];
+      }
+      el = [lerp(el[0], eI[0], tk), lerp(el[1], eI[1], tk)]; hd = [lerp(hd[0], hI[0], tk), lerp(hd[1], hI[1], tk)];
+    }
     arms.push({ s, el, hd, ang: a + e, sx });
   }
   const J = { hip, neck, head, R, sh: sh0, hand1: arms[0].hd, hand2: arms[1].hd, foot1: T(legs[0].ft), foot2: T(legs[1].ft), h, f, arms, p };
   if (o.alpha != null) c.globalAlpha = o.alpha;
-  c.lineCap = 'round'; c.lineJoin = 'round'; c.lineWidth = lw;
-  // gölge/kontur ışıması (isteğe bağlı)
-  if (o.glow) { additive(c, () => glow(c, (hip[0] + neck[0]) / 2, (hip[1] + neck[1]) / 2, h * .7, o.glow, o.glowA || .25)); }
-  // arka bacak & kol
-  c.strokeStyle = far;
-  _seg(c, T(legs[0].hip), T(legs[0].kn), T(legs[0].ft));
-  if (!front) _seg(c, arms[0].s, arms[0].el, arms[0].hd);
+  c.lineCap = 'round'; c.lineJoin = 'round';
+  const out = (o.outline === false || rgbaCol) ? null : (o.outCol || _OUT);
+  const olw = Math.max(2.5, lw * .34);
+  const det = h > 360, mid = h > 200; // ayrıntı eşikleri
   const acc = o.acc || [];
-  // gövde
-  c.strokeStyle = col; _seg(c, hip, neck);
-  _seg(c, T(legs[1].hip), T(legs[1].kn), T(legs[1].ft));
-  if (front) { c.strokeStyle = col; _seg(c, arms[0].s, arms[0].el, arms[0].hd); }
-  // gövde üstü aksesuarlar
-  if (acc.includes('robe')) drawRobe(c, J, o, lw, front);
-  if (acc.includes('apron')) drawApron(c, J, o, lw, front);
-  if (acc.includes('tie')) { c.fillStyle = o.tieCol || C.red; const a = J.neck, b = J.hip; const mx = lerp(a[0], b[0], .12), my = lerp(a[1], b[1], .12); c.beginPath(); c.moveTo(mx - lw * .5, my); c.lineTo(mx + lw * .5, my); c.lineTo(lerp(a[0], b[0], .55) + lw * .6, lerp(a[1], b[1], .55)); c.lineTo(lerp(a[0], b[0], .62), lerp(a[1], b[1], .62)); c.lineTo(lerp(a[0], b[0], .55) - lw * .6, lerp(a[1], b[1], .55)); c.closePath(); c.fill(); }
+  if (o.glow) { additive(c, () => glow(c, (hip[0] + neck[0]) / 2, (hip[1] + neck[1]) / 2, h * .7, o.glow, o.glowA || .25)); }
+  // yer gölgesi
+  if (o.shadow !== false && !rgbaCol && mode !== 'mono') {
+    const f0 = T(legs[0].ft), f1 = T(legs[1].ft); const lift = clamp(1 - (y - Math.max(f0[1], f1[1])) / (h * .2));
+    c.fillStyle = 'rgba(0,0,0,' + (.22 * lift).toFixed(3) + ')'; c.beginPath(); c.ellipse((f0[0] + f1[0]) / 2 + (front ? 0 : f * lw * .4), y + lw * .5, h * .1 + Math.abs(f0[0] - f1[0]) * .55, h * .016, 0, 0, TAU); c.fill();
+  }
+  if (o.seat) drawSeat(c, hip, y, h, f, front, lw, out, olw, mode, o);
+  // --- bacaklar ---
+  const lk = pants ? 1.12 : 1;
+  const drawLeg = (L, cl, sc) => {
+    const a = T(L.hip), b = T(L.kn), d = T(L.ft);
+    const rot = front ? 0 : clamp(-L.sa * L.sx * .55, -.7, .7);
+    const fcx = d[0] + (front ? L.sx * lw * .12 : L.sx * lw * .5), fcy = d[1] + lw * .08;
+    const frx = lw * (front ? .78 : 1.08), fry = lw * .62;
+    if (out) {
+      c.strokeStyle = out; c.lineWidth = lw * lk + olw; _limb(c, a, b, d, .75);
+      c.fillStyle = out; c.beginPath(); c.ellipse(fcx, fcy, frx + olw / 2, fry + olw / 2, rot, 0, TAU); c.fill();
+    }
+    c.strokeStyle = cl; c.lineWidth = lw * lk; _limb(c, a, b, d, .75);
+    c.fillStyle = sc; c.beginPath(); c.ellipse(fcx, fcy, frx, fry, rot, 0, TAU); c.fill();
+    if (o.sole && det && mode === 'full') { c.save(); c.clip(); c.fillStyle = o.sole; c.fillRect(fcx - frx * 1.5, fcy + fry * .35, frx * 3, fry); c.restore(); }
+  };
+  drawLeg(legs[0], front ? legC : farLeg, front ? shoe : farShoe);
+  drawLeg(legs[1], legC, shoe);
+  // --- kollar ---
+  const drawArm = (A, cl) => {
+    const hr = lw * .66;
+    if (out) {
+      c.strokeStyle = out; c.lineWidth = lw * .94 + olw; _limb(c, A.s, A.el, A.hd, .8);
+      c.fillStyle = out; circ(c, A.hd[0], A.hd[1], hr + olw / 2); c.fill();
+    }
+    c.strokeStyle = cl; c.lineWidth = lw * .94; _limb(c, A.s, A.el, A.hd, .8);
+    c.fillStyle = cl; circ(c, A.hd[0], A.hd[1], hr); c.fill();
+  };
   if (acc.includes('hscarf')) drawHScarf(c, J, o, true);
-  // baş
-  c.fillStyle = col; circ(c, head[0], head[1], R); c.fill();
-  if (o.rim) { c.strokeStyle = o.rim; c.lineWidth = R * .12; c.beginPath(); c.arc(head[0], head[1], R * .94, -PI * .95, -PI * .05); c.stroke(); c.lineWidth = lw; }
-  if (o.face !== false) drawFace(c, head[0], head[1], R, f, front, o.face || {}, o, ha);
+  if (!front) drawArm(arms[0], far);
+  const behind = !front && o.hold && o.hold.behind;
+  if (behind) drawHeld(c, J, o.hold, o);
+  // --- gövde ---
+  const tw = SK.tw * h * (front ? 1.08 : .94), tb = SK.tb * h * (front ? 1.05 : .95);
+  const tAng = Math.atan2(hip[0] - sh0[0], hip[1] - sh0[1]), tLen = Math.hypot(hip[0] - sh0[0], hip[1] - sh0[1]);
+  const torsoLocal = (fn) => { c.save(); _caps(c, hip, sh0, tb, tw); c.clip(); c.translate(sh0[0], sh0[1]); c.rotate(-tAng); if (!front) c.scale(f, 1); fn(); c.restore(); };
+  _caps(c, hip, sh0, tb, tw);
+  if (out) { c.strokeStyle = out; c.lineWidth = olw; c.stroke(); }
+  c.fillStyle = shirt; c.fill();
+  if (mode !== 'mono' && (det || (mid && (acc.includes('vest') || acc.includes('hivis'))))) {
+    torsoLocal(() => {
+      if (acc.includes('vest')) {
+        c.fillStyle = mode === 'tint' ? mixh(o.vestCol || '#2B2B30', col, .3) : (o.vestCol || '#2B2B30');
+        if (front) { c.fillRect(-tw * 1.2, -tw, tw * .85, tLen + tw * 2); c.fillRect(tw * .35, -tw, tw, tLen + tw * 2); }
+        else c.fillRect(-tw * 1.2, -tw, tw * 1.55, tLen + tw * 2);
+      }
+      if (acc.includes('hivis')) { c.fillStyle = 'rgba(246,244,214,.95)'; c.fillRect(-tw * 1.2, tLen * .42, tw * 2.4, h * .016); c.fillRect(-tw * 1.2, tLen * .66, tw * 2.4, h * .016); }
+      if (!det) return;
+      // hacim: arka taraf koyu, ön-üst hafif aydınlık
+      const g = c.createLinearGradient(-tw, 0, tw, 0);
+      if (front) { g.addColorStop(0, 'rgba(255,255,255,.1)'); g.addColorStop(.55, 'rgba(255,255,255,0)'); g.addColorStop(1, 'rgba(0,0,0,.2)'); }
+      else { g.addColorStop(0, 'rgba(0,0,0,.26)'); g.addColorStop(.5, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(255,255,255,.12)'); }
+      c.fillStyle = g; c.fillRect(-tw * 1.3, -tw * 1.3, tw * 2.6, tLen + tw * 2.6);
+      c.fillStyle = 'rgba(0,0,0,.14)'; c.fillRect(-tw * 1.3, tLen - tb * .25, tw * 2.6, tb * 1.4); // bel/kalça gölgesi
+      // yaka
+      c.strokeStyle = 'rgba(0,0,0,.22)'; c.lineWidth = h * .007; c.beginPath(); c.arc(front ? 0 : tw * .25, -tw * .55, tw * .55, PI * .2, PI * .8); c.stroke();
+    });
+  }
+  if (acc.includes('robe')) drawRobe(c, J, o, lw, front, legs.map(L => T(L.kn)), legs.map(L => T(L.ft)), out, olw, mode, 'robe');
+  if (acc.includes('dress')) drawRobe(c, J, o, lw, front, legs.map(L => T(L.kn)), legs.map(L => T(L.ft)), out, olw, mode, 'dress', shirt);
+  if (acc.includes('apron')) drawApron(c, J, o, lw, front, out, olw, mode, col);
+  if (acc.includes('tie')) {
+    const a = J.neck, b = J.hip, P2 = (k) => [lerp(sh0[0], b[0], k), lerp(sh0[1], b[1], k)];
+    const fx = front ? 0 : f * tw * .35, q0 = P2(-.08), q1 = P2(.5), q2 = P2(.58);
+    if (det && mode !== 'mono') { c.fillStyle = mode === 'tint' ? mixh('#F4F1EA', col, .3) : '#F4F1EA'; c.beginPath(); c.moveTo(q0[0] + fx - tw * .45, q0[1]); c.lineTo(q0[0] + fx + tw * .45, q0[1]); c.lineTo(q0[0] + fx, q0[1] + tw * .7); c.closePath(); c.fill(); }
+    c.fillStyle = mode === 'mono' ? shirt : (o.tieCol || C.red);
+    c.beginPath(); c.moveTo(q0[0] + fx - lw * .4, q0[1] + tw * .2); c.lineTo(q0[0] + fx + lw * .4, q0[1] + tw * .2); c.lineTo(q1[0] + fx + lw * .55, q1[1]); c.lineTo(q2[0] + fx, q2[1]); c.lineTo(q1[0] + fx - lw * .55, q1[1]); c.closePath(); c.fill();
+  }
+  // boyun
+  c.strokeStyle = col; c.lineWidth = lw * .8; line(c, sh0[0], sh0[1], neck[0] + (head[0] - neck[0]) * .4, neck[1] + (head[1] - neck[1]) * .4);
+  // --- baş ---
+  const rot = front ? (p.lean + (p.hd - hd0) * .5) * .6 : (p.lean * .35 + p.hd * .5) * sxT;
+  c.save(); c.translate(head[0], head[1]); c.rotate(rot); c.translate(-head[0], -head[1]);
+  const covered = acc.includes('hscarf');
+  if (hair === 'long' && !covered && !acc.includes('helmet')) drawHair(c, head[0], head[1], R, f, front, 'long', hairCol, true);
+  if (front && !covered && mid && mode !== 'mono') { // kulaklar (önden)
+    for (const s of [-1, 1]) { if (out) { c.fillStyle = out; c.beginPath(); c.ellipse(head[0] + s * R * .96, head[1] + R * .08, R * .2 + olw / 2, R * .26 + olw / 2, 0, 0, TAU); c.fill(); } c.fillStyle = mixh(col, '#C8957A', .22); c.beginPath(); c.ellipse(head[0] + s * R * .96, head[1] + R * .08, R * .2, R * .26, 0, 0, TAU); c.fill(); }
+  }
+  const nose = !front && o.face !== false && R > 14 ? [head[0] + f * R * .97, head[1] + R * .1] : null;
+  if (out) {
+    c.fillStyle = out; circ(c, head[0], head[1], R + olw / 2); c.fill();
+    if (nose) { circ(c, nose[0], nose[1], R * .14 + olw / 2); c.fill(); }
+  }
+  if (mode !== 'mono' && det) {
+    const gx = head[0] - f * R * .3, gy = head[1] - R * .38;
+    const g = c.createRadialGradient(gx, gy, R * .05, head[0], head[1], R * 1.05);
+    g.addColorStop(0, mixh(col, '#FFFFFF', .35)); g.addColorStop(.55, col); g.addColorStop(1, mixh(col, '#9A7A6A', .3));
+    c.fillStyle = g;
+  } else c.fillStyle = col;
+  circ(c, head[0], head[1], R); c.fill();
+  if (nose) { c.fillStyle = mode !== 'mono' ? mixh(col, '#D9A890', .25) : col; circ(c, nose[0], nose[1], R * .14); c.fill(); }
+  if (!front && !covered && mid && mode !== 'mono' && !acc.includes('beanie')) { // kulak (yandan)
+    const ex = head[0] - f * R * .16, ey = head[1] + R * .08;
+    c.fillStyle = mixh(col, '#C8957A', .25); c.beginPath(); c.ellipse(ex, ey, R * .16, R * .22, 0, 0, TAU); c.fill();
+    c.strokeStyle = mixh(col, '#8A5A48', .45); c.lineWidth = R * .05; c.beginPath(); c.arc(ex + f * R * .02, ey, R * .09, -PI * .6, PI * .6); c.stroke();
+  }
+  if (o.rim) { c.strokeStyle = o.rim; c.lineWidth = R * .12; c.beginPath(); c.arc(head[0], head[1], R * .94, -PI * .95, -PI * .05); c.stroke(); }
+  if (hair && !covered && hairCol) drawHair(c, head[0], head[1], R, f, front, hair, hairCol, false);
+  if (o.face !== false) drawFace(c, head[0], head[1], R, f, front, o.face || {}, Object.assign({}, o, { _sd: sd }), ha);
   if (acc.includes('cap')) drawCap(c, J, o, 'kasket');
   if (acc.includes('flatcap')) drawCap(c, J, o, 'kasket');
   if (acc.includes('milcap')) drawCap(c, J, o, 'mil');
   if (acc.includes('beanie')) drawCap(c, J, o, 'bere');
-  if (acc.includes('takke')) { c.fillStyle = '#FFFFFF'; c.beginPath(); c.ellipse(head[0], head[1] - R * .72, R * .62, R * .42, 0, PI, TAU); c.fill(); }
+  if (acc.includes('takke')) { c.fillStyle = '#FFFFFF'; c.beginPath(); c.ellipse(head[0], head[1] - R * .74, R * .64, R * .42, 0, PI, TAU); c.fill(); }
   if (acc.includes('curlers')) drawCurlers(c, J, o);
   if (acc.includes('hscarf')) drawHScarf(c, J, o, false);
   if (acc.includes('hardhat') || acc.includes('helmet')) drawHelmet(c, J, o, acc.includes('hardhat'));
-  if (acc.includes('nscarf')) drawNScarf(c, J, o, lw);
-  // ön kol
-  c.strokeStyle = col; c.lineWidth = lw;
-  _seg(c, arms[1].s, arms[1].el, arms[1].hd);
-  if (o.hold) drawHeld(c, J, o.hold, o);
+  c.restore();
+  if (acc.includes('nscarf')) drawNScarf(c, J, o, lw, out, olw);
+  // ön kol(lar)
+  if (front) drawArm(arms[0], col);
+  drawArm(arms[1], col);
+  c.lineWidth = lw;
+  if (o.hold && !behind) drawHeld(c, J, o.hold, o);
   if (o.hold1) drawHeld(c, J, Object.assign({ hand: 1 }, o.hold1), o);
   if (o.alpha != null) c.globalAlpha = 1;
   return J;
+}
+
+/* Basit ahşap sandalye (yandan) / tabure (önden) — oturan figürün altına */
+function drawSeat(c, hip, gy, h, f, front, lw, out, olw, mode, o) {
+  let wc = o.seatCol || '#6B4A32'; if (mode === 'tint') wc = mixh(wc, o.col, .35); else if (mode === 'mono') wc = o.col;
+  const dk = mode === 'mono' ? wc : mixh(wc, '#000000', .3), st = hip[1] + lw * .62, th = h * .03, pw = h * .022;
+  const parts = [];
+  if (front) {
+    parts.push([dk, hip[0] - h * .1, st + th, pw, gy - st - th], [dk, hip[0] + h * .1 - pw, st + th, pw, gy - st - th]);
+    parts.push([wc, hip[0] - h * .13, st, h * .26, th]);
+  } else {
+    const xb = hip[0] - f * h * .12, xf = hip[0] + f * h * .1;
+    parts.push([dk, xf - pw / 2 - f * pw * .4, st + th, pw, gy - st - th]);
+    parts.push([wc, Math.min(xb, xf) - pw * .2, st, Math.abs(xf - xb) + pw * .4, th]);
+    parts.push([wc, xb - pw / 2, st - h * .3, pw, gy - st + h * .3]);
+    parts.push([wc, xb - pw * 1.1 + f * pw * .4, st - h * .3, pw * 2.2, h * .07]);
+  }
+  if (out) { c.fillStyle = out; for (const q of parts) { rr(c, q[1] - olw / 2, q[2] - olw / 2, q[3] + olw, q[4] + olw, pw * .4); c.fill(); } }
+  for (const q of parts) { c.fillStyle = q[0]; rr(c, q[1], q[2], q[3], q[4], pw * .35); c.fill(); }
+  if (mode !== 'mono') { c.fillStyle = 'rgba(255,255,255,.12)'; const q = parts[front ? 2 : 1]; c.fillRect(q[1] + pw * .3, q[2] + th * .15, q[3] - pw * .6, th * .25); }
+}
+/* Saç modelleri: short, messy, side, slick, kid, long, sides (kenar), bald */
+function drawHair(c, hx0, hy0, R, f, front, st, col, back) {
+  if (!st || st === 'bald' || !col) return;
+  c.save(); c.translate(hx0, hy0); if (!front) c.scale(f, 1);
+  c.fillStyle = col; c.beginPath();
+  if (back) {
+    if (front) { c.moveTo(-R * 1.06, -R * .2); c.quadraticCurveTo(-R * 1.3, R * .9, -R * 1.0, R * 1.3); c.lineTo(R * 1.0, R * 1.3); c.quadraticCurveTo(R * 1.3, R * .9, R * 1.06, -R * .2); c.closePath(); }
+    else { c.moveTo(-R * .1, -R * 1.02); c.quadraticCurveTo(-R * 1.4, -R * .7, -R * 1.18, R * .6); c.quadraticCurveTo(-R * 1.08, R * 1.25, -R * .5, R * 1.3); c.lineTo(R * .1, R * .4); c.closePath(); }
+    c.fill(); c.restore(); return;
+  }
+  if (st === 'sides') {
+    if (front) { for (const s of [-1, 1]) { c.moveTo(s * R * 1.05, -R * .3); c.quadraticCurveTo(s * R * 1.14, R * .12, s * R * .92, R * .38); c.quadraticCurveTo(s * R * .78, 0, s * R * .84, -R * .36); c.closePath(); } }
+    else { c.moveTo(-R * .5, -R * .5); c.quadraticCurveTo(-R * 1.12, -R * .45, -R * 1.04, R * .12); c.quadraticCurveTo(-R * .92, R * .46, -R * .6, R * .4); c.quadraticCurveTo(-R * .55, -R * .05, -R * .28, -R * .35); c.closePath(); }
+    c.fill(); c.restore(); return;
+  }
+  if (front) {
+    c.moveTo(-R * 1.04, R * .1);
+    if (st === 'messy') { const n = 7; for (let i = 0; i <= n * 2; i++) { const a = PI * .98 + i / (n * 2) * PI * 1.04; const r2 = R * (i % 2 ? 1.2 : 1.04); c.lineTo(Math.cos(a) * r2, Math.sin(a) * r2); } }
+    else c.arc(0, 0, R * 1.06, PI * .97, PI * 2.03);
+    c.lineTo(R * 1.04, R * .1);
+    c.quadraticCurveTo(R * .98, -R * .42, R * .5, -R * .5);
+    if (st === 'side' || st === 'slick') c.quadraticCurveTo(-R * .2, -R * .7, -R * .55, -R * .42);
+    else c.quadraticCurveTo(0, -R * .36, -R * .5, -R * .5);
+    c.quadraticCurveTo(-R * .98, -R * .42, -R * 1.04, R * .1);
+    c.closePath(); c.fill();
+  } else {
+    c.moveTo(-R * 1.0, R * .32);
+    if (st === 'messy') { const n = 6; for (let i = 0; i <= n * 2; i++) { const a = PI * .9 + i / (n * 2) * PI * 1.0; const r2 = R * (i % 2 ? 1.24 : 1.05); c.lineTo(Math.cos(a) * r2, Math.sin(a) * r2); } }
+    else c.arc(0, 0, R * 1.06, PI * .9, PI * 1.88);
+    if (st === 'side' || st === 'slick') c.quadraticCurveTo(R * 1.12, -R * .62, R * .82, -R * .38);
+    c.quadraticCurveTo(R * .62, -R * .3, R * .42, -R * .48);
+    c.quadraticCurveTo(R * .08, -R * .44, -R * .25, -R * .42);
+    c.quadraticCurveTo(-R * .62, -R * .3, -R * .58, R * .34);
+    c.closePath(); c.fill();
+  }
+  if (st === 'kid') { c.beginPath(); c.moveTo(-R * .05, -R * .98); c.quadraticCurveTo(R * .2, -R * 1.5, R * .5, -R * 1.28); c.quadraticCurveTo(R * .2, -R * 1.25, R * .18, -R * .98); c.closePath(); c.fill(); }
+  // parlama
+  if (R > 40) { c.strokeStyle = 'rgba(255,255,255,.16)'; c.lineWidth = R * .07; c.beginPath(); c.arc(0, 0, R * .9, PI * 1.25, PI * 1.5); c.stroke(); }
+  c.restore();
 }
 
 function drawFace(c, hx0, hy0, R, f, front, F, o, ha) {
   const fc = F.col || o.fcol || C.ink;
   const lk = F.look || [0, 0];
   const ox = front ? 0 : f * R * .3;
-  const tilt = ha || 0;
-  const cx = hx0 + ox + lk[0] * R * .1, cy = hy0 + (lk[1] * R * .12) + Math.sin(tilt) * 0;
-  const up = F.up != null ? F.up : (o.ch === undefined ? 0 : 0);
+  const cx = hx0 + ox + lk[0] * R * .1, cy = hy0 + (lk[1] * R * .12);
+  const up = F.up || 0;
   const eyY = cy - R * .08 - up * R * .22;
   const ex = R * (front ? .33 : .25);
-  const open = F.open == null ? 1 : F.open;
+  let open = F.open == null ? 1 : F.open;
   const eye = F.eye || 'dot';
+  // göz kırpma
+  const tb = F.t != null ? F.t : o.t;
+  if (tb != null && o.blink !== false && F.blink !== false && (eye === 'dot' || eye === 'wide')) {
+    const sd = o._sd || 0, per = 3.1 + hash(sd * 3.7) * 2.2, ph = ((tb + sd * 1.93) % per + per) % per;
+    if (ph < .16) open *= Math.abs(Math.cos(ph / .16 * PI));
+  }
   c.fillStyle = fc; c.strokeStyle = fc; c.lineCap = 'round';
   const eyes = [];
   for (const s of [-1, 1]) {
     const k = front ? 1 : (s === f ? 1.05 : .72);
     eyes.push([cx + s * ex * k, eyY]);
   }
-  // kırmızı göz (uykusuz)
   if (F.red) { for (const e of eyes) { c.fillStyle = rgba(C.red, .55 * F.red); c.beginPath(); c.ellipse(e[0], e[1], R * .2, R * .15, 0, 0, TAU); c.fill(); } c.fillStyle = fc; }
-  for (const e of eyes) {
+  for (let i = 0; i < 2; i++) {
+    const e = eyes[i];
+    const farEye = !front && (i === 0 ? -1 : 1) !== f;
     if (eye === 'happy') { c.lineWidth = R * .09; c.beginPath(); c.arc(e[0], e[1] + R * .05, R * .11, PI * 1.1, PI * 1.9); c.stroke(); continue; }
-    if (eye === 'closed' || eye === 'squint' || open < .12) { c.lineWidth = R * .08; c.beginPath(); c.arc(e[0], e[1] - R * .04, R * .12, PI * .15, PI * .85); c.stroke(); continue; }
-    const er = R * (eye === 'wide' ? .16 : .115);
-    c.beginPath(); c.ellipse(e[0] + lk[0] * R * .05, e[1] + lk[1] * R * .05, er * (eye === 'wide' ? 1 : .85), er * open, 0, 0, TAU); c.fill();
-    if (eye === 'wide' || R > 60) { c.fillStyle = '#FFFFFF'; circ(c, e[0] + lk[0] * R * .05 + er * .35, e[1] + lk[1] * R * .05 - er * .35 * open, er * .28); c.fill(); c.fillStyle = fc; }
+    if (eye === 'closed' || eye === 'squint' || open < .15) { c.lineWidth = R * .08; c.beginPath(); c.arc(e[0], e[1] - R * .04, R * .12, PI * .15, PI * .85); c.stroke(); continue; }
+    const er = R * (eye === 'wide' ? .17 : .12);
+    const ew = er * (eye === 'wide' ? 1 : .8) * (farEye ? .8 : 1), eh = er * (eye === 'wide' ? 1 : 1.12) * open;
+    if (eye === 'wide' && R > 30) { c.fillStyle = '#FFFFFF'; c.beginPath(); c.ellipse(e[0], e[1], ew * 1.5, eh * 1.45, 0, 0, TAU); c.fill(); c.lineWidth = R * .035; c.stroke(); c.fillStyle = fc; }
+    const px = e[0] + lk[0] * R * .05, py = e[1] + lk[1] * R * .05;
+    c.beginPath(); c.ellipse(px, py, eye === 'wide' ? ew * .62 : ew, eye === 'wide' ? eh * .62 : eh, 0, 0, TAU); c.fill();
+    if (R > 34) { c.fillStyle = '#FFFFFF'; circ(c, px + ew * .3, py - eh * .35, er * .26); c.fill(); c.fillStyle = fc; }
   }
-  if (F.brow) {
-    c.lineWidth = R * .075;
+  // kaşlar (varsayılan: hafif kavisli nötr)
+  const browOn = F.brow != null || (R > 26 && o.brows !== false && F.brows !== false);
+  if (browOn) {
+    const bw = F.brow || 0;
+    c.lineWidth = R * .075; c.strokeStyle = o.browCol || fc;
     for (let i = 0; i < 2; i++) {
-      const e = eyes[i], s = i === 0 ? -1 : 1; // s: dış taraf yönü
-      const by = e[1] - R * .26 - (F.browUp || 0) * R * .1;
-      // brow>0: endişeli (iç uç yukarı), brow<0: kızgın (iç uç aşağı)
-      const inner = -s, b = F.brow * R * .12;
-      c.beginPath(); c.moveTo(e[0] + s * R * .14, by + b * .6); c.lineTo(e[0] + inner * R * .12, by - b); c.stroke();
+      const e = eyes[i], s = i === 0 ? -1 : 1;
+      const by = e[1] - R * .27 - (F.browUp || 0) * R * .1 - (eye === 'wide' ? R * .08 : 0);
+      const inner = -s, b = bw * R * .12, w = R * (!front && s !== f ? .1 : .13);
+      c.beginPath(); c.moveTo(e[0] + s * w, by + b * .6 + R * .02); c.quadraticCurveTo(e[0], by - R * .05 - b * .2, e[0] + inner * w * .95, by - b); c.stroke();
     }
   }
   // gözlük
@@ -522,13 +762,16 @@ function drawFace(c, hx0, hy0, R, f, front, F, o, ha) {
     if (!front) { const back = f > 0 ? eyes[0] : eyes[1]; line(c, back[0] - f * R * .21, back[1], back[0] - f * R * .62, back[1] - R * .05); }
     c.strokeStyle = fc;
   }
-  // bıyık / sakal
+  // önden burun
+  if (front && R > 30) { c.strokeStyle = 'rgba(120,80,60,.35)'; c.lineWidth = R * .05; c.beginPath(); c.arc(cx, cy + R * .16, R * .07, PI * .15, PI * .85); c.stroke(); c.strokeStyle = fc; }
   const acc = o.acc || [];
   const my = cy + R * .3;
-  if (acc.includes('beard')) { c.fillStyle = o.beardCol || '#CCCCCC'; c.beginPath(); c.ellipse(cx, hy0 + R * .62, R * .55, R * .42, 0, 0, PI); c.fill(); c.fillStyle = fc; }
+  if (acc.includes('beard')) { c.fillStyle = o.beardCol || '#CCCCCC'; c.beginPath(); c.ellipse(cx - (front ? 0 : f * R * .08), hy0 + R * .6, R * .58, R * .46, 0, -.15, PI + .15); c.fill(); c.fillStyle = fc; }
   if (acc.includes('mus')) {
     c.fillStyle = o.mcol || fc;
-    c.beginPath(); c.ellipse(cx - R * .14, my, R * .18, R * .08, -.2, 0, TAU); c.ellipse(cx + R * .14, my, R * .18, R * .08, .2, 0, TAU); c.fill(); c.fillStyle = fc;
+    c.beginPath(); c.ellipse(cx - R * .14, my, R * .19, R * .085, -.22, 0, TAU); c.moveTo(cx + R * .33, my); c.ellipse(cx + R * .14, my, R * .19, R * .085, .22, 0, TAU);
+    if (_lum(o.mcol || '#000000') > .6) { c.strokeStyle = 'rgba(60,50,45,.55)'; c.lineWidth = R * .035; c.stroke(); }
+    c.fill(); c.fillStyle = fc;
   }
   // ağız
   const mth = F.mouth || 'none', mo = F.mo == null ? 1 : F.mo;
@@ -536,13 +779,13 @@ function drawFace(c, hx0, hy0, R, f, front, F, o, ha) {
   c.lineWidth = R * .08; c.strokeStyle = fc; c.fillStyle = fc;
   if (mth === 'smile') { c.beginPath(); c.arc(mx, mY - R * .16, R * .24, PI * .2, PI * .8); c.stroke(); }
   else if (mth === 'frown') { c.beginPath(); c.arc(mx, mY + R * .14, R * .2, PI * 1.2, PI * 1.8); c.stroke(); }
-  else if (mth === 'flat') { line(c, mx - R * .15, mY, mx + R * .15, mY); }
+  else if (mth === 'flat') { line(c, mx - R * .14, mY, mx + R * .14, mY); }
   else if (mth === 'o') { c.beginPath(); c.ellipse(mx, mY, R * .1 * (.6 + mo * .4), R * .13 * mo + R * .03, 0, 0, TAU); c.fill(); }
-  else if (mth === 'scream') { c.beginPath(); c.ellipse(mx, mY + R * .04, R * .14, R * .22 * mo + R * .04, 0, 0, TAU); c.fill(); }
-  else if (mth === 'grin') { c.beginPath(); c.arc(mx, mY - R * .1, R * .24, PI * .05, PI * .95); c.closePath(); c.fill(); }
+  else if (mth === 'scream') { c.beginPath(); c.ellipse(mx, mY + R * .04, R * .15, R * .22 * mo + R * .05, 0, 0, TAU); c.fill(); if (R > 40) { c.fillStyle = '#E0546A'; c.beginPath(); c.ellipse(mx, mY + R * .04 + (R * .22 * mo + R * .05) * .55, R * .09, R * .06 * mo + R * .01, 0, 0, TAU); c.fill(); c.fillStyle = fc; } }
+  else if (mth === 'grin') { c.beginPath(); c.arc(mx, mY - R * .1, R * .24, PI * .05, PI * .95); c.closePath(); c.fill(); if (R > 40) { c.fillStyle = '#FFFFFF'; c.fillRect(mx - R * .17, mY - R * .1, R * .34, R * .06); c.fillStyle = fc; } }
   else if (mth === 'bitter') { c.beginPath(); c.moveTo(mx - R * .2, mY + R * .02); c.quadraticCurveTo(mx + R * .02, mY + R * .06, mx + R * .2, mY - R * .1); c.stroke(); }
   else if (mth === 'wavy') { c.beginPath(); c.moveTo(mx - R * .2, mY); for (let i = 1; i <= 4; i++) c.lineTo(mx - R * .2 + i * R * .1, mY + (i % 2 ? -1 : 1) * R * .05); c.stroke(); }
-  else if (mth === 'talk') { const a = .25 + .75 * Math.abs(Math.sin((F.t || 0) * 14)); c.beginPath(); c.ellipse(mx, mY, R * .14, R * .12 * a + R * .02, 0, 0, TAU); c.fill(); }
+  else if (mth === 'talk') { const tt = F.t || 0; const a = .2 + .8 * Math.abs(Math.sin(tt * 13 + Math.sin(tt * 5.3) * 1.5)) * (.55 + .45 * Math.abs(noise(tt * 3.1))); c.beginPath(); c.ellipse(mx, mY, R * .14, R * .12 * a + R * .02, 0, 0, TAU); c.fill(); }
   if (F.blush) { c.fillStyle = rgba(C.pink, .45 * F.blush); for (const e of eyes) { c.beginPath(); c.ellipse(e[0] + (e[0] < cx ? -1 : 1) * R * .05, e[1] + R * .3, R * .12, R * .07, 0, 0, TAU); c.fill(); } }
   if (F.tear) {
     const tt = F.t || 0;
@@ -559,60 +802,121 @@ function drawFace(c, hx0, hy0, R, f, front, F, o, ha) {
 }
 function drawCap(c, J, o, kind) {
   const [hx0, hy0] = J.head, R = J.R, f = J.f;
-  c.fillStyle = o.capCol || '#5A4636';
+  const cc = o.capCol || '#5A4636';
+  c.fillStyle = cc;
   if (kind === 'kasket') {
-    c.beginPath(); c.ellipse(hx0 - f * R * .05, hy0 - R * .55, R * 1.02, R * .5, -f * .08, PI, TAU); c.fill();
-    c.beginPath(); c.ellipse(hx0 + f * R * .7, hy0 - R * .5, R * .55, R * .14, f * .12, 0, TAU); c.fill();
+    c.beginPath(); c.ellipse(hx0 - f * R * .05, hy0 - R * .5, R * 1.06, R * .56, -f * .08, PI, TAU); c.fill();
+    c.fillStyle = mixh(cc, '#000000', .25); c.beginPath(); c.ellipse(hx0 + f * R * .72, hy0 - R * .48, R * .58, R * .15, f * .12, 0, TAU); c.fill();
+    c.strokeStyle = 'rgba(255,255,255,.14)'; c.lineWidth = R * .06; c.beginPath(); c.ellipse(hx0 - f * R * .05, hy0 - R * .5, R * .8, R * .38, -f * .08, PI * 1.2, PI * 1.6); c.stroke();
   } else if (kind === 'mil') {
     c.fillRect(hx0 - R * .95, hy0 - R * 1.12, R * 1.9, R * .6);
-    c.beginPath(); c.ellipse(hx0 + f * R * .55, hy0 - R * .52, R * .6, R * .13, 0, 0, TAU); c.fill();
+    c.fillStyle = mixh(cc, '#000000', .3); c.beginPath(); c.ellipse(hx0 + f * R * .55, hy0 - R * .52, R * .6, R * .13, 0, 0, TAU); c.fill();
     c.fillStyle = C.gold; circ(c, hx0 + f * R * .1, hy0 - R * .82, R * .13); c.fill();
   } else {
-    c.beginPath(); c.ellipse(hx0, hy0 - R * .45, R * 1.0, R * .72, 0, PI, TAU); c.fill(); c.fillRect(hx0 - R * 1.02, hy0 - R * .55, R * 2.04, R * .22);
+    c.beginPath(); c.ellipse(hx0, hy0 - R * .42, R * 1.04, R * .76, 0, PI, TAU); c.fill();
+    c.fillStyle = mixh(cc, '#000000', .2); c.fillRect(hx0 - R * 1.06, hy0 - R * .55, R * 2.12, R * .24);
   }
 }
 function drawCurlers(c, J, o) {
   const [hx0, hy0] = J.head, R = J.R; const cols = ['#FF8FC7', '#8FD3FF', '#FFE07A', '#B6F28F', '#FF8FC7'];
   for (let i = 0; i < 5; i++) {
-    const a = PI * 1.15 + i * PI * .175; const px = hx0 + Math.cos(a) * R * .95, py = hy0 + Math.sin(a) * R * .95;
+    const a = PI * 1.15 + i * PI * .175; const px = hx0 + Math.cos(a) * R * .98, py = hy0 + Math.sin(a) * R * .98;
     c.save(); c.translate(px, py); c.rotate(a + PI / 2); c.fillStyle = cols[i]; rr(c, -R * .26, -R * .15, R * .52, R * .3, R * .12); c.fill();
     c.strokeStyle = 'rgba(0,0,0,.25)'; c.lineWidth = R * .04; for (let k = -1; k <= 1; k++) line(c, k * R * .13, -R * .15, k * R * .13, R * .15); c.restore();
   }
 }
 function drawHScarf(c, J, o, back) {
-  const [hx0, hy0] = J.head, R = J.R, f = J.f; c.fillStyle = o.scarfCol || '#9C3D6A';
+  const [hx0, hy0] = J.head, R = J.R, f = J.f; const sc = o.scarfCol || '#9C3D6A'; c.fillStyle = sc;
   if (back) { c.beginPath(); c.moveTo(hx0 - R * 1.05, hy0); c.quadraticCurveTo(hx0 - R * 1.3, hy0 + R * 1.6, hx0 - f * R * .2, hy0 + R * 1.75); c.lineTo(hx0 + R * 1.0, hy0 + R * .9); c.closePath(); c.fill(); return; }
-  c.beginPath(); c.arc(hx0, hy0, R * 1.12, PI * .78, PI * 2.22); c.arc(hx0 + f * R * .12, hy0 + R * .05, R * .82, PI * 2.25, PI * .75, true); c.closePath(); c.fill();
+  c.beginPath(); c.arc(hx0, hy0, R * 1.14, PI * .78, PI * 2.22); c.arc(hx0 + f * R * .12, hy0 + R * .05, R * .82, PI * 2.25, PI * .75, true); c.closePath(); c.fill();
+  c.strokeStyle = mixh(sc, '#FFFFFF', .25); c.lineWidth = R * .06; c.beginPath(); c.arc(hx0 + f * R * .12, hy0 + R * .05, R * .86, PI * 1.2, PI * 1.75); c.stroke();
 }
 function drawHelmet(c, J, o, hard) {
-  const [hx0, hy0] = J.head, R = J.R, f = J.f; c.fillStyle = o.hatCol || '#FFC21A';
-  c.beginPath(); c.ellipse(hx0, hy0 - R * .3, R * 1.05, R * .95, 0, PI, TAU); c.fill();
-  c.fillRect(hx0 - R * 1.2, hy0 - R * .38, R * 2.4, R * .18);
+  const [hx0, hy0] = J.head, R = J.R, f = J.f; const hc = o.hatCol || '#FFC21A'; c.fillStyle = hc;
+  c.beginPath(); c.ellipse(hx0, hy0 - R * .3, R * 1.08, R * .98, 0, PI, TAU); c.fill();
+  c.fillStyle = mixh(hc, '#000000', .2); c.fillRect(hx0 - R * 1.22, hy0 - R * .38, R * 2.44, R * .18);
+  c.strokeStyle = 'rgba(255,255,255,.25)'; c.lineWidth = R * .08; c.beginPath(); c.ellipse(hx0, hy0 - R * .3, R * .82, R * .74, 0, PI * 1.15, PI * 1.45); c.stroke();
   if (hard) { c.fillStyle = '#FFFFFF'; circ(c, hx0 + f * R * .55, hy0 - R * .65, R * .17); c.fill(); additive(c, () => glow(c, hx0 + f * R * .6, hy0 - R * .65, R * 1.2, C.cream, .7)); }
 }
-function drawNScarf(c, J, o, lw) {
-  const n = J.neck, f = J.f, R = J.R; c.strokeStyle = o.scol || C.orange; c.lineWidth = lw * 1.25;
-  line(c, n[0] - R * .35, n[1] + R * .05, n[0] + R * .35, n[1] + R * .05);
-  const tt = (o.t || 0); c.lineWidth = lw * .9; c.beginPath(); c.moveTo(n[0] - f * R * .2, n[1] + R * .08);
-  c.quadraticCurveTo(n[0] - f * R * .9, n[1] + R * .3 + Math.sin(tt * 6) * R * .15, n[0] - f * R * 1.4, n[1] + R * .2 + Math.sin(tt * 6 + 1) * R * .3); c.stroke();
+function drawNScarf(c, J, o, lw, out, olw) {
+  const f = J.f, R = J.R, sc = o.scol || C.orange, tt = (o.t || 0);
+  const n = [lerp(J.sh[0], J.neck[0], .55), lerp(J.sh[1], J.neck[1], .55)];
+  const wind = o.wind != null ? o.wind : .35;
+  // kuyruk: boynun arkasından sarkan, rüzgârda dalgalanan kumaş
+  const pts = [];
+  for (let i = 0; i <= 8; i++) {
+    const u = i / 8, wv = Math.sin(tt * 5.5 - u * 4) * R * .14 * u;
+    pts.push([n[0] - f * R * (.25 + u * (.35 + wind * 1.1)), n[1] + R * .15 + u * R * (1.15 - wind * .75) + wv]);
+  }
+  if (o.view === 'front') { // önden: boynu saran bant + göğse sarkan uç
+    const by = n[1] + R * .02, sw0 = Math.sin(tt * 2.2) * R * .04;
+    const band = () => { c.beginPath(); c.moveTo(n[0] - R * .52, by - R * .14); c.quadraticCurveTo(n[0], by - R * .02, n[0] + R * .52, by - R * .14); c.lineTo(n[0] + R * .5, by + R * .12); c.quadraticCurveTo(n[0], by + R * .3, n[0] - R * .5, by + R * .12); c.closePath(); };
+    const end = () => { c.beginPath(); c.moveTo(n[0] + R * .12, by + R * .1); c.quadraticCurveTo(n[0] + R * .3 + sw0, by + R * .6, n[0] + R * .22 + sw0 * 1.5, by + R * 1.05); c.lineTo(n[0] + R * .44 + sw0 * 1.5, by + R * 1.0); c.quadraticCurveTo(n[0] + R * .46 + sw0, by + R * .5, n[0] + R * .36, by + R * .08); c.closePath(); };
+    if (out) { c.strokeStyle = out; c.lineWidth = olw; end(); c.stroke(); band(); c.stroke(); }
+    c.fillStyle = mixh(sc, '#000000', .15); end(); c.fill();
+    c.strokeStyle = 'rgba(255,255,255,.5)'; c.lineWidth = R * .035; for (let i = 0; i < 3; i++) line(c, n[0] + R * (.26 + i * .06) + sw0 * 1.5, by + R * .98, n[0] + R * (.25 + i * .06) + sw0 * 1.5, by + R * 1.1);
+    c.fillStyle = sc; band(); c.fill();
+    c.fillStyle = mixh(sc, '#000000', .12); circ(c, n[0] + R * .26, by + R * .12, R * .12); c.fill();
+    c.strokeStyle = 'rgba(255,255,255,.3)'; c.lineWidth = R * .05; c.beginPath(); c.moveTo(n[0] - R * .4, by - R * .06); c.quadraticCurveTo(n[0], by + R * .04, n[0] + R * .4, by - R * .06); c.stroke();
+    return;
+  }
+  const tail = (w) => { for (let i = 0; i < pts.length - 1; i++) { c.lineWidth = w * (1 - i / pts.length * .45); line(c, pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1]); } };
+  const wrap = () => { c.beginPath(); c.ellipse(n[0], n[1], R * .5, R * .2, 0, 0, TAU); };
+  if (out) { c.strokeStyle = out; tail(lw * 1.15 + olw); wrap(); c.lineWidth = olw; c.stroke(); }
+  c.strokeStyle = mixh(sc, '#000000', .18); tail(lw * 1.15);
+  wrap(); c.fillStyle = sc; c.fill();
+  c.strokeStyle = 'rgba(255,255,255,.35)'; c.lineWidth = R * .05; c.beginPath(); c.ellipse(n[0], n[1] - R * .03, R * .38, R * .1, 0, PI * 1.1, PI * 1.9); c.stroke();
+  c.strokeStyle = 'rgba(0,0,0,.2)'; c.lineWidth = R * .04; line(c, n[0] - f * R * .1, n[1] - R * .15, n[0] - f * R * .2, n[1] + R * .17);
 }
-function drawRobe(c, J, o, lw, front) {
-  const n = J.neck, hp = J.hip, h = J.h; const w0 = h * .07, w1 = h * .14;
-  const ang = Math.atan2(hp[0] - n[0], hp[1] - n[1]);
-  c.save(); c.translate(n[0], n[1] + h * .02); c.rotate(-ang);
-  c.fillStyle = o.robeCol || '#E46BA4';
-  c.beginPath(); c.moveTo(-w0, 0); c.lineTo(w0, 0); c.lineTo(w1, h * .48); c.lineTo(-w1, h * .48); c.closePath(); c.fill();
-  c.fillStyle = 'rgba(255,255,255,.35)'; for (let i = 0; i < 6; i++) { circ(c, (hash(i + 3) - .5) * w1 * 1.4, h * (.08 + i * .07), h * .012); c.fill(); }
-  c.strokeStyle = 'rgba(0,0,0,.25)'; c.lineWidth = h * .01; line(c, 0, h * .02, 0, h * .46);
-  c.fillStyle = '#FFFFFF'; c.fillRect(-w0 * 1.05, h * .2, w0 * 2.1, h * .02);
+/* Elbise / sabahlık / cübbe: gövde + dizlere (ya da bileklere) inen etek */
+function drawRobe(c, J, o, lw, front, kn, ft, out, olw, mode, kind, shirt) {
+  const h = J.h, hp = J.hip, n = J.sh, f = J.f;
+  let colr = kind === 'robe' ? (o.robeCol || '#E46BA4') : (o.dressCol || shirt || '#4F6FA0');
+  if (mode === 'tint') colr = mixh(colr, o.col, .38); else if (mode === 'mono') colr = shirt;
+  const len = kind === 'robe' ? .35 : (o.dressLen != null ? o.dressLen : .4);
+  const km = [(kn[0][0] + kn[1][0]) / 2, (kn[0][1] + kn[1][1]) / 2], fm = [(ft[0][0] + ft[1][0]) / 2, (ft[0][1] + ft[1][1]) / 2];
+  const bot = [lerp(km[0], fm[0], len), lerp(km[1], fm[1], len)];
+  const dx = bot[0] - hp[0], dy = bot[1] - hp[1], L = Math.hypot(dx, dy) || 1, ux = dx / L, uy = dy / L, px = -uy, py = ux;
+  const spread = Math.abs((kn[0][0] - kn[1][0]) * px + (kn[0][1] - kn[1][1]) * py) / 2;
+  const w0 = h * SK.tb * (front ? 1.15 : 1.05), w1 = Math.max(h * (front ? .1 : .085), spread + lw * 1.3);
+  const sw = h * SK.tw * (front ? 1.08 : .94);
+  c.beginPath();
+  // omuzlardan bele (gövde ile örtüşür) → eteğe
+  const ta = Math.atan2(hp[1] - n[1], hp[0] - n[0]), tpx = -Math.sin(ta), tpy = Math.cos(ta);
+  c.moveTo(n[0] - tpx * sw, n[1] - tpy * sw);
+  c.lineTo(hp[0] - tpx * w0, hp[1] - tpy * w0);
+  c.quadraticCurveTo(hp[0] - px * w0 + ux * L * .5, hp[1] - py * w0 + uy * L * .5, bot[0] - px * w1, bot[1] - py * w1);
+  c.quadraticCurveTo(bot[0] + ux * h * .02, bot[1] + uy * h * .02, bot[0] + px * w1, bot[1] + py * w1);
+  c.quadraticCurveTo(hp[0] + px * w0 + ux * L * .5, hp[1] + py * w0 + uy * L * .5, hp[0] + tpx * w0, hp[1] + tpy * w0);
+  c.lineTo(n[0] + tpx * sw, n[1] + tpy * sw);
+  c.arc(n[0], n[1], sw, ta + PI / 2, ta + PI * 1.5, false);
+  c.closePath();
+  if (out) { c.strokeStyle = out; c.lineWidth = olw; c.stroke(); }
+  c.fillStyle = colr; c.fill();
+  if (mode === 'mono' || h < 200) return;
+  c.save(); c.clip();
+  // hacim
+  c.fillStyle = 'rgba(0,0,0,.14)'; c.beginPath(); c.moveTo(hp[0], hp[1]); c.lineTo(bot[0] - px * w1 * f, bot[1] - py * w1 * f); c.lineTo(bot[0] - px * w1 * 2 * f, bot[1] - py * w1 * 2 * f); c.lineTo(hp[0] - px * w0 * 2 * f, hp[1] - py * w0 * 2 * f); c.fill();
+  c.strokeStyle = 'rgba(0,0,0,.18)'; c.lineWidth = h * .006;
+  for (const k of [-.45, .45]) { c.beginPath(); c.moveTo(hp[0] + px * w0 * k * .6, hp[1] + py * w0 * k * .6); c.lineTo(bot[0] + px * w1 * k, bot[1] + py * w1 * k); c.stroke(); }
+  if (kind === 'robe') {
+    c.fillStyle = 'rgba(255,255,255,.35)';
+    for (let i = 0; i < 9; i++) { const k = hash(i + 3), q = (i + .5) / 9; const bx = lerp(n[0], bot[0], q) + px * (k - .5) * w1 * 1.4, by = lerp(n[1], bot[1], q) + py * (k - .5) * w1 * 1.4; circ(c, bx, by, h * .011); c.fill(); }
+    c.fillStyle = '#FFFFFF'; const bl = [lerp(n[0], hp[0], .78), lerp(n[1], hp[1], .78)];
+    c.beginPath(); c.moveTo(bl[0] - tpx * sw * 1.5, bl[1] - tpy * sw * 1.5); c.lineTo(bl[0] + tpx * sw * 1.5, bl[1] + tpy * sw * 1.5); c.lineWidth = h * .02; c.strokeStyle = '#FFFFFF'; c.stroke();
+  }
   c.restore();
 }
-function drawApron(c, J, o, lw, front) {
-  const n = J.neck, hp = J.hip, h = J.h, f = J.f;
+function drawApron(c, J, o, lw, front, out, olw, mode, col) {
+  const n = J.sh, hp = J.hip, h = J.h, f = J.f;
   const ang = Math.atan2(hp[0] - n[0], hp[1] - n[1]);
-  c.save(); c.translate(lerp(n[0], hp[0], .18), lerp(n[1], hp[1], .18)); c.rotate(-ang);
-  c.fillStyle = o.apronCol || '#2E8A57'; const w = front ? h * .09 : h * .06;
-  rr(c, (front ? -w : (f > 0 ? -w * .3 : -w * 1.7)), 0, w * 2, h * .36, h * .02); c.fill();
+  const ac = mode === 'tint' ? mixh(o.apronCol || '#2E8A57', col, .38) : mode === 'mono' ? col : (o.apronCol || '#2E8A57');
+  c.save(); c.translate(lerp(n[0], hp[0], .1), lerp(n[1], hp[1], .1)); c.rotate(-ang);
+  const w = front ? h * .075 : h * .05, x0 = front ? -w : (f > 0 ? -w * .15 : -w * 1.85), H2 = h * .34;
+  rr(c, x0, 0, w * 2, H2, h * .02);
+  if (out) { c.strokeStyle = out; c.lineWidth = olw; c.stroke(); }
+  c.fillStyle = ac; c.fill();
+  if (mode !== 'mono') { c.fillStyle = 'rgba(255,255,255,.18)'; rr(c, x0 + w * .45, H2 * .5, w * 1.1, H2 * .22, h * .008); c.fill(); }
   c.restore();
 }
 /* Elde tutulan nesneler */
@@ -958,6 +1262,8 @@ CAPST.top = function (c, o, t) {
   c.restore();
 };
 /* Konuşma balonu */
+/* açık balon zemininde okunur koyu vurgu tonları */
+const QMARK = { '*': '#B8400A', '^': '#0B6E8A', '~': '#C81E3A', '=': '#178A3E', '#': '#C81E3A', '%': '#9A6A00' };
 CAPST.quote = function (c, o, t) {
   const lt = t - o.s, a = capAlpha(o, t), k = E.outB(clamp(lt / .35));
   const size = o.size || 92, lines = o._p || (o._p = parseRich(o.text));
@@ -980,7 +1286,7 @@ CAPST.quote = function (c, o, t) {
     ws.forEach(w => {
       const vis = o.type ? clamp((lt - .1) * (o.wps || 5) - wi) : 1; wi++;
       const ww = mw(c, w.w);
-      if (vis > 0) { c.globalAlpha = a * vis; c.fillStyle = w.mk ? (MARK[w.mk] === 'BOX' ? C.red : (w.mk === '*' ? '#D9820F' : MARK[w.mk])) : fg; c.fillText(w.w, xx, yy + (1 - vis) * 20); }
+      if (vis > 0) { c.globalAlpha = a * vis; c.fillStyle = w.mk ? (QMARK[w.mk] || fg) : fg; c.fillText(w.w, xx, yy + (1 - vis) * 20); }
       xx += ww + sp;
     });
   });
@@ -2086,7 +2392,7 @@ function drawDedeFurniture(c, o, t, L) {
   if (o.paper) { c.fillStyle = C.paper; c.save(); c.translate(1300, 1250); c.rotate(-.06); c.fillRect(-130, -8, 260, 14); c.restore(); }
   // koltuk
   if (o.chair !== false) { c.fillStyle = '#5A2A2A'; rr(c, 2280, 1180, 360, 480, 40); c.fill(); c.fillStyle = '#6E3434'; rr(c, 2260, 1380, 400, 120, 30); c.fill(); }
-  if (o.dede) { const d = o.dede; stick(c, d.x || 1500, d.y || 1660, d.h || 860, d.pose || POSE.sitDesk, Object.assign({ ch: 'dede', f: d.f || 1, t }, d.o || {})); }
+  if (o.dede) { const d = o.dede, dp = d.pose || POSE.sitDesk, dx = d.x || 1500; const seated = dp.l1 > 1.1 && dp.k1 > 1.1 && dp.l2 > 1.1; stick(c, dx, d.y || 1660, d.h || 860, dp, Object.assign({ ch: 'dede', f: d.f || 1, t, seat: seated && (o.chair === false || Math.abs(dx - 2460) > 380) }, d.o || {})); }
   if (o.sen) { const s = o.sen; stick(c, s.x || 2700, s.y || 1680, s.h || 820, s.pose || POSE.stand, Object.assign({ ch: 'sen', f: s.f || -1, t }, s.o || {})); }
 }
 function drawGlasses(c, x, y, s, o = {}) {
@@ -2226,7 +2532,7 @@ function drawSection(c, o = {}) {
       additive(c, () => glow(c, bx + 1100, y + 180, 600, C.amber, .4));
       c.fillStyle = '#4A2E18'; c.fillRect(bx + 900, y + 190, 420, 16);
       drawTransmitter(c, bx + 940, y + 110, 160, { on: 1, t, keyed: (o.keyed != null ? o.keyed : (Math.sin(t * 14) > 0)) });
-      if (!o.noDede) stick(c, bx + 1300, y + fh - 22, 230, POSE.sitDesk, { ch: 'dede', f: -1, t, col: '#EDE6DA' });
+      if (!o.noDede) stick(c, bx + 1300, y + fh - 22, 230, POSE.sitDesk, { ch: 'dede', f: -1, t, col: '#EDE6DA', seat: 1 });
       if (o.dedeWhite) additive(c, () => { c.fillStyle = rgba('#FFFFFF', .95 * o.dedeWhite); c.fillRect(bx, y, bw, fh - 20); glow(c, bx + bw / 2, y + fh / 2, 1400 * o.dedeWhite, C.ice, .9 * o.dedeWhite); });
     }
     // pencere
@@ -2727,12 +3033,12 @@ function tracer(c, x1, y1, x2, y2, k, col = C.orange, w = 10) {
 const V = (x, lt, d, p) => (typeof x === 'function' ? x(lt, d, p) : x);
 function drawChars(c, chars, lt, d, dflt = {}) {
   if (!chars) return;
-  for (const ch0 of chars) {
-    const o = Object.assign({}, dflt, ch0);
+  for (let ci = 0; ci < chars.length; ci++) {
+    const o = Object.assign({ seed: ci * 1.618 + 3 }, dflt, chars[ci]);
     if (o.from != null && lt < o.from) continue;
     const x = V(o.x, lt, d), y = V(o.y, lt, d), h = V(o.h, lt, d);
     let pose = V(o.pose, lt, d) || 'stand'; if (typeof pose === 'string') pose = POSE[pose] || POSE.stand;
-    if (o.breath !== false) pose = breathe(pose, lt, .7, (x || 0) * .013);
+    if (o.breath === false) o.life = false;
     const face = V(o.face, lt, d), hold = V(o.hold, lt, d);
     stick(c, x != null ? x : CX, y != null ? y : 1720, h || 700, pose, Object.assign({}, o, { face: face ? Object.assign({ t: lt }, face) : face, hold, t: lt, f: V(o.f, lt, d) || 1 }));
   }
@@ -3172,7 +3478,7 @@ defR('highway', (c, lt, d, p, cam, t) => {
     for (const [i, k] of people) {
       const kk = k * k, y = lerp(960, H + 300, kk), x = CX + (hash(i * 3.1) - .5) * lerp(200, 5200, kk), h = lerp(30, 900, kk);
       const ph = lt * 7 + i;
-      stick(c, x, y, h, walkP(ph, .8), { ch: ['sen', 'plain', 'teyze', 'cocuk', 'plain', 'teyze2', 'huseyin'][i % 7], f: -1, col: '#F2EEE6', face: h > 250 ? { mouth: 'flat' } : false, hold: (i % 3 === 0) ? { type: 'suitcase', col: ['#B5462F', '#2F6FB5', '#3A3A3A'][i % 3] } : null });
+      stick(c, x, y, h, walkP(ph, .8), { seed: i, ch: ['plain', 'plain', 'teyze', 'cocuk', 'plain', 'teyze2', 'plain'][i % 7], f: -1, col: '#F2EEE6', face: h > 250 ? { mouth: 'flat' } : false, hold: (i % 3 === 0) ? { type: 'suitcase', col: ['#B5462F', '#2F6FB5', '#3A3A3A'][i % 3] } : null });
     }
   }
   if (o.post) o.post(c, lt, t);
@@ -3183,7 +3489,7 @@ defR('stall', (c, lt, d, p, cam, t) => {
   c.fillStyle = vgrad(c, 0, H, [[0, '#9AA4B0'], [.55, '#D2CBBE'], [.56, '#5A5C60'], [1, '#3A3C40']]); c.fillRect(-1200, -1200, W + 2400, H + 2400);
   drawShip(c, CX - 600, 150, 3600, { t, glow: .3 });
   // arka planda yürüyenler
-  for (let i = 0; i < 26; i++) { const x = ((hash(i) * 5000 - lt * 120) % 5000 + 5000) % 5000 - 600; stick(c, x, 1250, 260, walkP(lt * 6 + i, .7), { ch: 'plain', f: -1, col: '#E6E2DA', face: false }); }
+  for (let i = 0; i < 26; i++) { const x = ((hash(i) * 5000 - lt * 120) % 5000 + 5000) % 5000 - 600; stick(c, x, 1250, 260, walkP(lt * 6 + i, .7), { seed: i, ch: 'plain', f: -1, col: '#E6E2DA', face: false }); }
   stick(c, 2350, 1560, 900, poseSeq([[0, POSE.talk], [.6, POSE.shout], [1.2, POSE.talk], [1.8, POSE.shout]], lt % 2.4), { ch: 'cayci', f: -1, t, face: { mouth: V(o.shouting, lt, d) ? 'scream' : 'smile', mo: Math.abs(Math.sin(t * 8)), brow: .3 }, hold: { type: 'tea' } });
   // tezgah
   c.fillStyle = '#7A4A26'; c.fillRect(1400, 1300, 1500, 70); c.fillStyle = '#5A3418'; c.fillRect(1440, 1370, 1420, 500);
@@ -3276,7 +3582,7 @@ defR('meeting', (c, lt, d, p, cam, t) => {
   // masa (perspektif)
   c.fillStyle = '#5A3A22'; c.beginPath(); c.moveTo(CX - 500, 1150); c.lineTo(CX + 500, 1150); c.lineTo(CX + 1700, H + 200); c.lineTo(CX - 1700, H + 200); c.fill();
   c.fillStyle = '#6E4A2C'; c.beginPath(); c.moveTo(CX - 470, 1160); c.lineTo(CX + 470, 1160); c.lineTo(CX + 1550, H + 200); c.lineTo(CX - 1550, H + 200); c.fill();
-  for (let i = 0; i < 5; i++) for (const s of [-1, 1]) { const k = i / 4, y = lerp(1250, 2000, k), x = CX + s * lerp(620, 1900, k), h = lerp(330, 900, k); stick(c, x, y + h * .45, h, POSE.sitDesk, { ch: 'uzman', f: -s, t: t + i, col: '#E6E2DA', face: h > 500 ? { mouth: 'flat', brow: -.4 } : false }); c.fillStyle = '#F2EAD8'; c.fillRect(x - s * h * .25 - 40, y + h * .02, 80, 50); }
+  for (let i = 0; i < 5; i++) for (const s of [-1, 1]) { const k = i / 4, y = lerp(1250, 2000, k), x = CX + s * lerp(620, 1900, k), h = lerp(330, 900, k); stick(c, x, y + h * .45, h, POSE.sitDesk, { seed: i, ch: 'uzman', f: -s, t: t + i, col: '#E6E2DA', seat: 1, face: h > 500 ? { mouth: 'flat', brow: -.4 } : false }); c.fillStyle = '#F2EAD8'; c.fillRect(x - s * h * .25 - 40, y + h * .02, 80, 50); }
   if (o.post) o.post(c, lt, t);
 });
 /* ---------- DEPO / UÇAKSAVAR ---------- */
@@ -3401,7 +3707,7 @@ defR('pasture', (c, lt, d, p, cam, t) => {
     const ly = by - lift * (300 + hash(i * 5) * 400), rot = lift * (hash(i * 7) - .5) * .8;
     drawSheep(c, bx, ly, 220 + Math.floor(i / 8) * 60, { t: t + i, f: look > .5 ? 1 : (hash(i * 9) > .5 ? 1 : -1), rot, up: look > .5, dangle: lift > .1, glowEye: look > .5 });
   }
-  if (o.coban) stick(c, V(o.coban, lt, d), 1640, 700, runP(lt * 9), { ch: 'coban', f: -1, t, face: { eye: 'wide', mouth: 'scream' }, hold: { type: 'staff' } });
+  if (o.coban) stick(c, V(o.coban, lt, d), 1640, 700, runP(lt * 9), { ch: 'coban', f: -1, t, face: { eye: 'wide', mouth: 'scream' }, hold: { type: 'staff', hand: 1, behind: 1 } });
   if (o.post) o.post(c, lt, t);
 });
 /* ---------- MADEN ---------- */
@@ -3453,7 +3759,7 @@ defR('radar', (c, lt, d, p, cam, t) => {
   c.strokeStyle = 'rgba(124,255,154,.25)'; c.lineWidth = 3; for (let i = 1; i <= 4; i++) { circ(c, x, y, R * i / 4); c.stroke(); } line(c, x - R, y, x + R, y); line(c, x, y - R, x, y + R);
   const a = t * 1.6; if (c.createConicGradient) { const g = c.createConicGradient(a - .8, x, y); g.addColorStop(0, 'rgba(124,255,154,0)'); g.addColorStop(.12, 'rgba(124,255,154,.45)'); g.addColorStop(.121, 'rgba(124,255,154,0)'); c.fillStyle = g; circ(c, x, y, R); c.fill(); }
   additive(c, () => { for (let i = 0; i < 6; i++) { const ba = hash(i * 3) * TAU, br = R * (.3 + hash(i) * .6); const age = ((a - ba) % TAU + TAU) % TAU; glow(c, x + Math.cos(ba) * br, y + Math.sin(ba) * br, 40, '#7CFF9A', Math.max(0, 1 - age / 3)); } });
-  stick(c, o.sx || 1000, 1700, 1100, POSE.sitDesk, { ch: 'gencRiza', f: 1, t, col: '#D8CDB4', face: { mouth: 'flat', brow: -.3, shine: o.shine || 0 } });
+  stick(c, o.sx || 1000, 1700, 1100, POSE.sitDesk, { ch: 'gencRiza', f: 1, t, col: '#D8CDB4', seat: 1, face: { mouth: 'flat', brow: -.3, shine: o.shine || 0 } });
   if (o.year) txt(c, o.year, 500, 260, { f: 'mono', s: 120, w: 800, c: rgba('#E8D9A8', .7), ls: 20 });
   c.fillStyle = 'rgba(80,60,20,.12)'; c.fillRect(-1200, -1200, W + 2400, H + 2400);
   if (o.post) o.post(c, lt, t);
@@ -3466,7 +3772,7 @@ defR('noshadow', (c, lt, d, p, cam, t) => {
   for (let i = -7; i <= 7; i++) { c.strokeStyle = 'rgba(255,240,180,.35)'; c.lineWidth = 6; c.setLineDash([30, 20]); line(c, CX, 80, CX + i * 280, 1750); } c.setLineDash([]);
   drawShip(c, CX, 750, 2600, { t, glow: .25 });
   c.fillStyle = '#A9A08C'; c.fillRect(-1200, 1750, W + 2400, 600);
-  for (let i = 0; i < 7; i++) { const x = 400 + i * 500; stick(c, x, 1760, 420, POSE.lookupF, { ch: ['huseyin', 'imam', 'nermin', 'simitci', 'sen', 'plain', 'teyze'][i], view: 'front', t, face: { eye: 'wide', mouth: 'o', up: 1 } }); c.fillStyle = 'rgba(0,0,0,.25)'; c.beginPath(); c.ellipse(x, 1770, 90, 20, 0, 0, TAU); c.fill(); }
+  for (let i = 0; i < 7; i++) { const x = 400 + i * 500; stick(c, x, 1760, 420, POSE.lookupF, { seed: i, ch: ['huseyin', 'imam', 'nermin', 'simitci', 'sen', 'plain', 'teyze'][i], view: 'front', t, face: { eye: 'wide', mouth: 'o', up: 1 } }); c.fillStyle = 'rgba(0,0,0,.25)'; c.beginPath(); c.ellipse(x, 1770, 90, 20, 0, 0, TAU); c.fill(); }
   const k = clamp((lt - .5) / .4);
   c.strokeStyle = rgba(C.red, k); c.lineWidth = 10; c.setLineDash([40, 26]); c.lineDashOffset = -t * 60; c.beginPath(); c.ellipse(CX, 1830, 1300, 110, 0, 0, TAU); c.stroke(); c.setLineDash([]);
   if (o.post) o.post(c, lt, t);
@@ -3507,7 +3813,7 @@ defR('soup', (c, lt, d, p, cam, t) => {
   c.strokeStyle = 'rgba(255,255,255,.25)'; c.lineWidth = 26; for (let i = 0; i < 4; i++) { c.beginPath(); c.moveTo(1300 + i * 130, 1100); c.bezierCurveTo(1200 + i * 130, 900 - Math.sin(t * 2 + i) * 60, 1450 + i * 130, 800, 1350 + i * 130, 560); c.stroke(); }
   if (o.teyze !== false) stick(c, 2300, 1720, 1000, V(o.tpose, lt, d) || POSE.talk2, { ch: 'teyze', f: -1, t, face: V(o.tface, lt, d) || { mouth: 'smile', eye: 'happy' }, hold: { type: 'ladle' } });
   if (o.bowl) { const k = V(o.bowl, lt, d); const bx = 2850, by = 1450; c.fillStyle = '#F2EAD8'; c.beginPath(); c.arc(bx, by, 230, 0, PI); c.fill(); c.fillStyle = '#E08A2E'; c.beginPath(); c.ellipse(bx, by, 225, 50, 0, 0, TAU); c.fill(); if (k > 1) { c.fillStyle = '#E08A2E'; c.beginPath(); c.moveTo(bx - 230, by); c.quadraticCurveTo(bx - 250, by + 120, bx - 260, by + 260); c.lineTo(bx - 220, by + 260); c.quadraticCurveTo(bx - 210, by + 100, bx - 200, by); c.fill(); } }
-  if (o.queue) for (let i = 0; i < 6; i++) stick(c, 3300 + i * 260, 1720, 700, POSE.hold, { ch: ['plain', 'teyze2', 'cocuk', 'huseyin', 'imam', 'plain'][i], f: -1, t: t + i, face: { mouth: 'smile' }, hold: { type: 'bowl' } });
+  if (o.queue) for (let i = 0; i < 6; i++) stick(c, 3300 + i * 260, 1720, 700, POSE.hold, { seed: i, ch: ['plain', 'teyze2', 'cocuk', 'huseyin', 'imam', 'plain'][i], f: -1, t: t + i, face: { mouth: 'smile' }, hold: { type: 'bowl' } });
   if (o.post) o.post(c, lt, t);
 });
 /* ---------- MAKAS (elektrik vs ısrar) ---------- */
@@ -3570,7 +3876,7 @@ defR('tv', (c, lt, d, p, cam, t) => {
       for (let i = 0; i < n; i++) {
         const x0 = i * w / n; g.fillStyle = ['#183A66', '#1E2E5A', '#2A1E4A'][i % 3]; g.fillRect(x0 + 8, 8, w / n - 16, h * .78);
         const act = o.act === i, gone = o.gone === i && lt > (o.goneAt || 0);
-        if (!gone) stick(g, x0 + w / n / 2 + (o.walk === i ? (lt - (o.walkAt || 0)) * 1400 * (lt > (o.walkAt || 0)) : 0), h * .9, h * .7, act ? (V(o.apose, lt, d) || POSE.talk2) : (o.walk === i && lt > (o.walkAt || 0) ? walkP(lt * 9) : POSE.sitDesk), { ch: 'uzman', tieCol: [C.green, C.red, C.violet][i], f: o.walk === i && lt > (o.walkAt || 0) ? 1 : (i === 0 ? 1 : i === 2 ? -1 : 1), t, face: act ? Object.assign({ mouth: 'talk', t }, (o.faces || [])[i] || {}) : ((o.faces || [])[i] || { mouth: 'flat' }) });
+        if (!gone) stick(g, x0 + w / n / 2 + (o.walk === i ? (lt - (o.walkAt || 0)) * 1400 * (lt > (o.walkAt || 0)) : 0), h * .9, h * .7, act ? (V(o.apose, lt, d) || POSE.talk2) : (o.walk === i && lt > (o.walkAt || 0) ? walkP(lt * 9) : POSE.sitDesk), { seed: i, ch: 'uzman', shirt: ['#8A97B0', '#B0846A', '#7FA592'][i % 3], pants: ['#5E6A82', '#7E5E4A', '#5A7A6A'][i % 3], tieCol: [C.green, C.red, C.violet][i], f: o.walk === i && lt > (o.walkAt || 0) ? 1 : (i === 0 ? 1 : i === 2 ? -1 : 1), t, face: act ? Object.assign({ mouth: 'talk', t }, (o.faces || [])[i] || {}) : ((o.faces || [])[i] || { mouth: 'flat' }) });
         else { g.fillStyle = 'rgba(255,255,255,.08)'; icon(g, 'chair', x0 + w / n / 2, h * .62, 260, 'rgba(255,255,255,.35)'); }
         g.fillStyle = 'rgba(0,0,0,.6)'; g.fillRect(x0 + 30, h * .66, w / n - 60, 70);
         txt(g, 'UZMAN ' + (i + 1), x0 + w / n / 2, h * .66 + 37, { f: 'inter', s: 44, w: 900, c: '#FFFFFF', ls: 6 });
@@ -3720,7 +4026,7 @@ defR('nato', (c, lt, d, p, cam, t) => {
   drawBG(c, 'blue', t);
   if (o.view === 'table') {
     c.fillStyle = '#1E3A66'; c.beginPath(); c.ellipse(CX, 1300, 1500, 520, 0, 0, TAU); c.fill(); c.fillStyle = '#0B1A33'; c.beginPath(); c.ellipse(CX, 1300, 1000, 320, 0, 0, TAU); c.fill();
-    for (let i = 0; i < 16; i++) { const a = i / 16 * TAU; const x = CX + Math.cos(a) * 1650, y = 1300 + Math.sin(a) * 620; if (Math.sin(a) < -.2) continue; stick(c, x, y + 250, 430, POSE.sitDesk, { ch: 'uzman', f: Math.cos(a) > 0 ? -1 : 1, t: t + i, col: '#DDE3EE', face: false, tieCol: [C.red, C.blue, C.gold, C.green][i % 4] }); }
+    for (let i = 0; i < 16; i++) { const a = i / 16 * TAU; const x = CX + Math.cos(a) * 1650, y = 1300 + Math.sin(a) * 620; if (Math.sin(a) < -.2) continue; stick(c, x, y + 250, 430, POSE.sitDesk, { seed: i, ch: 'uzman', f: Math.cos(a) > 0 ? -1 : 1, t: t + i, col: '#DDE3EE', seat: 1, face: false, tieCol: [C.red, C.blue, C.gold, C.green][i % 4] }); }
     // pusula yıldızı
     c.save(); c.translate(CX, 1300); c.rotate(t * .1); c.fillStyle = '#FFFFFF'; for (let i = 0; i < 4; i++) { c.rotate(PI / 2); c.beginPath(); c.moveTo(0, 0); c.lineTo(40, -40); c.lineTo(0, -230); c.lineTo(-40, -40); c.closePath(); c.fill(); } c.restore();
     txt(c, 'NATO', CX, 440, { f: 'unb', s: 200, w: 900, c: C.white, ls: 30 });
@@ -4048,7 +4354,7 @@ const CZ = (x, y, z0 = 1, z1, x1, y1) => [x, y, z0, x1 != null ? x1 : x, y1 != n
 const ps = keys => lt => poseSeq(keys.map(k => [k[0], typeof k[1] === 'string' ? POSE[k[1]] : k[1]]), lt);
 const mv = (a, b, t0, t1, e = E.ioC) => lt => lerp(a, b, e(clamp((lt - t0) / (t1 - t0))));
 const UPF = { view: 'front', pose: 'lookupF', face: { up: 1, eye: 'wide', mouth: 'o' } };
-const crowdUp = (xs, h = 640, y = 1730, extra = {}) => xs.map((x, i) => Object.assign({ ch: ['plain', 'teyze', 'huseyin', 'imam', 'nermin', 'cocuk', 'teyze2', 'sen', 'plain', 'maden'][i % 10], x, h: h * (.92 + hash(i * 3.1) * .12), y }, UPF, { face: { up: 1, eye: i % 3 ? 'dot' : 'wide', mouth: i % 2 ? 'o' : 'flat' } }, extra));
+const crowdUp = (xs, h = 640, y = 1730, extra = {}) => xs.map((x, i) => Object.assign({ ch: ['plain', 'teyze', 'huseyin', 'imam', 'nermin', 'cocuk', 'teyze2', 'plain', 'plain', 'maden'][i % 10], x, h: h * (.92 + hash(i * 3.1) * .12), y }, UPF, { face: { up: 1, eye: i % 3 ? 'dot' : 'wide', mouth: i % 2 ? 'o' : 'flat' } }, extra));
 // gemi ses halkaları (şehir dünyasında)
 const shipRings = (k = 1) => (c, lt, d, t) => { c.save(); c.strokeStyle = rgba(C.ice, .5 * k); c.lineWidth = 12; for (let i = 0; i < 5; i++) { const ph = (lt * .7 + i / 5) % 1; c.globalAlpha = (1 - ph) * k; c.beginPath(); c.ellipse(0, -560, 1600 + ph * 2600, 300 + ph * 1400, 0, 0, TAU); c.stroke(); } c.restore(); };
 const SHIP0 = { glow: 1 };
@@ -4179,7 +4485,7 @@ const st = (o) => Object.assign({}, ST1, o);
 /* ---------- SAHNE 25 — 1. GÜN ---------- */
 S('25', 'chapter', { n: 1, sub: 'GEMİNİN ALTINDA İLK SABAH', tr: 'black', trd: .35 });
 S('25:sabaha', 'room', { o: { kind: 'bedroom', light: 'alien', curtain: .3, winGlow: .7, fn: lt => { const m = Math.floor(lerp(12, 64, clamp(lt / 1.8))); return { clock: '0' + (3 + Math.floor(m / 60)) + ':' + String(m % 60).padStart(2, '0') }; }, sen: { x: 900, pose: POSE.sit, o: { face: { eye: 'wide', mouth: 'flat', red: .5 } } } }, cam: Z(1300, 1250, 1.3, 1.45), g: 'cold' }, 'SABAHA KADAR GÖZÜNE *UYKU GİRMİYOR*');
-S('25:ağardığında', 'street', { o: st({ chars: [{ ch: 'sen', x: mv(-200, 1500, 0, 2.2, E.lin), h: 760, y: 1760, pose: lt => walkP(lt * 7, .9), f: 1, face: { mouth: 'flat' } }] }), cam: Z(CX, 1250, 1.05, 1.0), tr: 'whip', g: 'cold' }, 'GÜN AĞARDIĞINDA SOKAĞA ÇIKIYORSUN');
+S('25:ağardığında', 'street', { o: st({ chars: [{ ch: 'sen', x: mv(-200, 1500, 0, 2.2, E.lin), h: 760, y: 1760, pose: lt => walkP(lt * 10.5, .9), f: 1, face: { mouth: 'flat' } }] }), cam: Z(CX, 1250, 1.05, 1.0), tr: 'whip', g: 'cold' }, 'GÜN AĞARDIĞINDA SOKAĞA ÇIKIYORSUN');
 /* ---------- SAHNE 26 ---------- */
 S('26', 'street', { o: st({ chars: crowdUp([380, 760, 1150, 1540, 2300, 2700, 3100, 3480], 640, 1760).concat([{ ch: 'sen', x: 1930, h: 700, y: 1770, view: 'front', pose: 'lookupF', face: { up: 1, eye: 'wide', mouth: 'o' } }]) }), cam: Z(CX, 1150, 1.0, 1.08), g: 'cold' }, 'VE BÜTÜN MAHALLENİN DE *DIŞARIDA* OLDUĞUNU GÖRÜYORSUN');
 S('26:herkes', 'street', { o: st({ chars: crowdUp([1100, 1500, 1900, 2300, 2700], 700, 1770) }), cam: Z(1900, 1350, 1.55, 1.7), g: 'cold' }, 'HERKES *AYNI ŞEYİ* YAPIYOR');
@@ -4233,7 +4539,7 @@ S('38:metro', 'typo', Object.assign(deadIcon('metro'), { tr: 'whip' }), { text: 
 S('39', 'typo', Object.assign(deadIcon('elevator'), { tr: 'whipL' }), { text: 'ASANSÖRLER', st: 'slam', size: 280, y: 1820 });
 S('39:hepsi', 'typo', { o: { bg: 'dark', icons: ['phone', 'laptop', 'car', 'traffic', 'metro', 'elevator', 'bus', 'wifi'].map((n, i) => ({ name: n, x: 560 + (i % 4) * 900, y: 560 + Math.floor(i / 4) * 760, s: 360, at: i * .05, cross: .25 + i * .05 })) }, g: 'cold' }, { text: 'HEPSİ ~DURMUŞ~', st: 'slam', size: 260, y: 1960 });
 S('39:sanki', 'plug', { cam: Z(CX, CY, 1.0, 1.06), g: 'cold' }, 'SANKİ BİRİ *ŞEHRİN FİŞİNİ* ÇEKMİŞ');
-S('39:kalabalığın', 'street', { o: st({ mode: 'noon', ship: { y: -330, w: 5400, glow: .2 }, chars: crowdUp([300, 700, 1100, 1500, 3200, 3600], 660, 1760).concat([{ ch: 'dede', x: mv(3900, 2400, 0, 2.6, E.lin), h: 740, y: 1770, f: -1, pose: lt => walkP(lt * 5, .6, POSE.stand), face: { mouth: 'flat', brow: -.2 }, hold: { type: 'radio', s: 1.0 } }]) }), cam: Z(2500, 1250, 1.3, 1.45), g: 'warm' }, 'KALABALIĞIN ARASINDAN...');
+S('39:kalabalığın', 'street', { o: st({ mode: 'noon', ship: { y: -330, w: 5400, glow: .2 }, chars: crowdUp([300, 700, 1100, 1500, 3200, 3600], 660, 1760).concat([{ ch: 'dede', x: mv(3900, 2400, 0, 2.6, E.lin), h: 740, y: 1770, f: -1, pose: lt => walkP(lt * 9.5, .8, POSE.stand), face: { mouth: 'flat', brow: -.2 }, hold: { type: 'radio', s: 1.0 } }]) }), cam: Z(2500, 1250, 1.3, 1.45), g: 'warm' }, 'KALABALIĞIN ARASINDAN...');
 /* ---------- SAHNE 40–43 RIZA DEDE & RADYO ---------- */
 S('40', 'bust', { o: { bg: 'warm', spot: [2400, 700, 1600], chars: [{ ch: 'dede', x: 2450, y: 2950, h: 2550, f: -1, pose: { lean: .02, hd: 0, a1: .7, e1: .9, a2: .8, e2: .8 }, face: { mouth: 'smile', brow: -.2 }, hold: { type: 'radio', s: .9 } }] }, cam: Z(CX, 1000, 1.08, 1.0), tr: 'flash', trc: [1, .8, .5], g: 'amber' }, { text: 'RIZA DEDE|80 YAŞINDA', st: 'name', col: C.amber, size: 230 });
 S('40:emekli', 'bust', { o: { bg: 'blue', chars: [{ ch: 'dede', x: 2500, y: 2900, h: 2500, f: -1, pose: 'salute', face: { mouth: 'flat', brow: -.4 } }], pre: (c, lt, t) => { c.save(); c.translate(900, 900); c.globalAlpha = .9; c.strokeStyle = C.gold; c.lineWidth = 18; for (const s of [-1, 1]) { c.beginPath(); c.moveTo(0, 0); for (let i = 0; i < 6; i++) { c.lineTo(s * (80 + i * 70), -60 + i * 22); c.lineTo(s * (60 + i * 70), 0 + i * 18); } c.stroke(); } c.fillStyle = C.gold; star(c, 0, -10, 70); c.fill(); c.restore(); } }, cam: Z(CX, 1000, 1.0, 1.06), g: 'cold' }, { text: 'EMEKLİ HAVA KUVVETLERİ|ASTSUBAYI', st: 'name', col: C.cyan, size: 170 });
@@ -4583,7 +4889,7 @@ S('148:ve', 'eyes', { o: { open: 1, post: (c, lt, t) => { for (const s of [-1, 1
 /* ---------- SAHNE 149–158: KÜRE ÇATIDA ---------- */
 S('149', 'shipCU', { o: { view: 'belly', mode: 'noon', glow: .35, open: 1, post: (c, lt, t) => { const k = E.inQ(clamp(lt / 2.5)); drawSphere(c, CX + 1300 + k * 300, 640 + k * 1200, 60 + k * 80, { t }); } }, cam: Z(CX + 600, 900, 1.2, 1.35), g: 'cold' }, 'AÇIKLIĞIN KENARINDAN *KÜÇÜK PARLAK BİR KÜRE* AYRILDI');
 S('149:ve', 'roof', { o: { mode: 'noon', ship: { glow: .3, x: CX + 300, y: 200, w: 4000, open: 1 }, sen: { x: 1500, h: 920, pose: 'lookup', o: { face: { up: 1, eye: 'wide', mouth: 'o' }, hold: { type: 'watch' } } }, fn: lt => { const k = E.inQ(clamp(lt / 3)); return { sphere: { x: lerp(2600, 1700, k), y: lerp(500, 1000, k), r: lerp(30, 160, k), cone: 400 } }; } }, cam: Z(1700, 1050, 1.15, 1.35), shake: lt => clamp((lt - 2) / 1) * .3, g: 'cold' }, 'VE DOĞRUCA SENİN BULUNDUĞUN ÇATIYA DOĞRU *SÜZÜLÜYOR*');
-S('150:merdivenlere', 'roof', { o: { mode: 'noon', ship: { glow: .3, x: CX + 300, y: 200, w: 4000, open: 1 }, sphere: { x: 1900, y: 820, r: 180, cone: 600 }, sen: { x: mv(1500, 250, 0, 1.4, E.inQ), h: 920, f: -1, pose: lt => runP(lt * 11), o: { face: { eye: 'wide', mouth: 'scream' } } } }, cam: Z(1100, 1150, 1.15, 1.25), shake: .35, g: 'cold' }, 'MERDİVENLERE *ATLIYORSUN*');
+S('150:merdivenlere', 'roof', { o: { mode: 'noon', ship: { glow: .3, x: CX + 300, y: 200, w: 4000, open: 1 }, sphere: { x: 1900, y: 820, r: 180, cone: 600 }, sen: { x: mv(1500, 250, 0, 1.4, E.inQ), h: 920, f: -1, pose: lt => runP(lt * 7.5), o: { face: { eye: 'wide', mouth: 'scream' } } } }, cam: Z(1100, 1150, 1.15, 1.25), shake: .35, g: 'cold' }, 'MERDİVENLERE *ATLIYORSUN*');
 S('150:çatı', 'stairs', { o: { gap: lt => lt > .15 ? 1 : 0, sen: { x: 2300, y: 1960, h: 900, pose: 'crouch', o: { face: { eye: 'wide', mouth: 'o' } } } }, cam: Z(1500, 1000, 1.2, 1.1), tr: 'none', g: 'cold' }, [{ text: 'ÇAT!', st: 'slam', size: 420, x: 760, y: 560, d: .7 }, { text: 'ÇATI KAPISINI ARKANDAN *ÇARPIYORSUN*' }]);
 EV('150:çatı', 'shake', 1.6, .6); EV('150:çatı', 'flash', .6, .25);
 S('150:kapının', 'stairs', { o: { gap: 1, fn: lt => ({ scan: (lt * .45) % 1 }), sen: { x: 2300, y: 1960, h: 900, pose: 'crouch', o: { face: { eye: 'wide', mouth: 'flat', look: [-1, -.5] } } } }, cam: Z(800, 1000, 1.7, 1.85), g: 'cold' }, 'KAPININ ARALIĞINDAN KÜRENİN IŞIĞININ ÇATIYI *BİR UÇTAN BİR UCA* TARADIĞINI GÖRÜYORSUN');
@@ -4599,7 +4905,7 @@ S('154:ağzını', 'bust', { o: { bg: 'dark', bgo: { c1: '#16202E' }, chars: [{ 
 S('155:sonra', 'stairs', { o: { fn: lt => ({ gap: 1 - clamp(lt / .8), seep: 1 - clamp(lt / .8) }), sen: { x: 2300, y: 1960, h: 900, pose: 'crouch', o: { face: { eye: 'wide' } } } }, cam: Z(1500, 1300, 1.2, 1.25), g: 'dark' }, 'SONRA IŞIK *SÖNÜYOR*');
 S('155:küre', 'city', { o: { mode: 'noon', power: 0, ship: { glow: .3, open: 1 } }, over: (c, lt, d, t) => { const k = E.inQ(clamp(lt / 1.6)); drawSphere(c, lerp(-900, -100, k), lerp(350, -500, k), lerp(40, 14, k), { t }); }, cam: CZ(-400, -100, 1.5, 1.4), g: 'bleach' }, 'KÜRE GERİ DÖNÜYOR');
 S('155:seni', 'stairs', { o: { gap: 0, seep: 0, sen: { x: 2300, y: 1960, h: 900, pose: 'slump', o: { face: { eye: 'closed', mouth: 'flat' } } } }, cam: Z(2200, 1500, 1.5, 1.6), g: 'dark' }, { text: 'SENİ BULAMADI...|*BU SEFER.*', st: 'big', size: 210, y: 1800, ce: '156:ama' });
-S('156:ama', 'stairs', { o: { gap: 0, seep: 0, sen: { x: mv(1700, 2600, 0, 2.5, E.lin), y: mv(1660, 1960, 0, 2.5, E.lin), h: 900, f: 1, pose: lt => walkP(lt * 4, .6, POSE.slump), o: { face: { mouth: 'flat', brow: .6 } } } }, cam: Z(2200, 1500, 1.3, 1.35), g: 'dark' }, 'AMA AŞAĞI İNERKEN *BİR ŞEY* KAFANI KURCALIYOR');
+S('156:ama', 'stairs', { o: { gap: 0, seep: 0, sen: { x: mv(1700, 2600, 0, 2.5, E.lin), y: mv(1660, 1960, 0, 2.5, E.lin), h: 900, f: 1, pose: lt => walkP(lt * 6.5, .6, POSE.slump), o: { face: { mouth: 'flat', brow: .6 } } } }, cam: Z(2200, 1500, 1.3, 1.35), g: 'dark' }, 'AMA AŞAĞI İNERKEN *BİR ŞEY* KAFANI KURCALIYOR');
 S('156:sen', 'typo', { o: { bg: 'dark', icon: { name: 'antenna', s: 600, col: C.white, cross: .3 } }, g: 'cold' }, { text: 'SEN BUGÜN *YAYIN YAPMADIN.*', st: 'big', size: 210, y: 1850 });
 S('156:tek', 'typo', { o: { bg: 'dark', icon: { name: 'speaker', s: 600, col: C.white, mute: 1 } }, g: 'cold' }, 'TEK KELİME *ETMEDİN.*');
 S('157:belki', 'typo', { o: { bg: 'red', draw: (c, lt, t) => { c.save(); c.strokeStyle = C.white; c.lineWidth = 34; c.beginPath(); c.moveTo(CX - 1100, 950); c.quadraticCurveTo(CX, 300, CX + 1100, 950); c.quadraticCurveTo(CX, 1600, CX - 1100, 950); c.stroke(); c.restore(); drawSphere(c, CX + Math.sin(t * 1.5) * 120, 950, 230, { t }); } }, g: 'red' }, 'BELKİ *SENİ GÖRDÜ*...');
@@ -4655,14 +4961,14 @@ S('173', 'typo', { o: { bg: 'radio', draw: (c, lt, t) => { txt(c, '00:40', CX, 7
 S('173:dede', 'room', { o: { kind: 'dede', light: 'radio', radioOn: .4, tx: 1, key: 1, curtain: 0, winGlow: 0, chair: false, dede: { x: 1700, y: 1690, h: 880, f: 1, pose: { lean: .05, hd: .1, a1: .3, e1: .3, a2: 1.45, e2: .1 }, o: { face: { mouth: 'smile', brow: -.2 }, hold: { type: 'flashlight', rot: 0 }, hold1: { type: 'watch' } } }, sen: { x: 2350, y: 1690, h: 840, f: -1, pose: { lean: .05, a1: .2, e1: .3, a2: 1.4, e2: .2 }, o: { face: { mouth: 'flat', brow: .6 } } } }, cam: Z(2000, 1150, 1.6, 1.75), g: 'amber' }, 'DEDE SANA EL FENERİNİ VE CEP SAATİNİ *UZATIYOR*');
 S('173:sen', 'bust', { o: { bg: 'radio', chars: [{ ch: 'dede', x: 2500, y: 2950, h: 2600, f: -1, pose: 'talk', face: { mouth: 'talk', brow: -.6 } }] }, cam: Z(CX, 1000, 1.0, 1.06), g: 'amber' }, { text: 'SEN ÇATIYA ÇIK.|*YAYINI BEN YAPARIM.*', st: 'quote', x: 1150, y: 650, tx: 1900, ty: 950, size: 120, ce: '174:dede' });
 S('174:dede', 'bust', { o: { bg: 'radio', chars: [{ ch: 'sen', x: 1300, y: 2950, h: 2600, f: 1, pose: 'talk2', face: { eye: 'wide', mouth: 'talk', brow: 1, tear: .4 } }] }, cam: Z(CX, 1000, 1.0, 1.06), g: 'amber' }, { text: 'DEDE, BU KADAR UZUN YAYIN YAPARSAN|*SENİ BULURLAR!*', st: 'quote', x: 2780, y: 480, tx: 1900, ty: 950, size: 100, ce: '174:dede#2' });
-S('174:dede#2', 'bust', { o: { bg: 'radio', chars: [{ ch: 'dede', x: CX, y: 3200, h: 3000, view: 'front', pose: { lean: 0, hd: 0, a1: .14, e1: .06, a2: 2.4, e2: 2.4 }, face: { mouth: 'flat', brow: -.3 } }] }, cam: Z(CX, 650, 1.35, 1.5), g: 'amber' }, 'DEDE GÖZLÜĞÜNÜ *DÜZELTİYOR*');
+S('174:dede#2', 'bust', { o: { bg: 'radio', chars: [{ ch: 'dede', x: CX, y: 3200, h: 3000, view: 'front', pose: { lean: 0, hd: 0, a1: .14, e1: .06, a2: 2.4, e2: 2.4, tk2: 1, tx2: .1, ty2: -.04 }, face: { mouth: 'flat', brow: -.3 } }] }, cam: Z(CX, 650, 1.35, 1.5), g: 'amber' }, 'DEDE GÖZLÜĞÜNÜ *DÜZELTİYOR*');
 S('175:bulsunlar', 'bust', { o: { bg: 'radio', chars: [{ ch: 'dede', x: 2450, y: 2950, h: 2600, f: -1, pose: 'armsCross', face: { mouth: 'smile', brow: -.6 } }] }, cam: Z(CX, 1000, 1.06, 1.0), g: 'amber' }, { text: 'BULSUNLAR.', st: 'quote', x: 1250, y: 650, tx: 1900, ty: 950, size: 170 });
 S('175:onlar', 'bust', { o: { bg: 'radio', chars: [{ ch: 'dede', x: 2450, y: 2950, h: 2600, f: -1, pose: 'talk', face: { mouth: 'talk', brow: -.4 } }, { ch: 'sen', x: 900, y: 3050, h: 2300, f: 1, pose: 'stand', face: { mouth: 'flat', brow: .8, tear: .5 } }] }, cam: Z(CX, 1000, 1.0, 1.06), g: 'amber' }, { text: 'ONLAR BANA BAKARKEN,|*SEN GÖKYÜZÜNE BAKACAKSIN.*', st: 'quote', x: 1700, y: 400, tx: 2250, ty: 760, size: 105 });
 S('176', 'bust', { o: { bg: 'radio', chars: [{ ch: 'sen', x: 1500, y: 2700, h: 2000, f: 1, pose: 'stand', face: { mouth: 'flat', brow: .7, tear: .8 } }, { ch: 'dede', x: 2500, y: 2750, h: 2100, f: -1, pose: { lean: .08, hd: .15, a1: -.1, e1: .1, a2: 1.35, e2: .55 }, face: { mouth: 'smile', eye: 'closed' } }] }, cam: Z(2000, 1100, 1.0, 1.08), g: 'amber' }, 'ELİNİ *OMZUNA* KOYUYOR');
 S('176:gençken', 'bust', { o: { bg: 'sepia', pre: (c, lt, t) => { drawTRFlag(c, 1900, 300, 700, t, 1); c.fillStyle = '#5A4A34'; c.fillRect(2230, 300, 22, 1700); }, chars: [{ ch: 'gencRiza', x: 1200, y: 2600, h: 2000, f: 1, pose: 'salute', face: { mouth: 'flat', brow: -.5 }, col: '#E8D9B8' }] }, tr: 'flash', trc: [1, .85, .6], g: 'warm', fx: { sat: .75 } }, { text: 'GENÇKEN BU ÜLKENİN GÖĞÜNÜ|KORUYACAĞIMA *YEMİN ETTİM.*', st: 'quote', x: 2600, y: 1550, tx: 1700, ty: 1300, size: 95 });
 S('176:seksen', 'bust', { o: { bg: 'radio', chars: [{ ch: 'dede', x: 2450, y: 2950, h: 2600, f: -1, pose: 'relax', face: { mouth: 'bitter', eye: 'closed' } }] }, cam: Z(CX, 1000, 1.0, 1.06), g: 'amber' }, { text: 'SEKSEN YAŞINDA BİRAZ GEÇ KALMIŞ BİR YEMİN BU...', st: 'quote', x: 1250, y: 650, tx: 1900, ty: 950, size: 92, ce: '177:ama' });
 S('177:ama', 'bust', { o: { bg: 'radio', chars: [{ ch: 'dede', x: CX, y: 3100, h: 2900, view: 'front', pose: 'frontStand', face: { mouth: 'flat', brow: -1, shine: .7 } }] }, cam: Z(CX, 700, 1.2, 1.35), g: 'amber' }, { text: 'AMA YEMİN *YEMİNDİR.*', st: 'big', size: 280, y: 1850 });
-S('177:çatıya', 'stairs', { o: { gap: .4, seep: 0, sen: { x: mv(2600, 1500, 0, 2, E.lin), y: mv(1960, 1500, 0, 2, E.lin), h: 900, f: -1, pose: lt => walkP(lt * 5, .8), o: { face: { mouth: 'flat', brow: -.6 }, hold: { type: 'flashlight', rot: 1.2 } } } }, cam: Z(1800, 1350, 1.2, 1.3), g: 'cold' }, 'ÇATIYA ÇIKIYORSUN');
+S('177:çatıya', 'stairs', { o: { gap: .4, seep: 0, sen: { x: mv(2600, 1500, 0, 2, E.lin), y: mv(1960, 1500, 0, 2, E.lin), h: 900, f: -1, pose: lt => walkP(lt * 7, .8), o: { face: { mouth: 'flat', brow: -.6 }, hold: { type: 'flashlight', rot: 1.2 } } } }, cam: Z(1800, 1350, 1.2, 1.3), g: 'cold' }, 'ÇATIYA ÇIKIYORSUN');
 /* ---------- SAHNE 178–185: SON YAYIN ---------- */
 S('177:aşağıdan', 'facade', { o: { mode: 'night', ship: { glow: .45, y: -80 }, dedeWin: [1, 1], white: 0 }, cam: Z(1550, 1100, 1.6, 1.75), g: 'dark' }, 'AŞAĞIDAN, PERDENİN ARKASINDAN *MORS ANAHTARININ SESİ* GELİYOR');
 const LAST1 = mseq([['.', '178:tık'], ['.', '178:tık#2'], ['-', '178:tak'], ['.', '178:tık#3'], ['-', '179:tak'], ['.', '179:tık']]);
@@ -4854,7 +5160,7 @@ S('205:bir#2', 'bust', { o: { bg: 'warm', chars: [{ ch: 'teyze2', x: 2500, y: 29
 S('205:üçüncüsü', 'bust', { o: { bg: 'warm', chars: [{ ch: 'teyze', x: 2500, y: 2950, h: 2600, f: -1, pose: 'talk2', face: { eye: 'wide', mouth: 'talk', brow: 1 } }] }, cam: Z(CX, 1000, 1.06, 1.0), tr: 'whipL', g: 'warm' }, [{ text: 'ÜÇÜNCÜSÜ:', d: .8 }, { text: 'ELEKTRİKLER GELDİ!', st: 'quote', x: 1200, y: 650, tx: 1900, ty: 950, size: 140, c: '206' }]);
 S('206:çabuk', 'typo', { o: { bg: 'blue', draw: washer }, cam: Z(CX, 1050, 1.0, 1.08), shake: .15, g: 'cold' }, { text: 'ÇABUK *ÇAMAŞIR MAKİNESİNİ* ÇALIŞTIRIN!', st: 'quote', x: CX, y: 260, tx: CX + 300, ty: 600, size: 115 });
 /* ---------- SAHNE 206–210: DEDENİN ODASI ---------- */
-S('206:ama', 'stairs', { o: { gap: 0, seep: 0, sen: { x: mv(1500, 2700, 0, 1.4, E.lin), y: mv(1500, 1960, 0, 1.4, E.lin), h: 900, f: 1, pose: lt => runP(lt * 12), o: { face: { eye: 'wide', mouth: 'o', brow: 1 } } } }, cam: Z(2100, 1500, 1.25, 1.3), shake: .2, tr: 'whip', g: 'cold' }, 'AMA SEN *KOŞUYORSUN*');
+S('206:ama', 'stairs', { o: { gap: 0, seep: 0, sen: { x: mv(1500, 2700, 0, 1.4, E.lin), y: mv(1500, 1960, 0, 1.4, E.lin), h: 900, f: 1, pose: lt => runP(lt * 8), o: { face: { eye: 'wide', mouth: 'o', brow: 1 } } } }, cam: Z(2100, 1500, 1.25, 1.3), shake: .2, tr: 'whip', g: 'cold' }, 'AMA SEN *KOŞUYORSUN*');
 S('206:merdivenlerden', 'section', { o: { keyed: 0, noDede: 1, post: (c, lt, t) => { const k = clamp(lt / 2.6); const fl = Math.min(5.99, k * 3.2); const f = Math.floor(fl), u = fl - f; const y = 280 + f * 300 + 260 - u * 0; const x = 1100 + 40 + (f % 2 ? 1 - u : u) * 300; stick(c, x, y, 200, runP(t * 12), { ch: 'sen', f: f % 2 ? -1 : 1, t, col: '#E8E4DC', face: false }); additive(c, () => glow(c, x, y - 100, 200, C.ice, .5)); } }, cam: Z(1700, 1000, 1.45, 1.6), g: 'cold' }, 'MERDİVENLERDEN AŞAĞI... *DEDENİN ODASINA*');
 S('207:kapı', 'typo', { o: { draw: doorAjar }, cam: Z(CX, 1100, 1.0, 1.1), g: 'cold' }, { text: 'KAPI *AÇIK.*', st: 'big', size: 260, y: 1880 });
 const EMPTY = { kind: 'dede', light: 'day', curtain: .6, wind: 1.2, glassGone: 1, winGlow: .6, radio: true, tx: .25, key: 0, chair: true, glassesOnTable: 1 };
@@ -4875,7 +5181,7 @@ S('211:türkiye', 'world', { o: { hiTurkey: 1, hiCol: C.red, over: (c, v, lt, t)
 S('211:hem', 'depot', { o: { door: 1, tag: 1 }, cam: Z(1450, 1300, 1.3, 1.5), g: 'warm' }, 'HEM DE DEPOLARDAN ÇIKARILAN *MÜZELİK TOPLARLA*');
 const HEADS = ['TARİHTE BİR İLK', 'MÜZE TOPLARIYLA UZAY GEMİSİ!', 'TÜRKİYE GEMİYİ VURDU', 'DÜNYA ŞAŞKIN'];
 S('212:bütün', 'world', { o: { hiTurkey: 1, hiCol: C.red, over: (c, v, lt, t) => { const tp = wp(32.8, 39.9, v); [[-100, 40], [-74, 41], [2.3, 48.8], [139.7, 35.7], [116.4, 39.9], [37.6, 55.7], [-47, -15.8], [151, -33.9]].forEach(([lo, la], i) => { const p = wp(lo, la, v); const k = clamp((lt - i * .12) / .4); if (k <= 0) return; arcRoute(c, p, tp, k, { col: C.cyan, dots: 3, t, lw: 4, dash: [12, 10] }); drawPin(c, p[0], p[1], { k, col: C.cyan, t, s: .8 }); }); HEADS.forEach((h, i) => { const k = E.outB(clamp((lt - .4 - i * .25) / .35)); if (k <= 0) return; c.save(); c.translate(560 + (i % 2) * 2700, 420 + Math.floor(i / 2) * 1150); c.scale(k, k); c.rotate((i % 2 ? .04 : -.04)); c.fillStyle = '#F2EAD8'; rr(c, -520, -110, 1040, 220, 20); c.fill(); c.fillStyle = C.tred; c.fillRect(-520, -110, 30, 220); txt(c, h, 10, 0, { f: 'anton', s: 84, c: '#1B1B1B' }); c.restore(); }); } }, cam: Z(CX, CY, 1.05, 1.0), g: 'cold' }, 'BÜTÜN DÜNYA BUNU *KONUŞUYOR*');
-S('212:ama', 'street', { o: { mode: 'restore', lampsOn: 1, ship: false, chars: [500, 900, 1300, 1700, 2100, 2500, 2900, 3300].map((x, i) => ({ ch: ['plain', 'teyze', 'huseyin', 'imam', 'nermin', 'cocuk', 'teyze2', 'maden'][i], x, h: 680, y: 1770, f: i % 2 ? -1 : 1, pose: i % 3 === 0 ? 'holdUp' : i % 3 === 1 ? 'hold' : lt2 => walkP(lt2 * 7 + i), face: { mouth: 'smile' }, hold: i % 3 === 0 ? { type: 'bucket', col: ['#3C7FD1', '#D14A3C', '#E8C24A'][i % 3] } : i % 3 === 1 ? { type: 'bowl' } : null })) }, cam: Z(CX, 1250, 1.05, 1.1), g: 'warm' }, "AMA TÜRKİYE'DE İNSANLAR BAŞKA BİR ŞEYLE *MEŞGUL*");
+S('212:ama', 'street', { o: { mode: 'restore', lampsOn: 1, ship: false, chars: [500, 900, 1300, 1700, 2100, 2500, 2900, 3300].map((x, i) => ({ ch: ['plain', 'teyze', 'huseyin', 'imam', 'nermin', 'cocuk', 'teyze2', 'maden'][i], x, h: 680, y: 1770, f: i % 2 ? -1 : 1, pose: i % 3 === 0 ? 'holdUp' : i % 3 === 1 ? 'hold' : 'relax', face: { mouth: 'smile' }, hold: i % 3 === 0 ? { type: 'bucket', col: ['#3C7FD1', '#D14A3C', '#E8C24A'][i % 3] } : i % 3 === 1 ? { type: 'bowl' } : null })) }, cam: Z(CX, 1250, 1.05, 1.1), g: 'warm' }, "AMA TÜRKİYE'DE İNSANLAR BAŞKA BİR ŞEYLE *MEŞGUL*");
 S('213:istanbul', 'city', { o: { mode: 'restore', power: 1, ship: false }, cam: CZ(0, -50, 1.0, 1.1), g: 'warm' }, "İSTANBUL'U YENİDEN *AYAĞA KALDIRMAKLA*");
 S('213:anadoludan', 'highway', { o: { view: 'aerial' }, cam: Z(CX, CY, 1.1, 1.25), g: 'warm' }, "ANADOLU'DAN İSTANBUL'A *TIR KONVOYLARI* AKIYOR");
 S('213:su', 'typo', { o: { bg: 'warm', icons: [['drop', 'SU', '213:su'], ['bread', 'EKMEK', '214:ekmek'], ['blanket', 'BATTANİYE', '214:battaniye'], ['generator', 'JENERATÖR', '214:jeneratör']].map(([n, l, cu], i) => ({ name: n, x: 580 + i * 893, y: 900, s: 420, at: cue(cu) - cue('213:su'), label: l, ls: 120, lc: C.amber })) }, g: 'warm' });
@@ -4888,7 +5194,7 @@ S('216', 'street', { o: st5({ mode: 'restore', lampsOn: 1, ship: false, chars: [
 S('216:hüseyin#2', 'shop', { o: { hpose: 'holdUp', hface: { mouth: 'grin', eye: 'happy' }, ledger: 1, ledgerGlow: lt => 1 - clamp(lt / 1.5) * .6, fn: lt => ({ ledgerOpen: lt < .9 ? 1 : 0 }) }, cam: Z(2000, 1150, 1.45, 1.55), g: 'warm' }, 'HÜSEYİN ABİ VERESİYE DEFTERİNİ *KAPATIYOR*');
 S('216:silindi', 'bust', { o: { bg: 'warm', chars: [{ ch: 'huseyin', x: 2500, y: 2950, h: 2600, f: -1, pose: 'talk', face: { mouth: 'smile', eye: 'happy' } }] }, cam: Z(CX, 1000, 1.0, 1.06), g: 'warm' }, { text: 'SİLİNDİ.', st: 'quote', x: 1250, y: 650, tx: 1900, ty: 950, size: 170, ce: '217' });
 S('217', 'bust', { o: { bg: 'warm', chars: [{ ch: 'huseyin', x: CX, y: 3000, h: 2800, view: 'front', pose: 'cheerF', face: { eye: 'happy', mouth: 'grin' } }] }, cam: Z(CX, 800, 1.05, 1.0), g: 'warm' }, { text: '%HEPSİ.%', st: 'big', size: 300, y: 1850 });
-S('217:madenlerde', 'mine', { o: { pits: 1, post: (c, lt, t) => { [[700, 1700, 1], [1300, 1760, -1], [2600, 1720, 1], [3200, 1780, -1]].forEach(([x, y, f], i) => stick(c, x, y, 620, i % 2 ? POSE.shrugF : { lean: .05, hd: .1, a1: -.1, e1: .2, a2: 2.6, e2: 2.2 }, { ch: 'uzman', tieCol: [C.blue, C.red, C.green, C.violet][i], f, t, view: i % 2 ? 'front' : null, face: { eye: 'wide', mouth: 'o', brow: 1 } })); } }, cam: Z(CX, 1350, 1.05, 1.12), g: 'green' }, 'MADENLERDE İSE UZMANLAR *ŞAŞKIN*');
+S('217:madenlerde', 'mine', { o: { pits: 1, post: (c, lt, t) => { [[700, 1700, 1], [1300, 1760, -1], [2600, 1720, 1], [3200, 1780, -1]].forEach(([x, y, f], i) => stick(c, x, y, 620, i % 2 ? POSE.shrugF : { lean: .05, hd: .1, a1: -.1, e1: .2, a2: 2.6, e2: 2.2 }, { seed: i, ch: 'uzman', tieCol: [C.blue, C.red, C.green, C.violet][i], f, t, view: i % 2 ? 'front' : null, face: { eye: 'wide', mouth: 'o', brow: 1 } })); } }, cam: Z(CX, 1350, 1.05, 1.12), g: 'green' }, 'MADENLERDE İSE UZMANLAR *ŞAŞKIN*');
 S('217:kırkada', 'map', { o: { v: Object.assign({}, MAPV_WEST, { S: 520, lat0: 39.7, lon0: 29.6 }), theme: 'green', lights: .3, over: (c, v, lt, t) => { [['KIRKA', '217:kırkada'], ['EMET', '217:emette'], ['BİGADİÇ', '217:bigadişte'], ['KESTELEK', '217:kestelekte']].forEach(([n, cu]) => { const k = E.outB(clamp((lt - (cue(cu) - cue('217:kırkada'))) / .3)); if (k <= 0) return; const m = MINES[n], p = mp(m[1], m[0], v); c.fillStyle = 'rgba(10,6,4,.85)'; c.beginPath(); c.ellipse(p[0], p[1] + 30, 120 * k, 50 * k, 0, 0, TAU); c.fill(); c.strokeStyle = C.red; c.lineWidth = 6; c.stroke(); }); minePins(c, v, lt, t, 0, { all: 1, col: C.red }); } }, g: 'green' }, "KIRKA'DA, EMET'TE, BİGADİÇ'TE, KESTELEK'TE...");
 S('218', 'mine', { o: { pits: 1 }, cam: Z(1450, 1300, 1.6, 1.8), g: 'green' }, 'GEMİLERİN İNDİĞİ YERLERDE *DEV ÇUKURLAR* VAR');
 S('218:gemiler#2', 'typo', { o: { bg: 'green', draw: (c, lt, t) => { const k1 = E.ioC(clamp((lt - .2) / 1.4)), k2 = E.outB(clamp((lt - 1.2) / .4)); txt(c, 'NORMALDE', 360, 760, { f: 'mono', s: 70, w: 800, c: rgba(C.white, .7), al: 'left', ls: 12 }); c.fillStyle = 'rgba(255,255,255,.08)'; rr(c, 360, 820, 3100, 150, 75); c.fill(); c.fillStyle = rgba(C.white, .6); rr(c, 360, 820, 3100 * k1, 150, 75); c.fill(); txt(c, 'YILLAR', 360 + 3100 * k1 - 40, 895, { f: 'unb', s: 90, w: 900, c: C.ink, al: 'right' }); txt(c, 'GEMİLER', 360, 1250, { f: 'mono', s: 70, w: 800, c: C.boron, al: 'left', ls: 12 }); c.fillStyle = C.boron; rr(c, 360, 1310, 360 * k2, 150, 75); c.fill(); if (k2 > .5) txt(c, 'BİRKAÇ GÜN', 780, 1385, { f: 'unb', s: 90, w: 900, c: C.boron, al: 'left' }); } }, g: 'green' }, 'GEMİLER BİRKAÇ GÜNDE, NORMALDE *YILLAR SÜRECEK* KADAR BOR ÇIKARIP GÖTÜRMÜŞ');
